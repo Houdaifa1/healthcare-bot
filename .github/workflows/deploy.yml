@@ -12,6 +12,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Set lowercase repo name
+        id: repo
+        run: echo "name=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -27,7 +31,7 @@ jobs:
         with:
           context: .
           push: true
-          tags: ghcr.io/${{ github.repository }}:latest
+          tags: ghcr.io/${{ steps.repo.outputs.name }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -39,7 +43,7 @@ jobs:
           key: ${{ secrets.DROPLET_SSH_KEY }}
           script: |
             echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-            docker pull ghcr.io/${{ github.repository }}:latest
+            docker pull ghcr.io/${{ steps.repo.outputs.name }}:latest
             docker stop healthcare-bot || true
             docker rm healthcare-bot || true
             docker run -d \
@@ -47,7 +51,7 @@ jobs:
               --restart unless-stopped \
               --network host \
               --env-file /root/.env.production \
-              ghcr.io/${{ github.repository }}:latest
+              ghcr.io/${{ steps.repo.outputs.name }}:latest
             docker image prune -f
             sleep 10
             docker ps | grep healthcare-bot && echo "✅ Deployment successful" || echo "❌ Container not running"

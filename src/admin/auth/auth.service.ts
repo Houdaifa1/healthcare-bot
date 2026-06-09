@@ -8,12 +8,12 @@ export class AuthService {
   constructor(
     private prisma: PrismaService,
     private jwtService: JwtService,
-  ) { }
+  ) {}
 
   async login(email: string, password: string) {
     const agent = await this.prisma.adminUser.findUnique({ where: { email } });
 
-    if (!agent || !agent.isActive) {
+    if (!agent) {
       throw new UnauthorizedException('Invalid credentials');
     }
 
@@ -35,9 +35,9 @@ export class AuthService {
       access_token: token,
       admin: {
         id: agent.id,
-        name: agent.name,
         email: agent.email,
         role: agent.role,
+        clinicId: agent.clinicId ?? 'main',
       },
     };
   }

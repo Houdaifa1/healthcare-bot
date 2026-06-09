@@ -26,15 +26,18 @@ export class ConfirmHandler {
         await this.sessionsService.reset(phone);
         return;
       }
-      await this.appointmentsService.createAppointment({
-        clinicId: session.data.clinicId,
-        doctorId: session.data.doctorId,
-        specialtyId: session.data.specialtyId,
-        patientName: session.data.patientName,
-        patientPhone: phone,
-        appointmentDate: session.data.selectedDate,
-        appointmentTime: session.data.selectedTime,
-      });
+      await this.appointmentsService.createAppointment(
+  session.data.clinicId,
+  {
+    clinicId: session.data.clinicId,
+    doctorId: session.data.doctorId,
+    specialtyId: session.data.specialtyId,
+    patientName: session.data.patientName,
+    patientPhone: phone,
+    appointmentDate: session.data.selectedDate,
+    appointmentTime: session.data.selectedTime,
+  },
+);
 
       const doctor = await this.doctorService.findById(session.data.doctorId);
       if (!doctor) {

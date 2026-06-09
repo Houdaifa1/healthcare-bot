@@ -34,11 +34,14 @@ export class DoctorsController {
     query.isActive ? query.isActive === 'true' : undefined,
   );
 }
-
-  @Patch(':id')
-  update(@Param('id') id: string, @Body() dto: UpdateDoctorDto) {
-    return this.doctorsService.update(id, dto);
-  }
+@Patch(':id')
+update(
+  @CurrentUser() user: AuthUser,
+  @Param('id') id: string,
+  @Body() dto: UpdateDoctorDto,
+) {
+  return this.doctorsService.update(id, user.clinicId, dto);
+}
 
   @Delete(':id')
   remove(@Param('id') id: string) {

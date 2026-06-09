@@ -7,6 +7,7 @@ import { QueueModule } from './queue/queue.module';
 import { SessionsModule } from './sessions/sessions.module';
 import { OrchestratorModule } from './orchestrator/orchestrator.module';
 import { AdminModule } from './admin/admin.module';
+import { CommonModule } from './common/common.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { AdminModule } from './admin/admin.module';
       envFilePath: '.env',
     }),
     PrismaModule,
+    CommonModule,
     SessionsModule,
     OrchestratorModule,
     QueueModule,

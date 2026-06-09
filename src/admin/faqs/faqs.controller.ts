@@ -13,6 +13,9 @@ import { FaqsService } from './faqs.service';
 import { CreateFaqDto } from './dto/create-faq.dto';
 import { UpdateFaqDto } from './dto/update-faq.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import type { AuthUser } from '../../common/types/auth-user.type';
+import { Language } from '@prisma/client';
 
 @UseGuards(JwtAuthGuard)
 @Controller('api/admin/v1/faqs')
@@ -21,15 +24,18 @@ export class FaqsController {
 
   @Post()
   create(
-    @Query('clinicId') clinicId: string,
+    @CurrentUser() user: AuthUser,
     @Body() createFaqDto: CreateFaqDto,
   ) {
-    return this.faqsService.create(clinicId, createFaqDto);
+    return this.faqsService.create(user.clinicId, createFaqDto);
   }
 
   @Get()
-  findAll(@Query('clinicId') clinicId: string) {
-    return this.faqsService.findAll(clinicId);
+  findAll(
+    @CurrentUser() user: AuthUser,
+    @Query('language') language?: Language,
+  ) {
+    return this.faqsService.findAll(user.clinicId, language);
   }
 
   @Patch(':id')

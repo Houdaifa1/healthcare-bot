@@ -1,8 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { FAQ } from '@prisma/client';
 import { CreateFaqDto } from './dto/create-faq.dto';
 import { UpdateFaqDto } from './dto/update-faq.dto';
+import { FAQ, Language } from '@prisma/client';
 
 @Injectable()
 export class FaqsService {
@@ -17,11 +17,15 @@ export class FaqsService {
     });
   }
 
-  async findAll(clinicId: string): Promise<FAQ[]> {
-    return this.prisma.fAQ.findMany({
-      where: { clinicId },
-    });
-  }
+  async findAll(clinicId: string, language?: Language): Promise<FAQ[]> {
+  return this.prisma.fAQ.findMany({
+    where: {
+      clinicId,
+      ...(language && { language }),
+    },
+    orderBy: { displayOrder: 'asc' },
+  });
+}
 
   async update(id: string, updateFaqDto: UpdateFaqDto): Promise<FAQ> {
     return this.prisma.fAQ.update({

@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsOptional, IsInt } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsInt, IsArray } from 'class-validator';
 import { Language } from '@prisma/client';
 
 export class CreateFaqDto {
@@ -13,6 +13,11 @@ export class CreateFaqDto {
   @IsString()
   @IsNotEmpty()
   language: Language;
+
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  keywords?: string[];
 
   @IsInt()
   @IsOptional()

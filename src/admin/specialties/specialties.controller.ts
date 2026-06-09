@@ -13,6 +13,8 @@ import { SpecialtiesService } from './specialties.service';
 import { CreateSpecialtyDto } from './dto/create-specialty.dto';
 import { UpdateSpecialtyDto } from './dto/update-specialty.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import type { AuthUser } from '../../common/types/auth-user.type';
 import { Language } from '@prisma/client';
 
 @UseGuards(JwtAuthGuard)
@@ -22,18 +24,18 @@ export class SpecialtiesController {
 
   @Post()
   create(
+    @CurrentUser() user: AuthUser,
     @Body() createSpecialtyDto: CreateSpecialtyDto,
-    @Query('clinicId') clinicId: string,
   ) {
-    return this.specialtiesService.create(clinicId, createSpecialtyDto);
+    return this.specialtiesService.create(user.clinicId, createSpecialtyDto);
   }
 
   @Get()
   findAll(
-    @Query('clinicId') clinicId: string,
+    @CurrentUser() user: AuthUser,
     @Query('language') language?: Language,
   ) {
-    return this.specialtiesService.findAll(clinicId, language);
+    return this.specialtiesService.findAll(user.clinicId, language);
   }
 
   @Patch(':id')

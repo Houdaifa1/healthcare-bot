@@ -11,28 +11,34 @@ export class AuthService {
   ) { }
 
   async login(email: string, password: string) {
-    const admin = await this.prisma.adminUser.findUnique({ where: { email } });
+    const agent = await this.prisma.adminUser.findUnique({ where: { email } });
 
-    if (!admin) {
+    if (!agent || !agent.isActive) {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    const passwordValid = await bcrypt.compare(password, admin.passwordHash);
+    const passwordValid = await bcrypt.compare(password, agent.passwordHash);
     if (!passwordValid) {
       throw new UnauthorizedException('Invalid credentials');
     }
 
     const payload = {
-      sub: admin.id,
-      email: admin.email,
-      role: admin.role,
-      clinicId: admin.clinicId,
+      sub: agent.id,
+      email: agent.email,
+      role: agent.role,
+      clinicId: agent.clinicId ?? 'main',
     };
+
     const token = this.jwtService.sign(payload);
 
     return {
       access_token: token,
-      admin: { id: admin.id, email: admin.email, role: admin.role, clinicId: admin.clinicId },
+      admin: {
+        id: agent.id,
+        name: agent.name,
+        email: agent.email,
+        role: agent.role,
+      },
     };
   }
 }

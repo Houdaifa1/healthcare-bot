@@ -1,6 +1,6 @@
-export type AuthUser = {
-  sub: string;
+export interface AuthUser {
+  id: string;
   email: string;
   role: string;
   clinicId: string;
-};
+}

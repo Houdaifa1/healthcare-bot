@@ -1,0 +1,8 @@
+{
+  "name": "Clinique Al Amal",
+  "phone": "+212600000000",
+  "address": "123 Rue Mohammed V, Casablanca",
+  "timezone": "Africa/Casablanca",
+  "defaultLanguage": "FR",
+  "supportedLangs": ["FR", "EN"]
+}

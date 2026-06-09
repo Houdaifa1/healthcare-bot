@@ -1,0 +1,37 @@
+[
+  {
+    "language": "EN",
+    "question": "What are your opening hours?",
+    "answer": "We are open Monday to Friday from 9am to 6pm, and Saturday from 9am to 1pm.",
+    "keywords": ["hours", "opening", "schedule", "closed", "open", "when"],
+    "displayOrder": 1
+  },
+  {
+    "language": "EN",
+    "question": "How do I book an appointment?",
+    "answer": "Type *book* to start booking an appointment directly here.",
+    "keywords": ["book", "appointment", "schedule", "reserve", "consultation"],
+    "displayOrder": 2
+  },
+  {
+    "language": "EN",
+    "question": "Where are you located?",
+    "answer": "We are located at {{clinicAddress}}.",
+    "keywords": ["address", "location", "where", "directions", "find", "map"],
+    "displayOrder": 3
+  },
+  {
+    "language": "EN",
+    "question": "What are your fees?",
+    "answer": "Fees vary by specialty and doctor. Contact us for a quote.",
+    "keywords": ["fee", "price", "cost", "pay", "charge", "insurance"],
+    "displayOrder": 4
+  },
+  {
+    "language": "EN",
+    "question": "Do you handle emergencies?",
+    "answer": "For medical emergencies, please call 15 (SAMU) or 112.",
+    "keywords": ["emergency", "urgent", "911", "112", "ambulance", "help"],
+    "displayOrder": 5
+  }
+]

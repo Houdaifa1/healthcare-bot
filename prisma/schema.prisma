@@ -1,0 +1,193 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Clinic Configuration ───────────────────────────────────────────────────
+model Clinic {
+  id              String       @id @default(cuid())
+  name            String
+  phone           String
+  address         String?
+  timezone        String       @default("Africa/Casablanca")
+  defaultLanguage Language     @default(FR)  // fallback if detection fails
+  supportedLangs  Language[]   @default([FR, EN])  // languages this clinic supports
+  isActive        Boolean      @default(true)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  specialties     Specialty[]
+  doctors         Doctor[]
+  botMessages     BotMessage[]
+  faqs            FAQ[]
+  appointments    Appointment[]
+  adminUsers      AdminUser[]
+}
+
+// ─── Bot Message Templates ───────────────────────────────────────────────────
+// Every single message the bot sends lives here. ZERO hardcoded strings.
+model BotMessage {
+  id        String     @id @default(cuid())
+  clinicId  String
+  key       MessageKey // enum — one entry per key per clinic per language
+  body      String     // supports {{patientName}}, {{doctorName}}, {{date}}, {{time}}, {{specialty}}
+  language  Language   @default(FR)
+  updatedAt DateTime   @updatedAt
+
+  clinic    Clinic     @relation(fields: [clinicId], references: [id])
+
+  @@unique([clinicId, key, language])
+}
+
+// ─── Specialties ─────────────────────────────────────────────────────────────
+// label is language-specific. Store one row per language per specialty.
+// slug is language-agnostic and used for internal matching only.
+model Specialty {
+  id           String    @id @default(cuid())
+  clinicId     String
+  label        String    // Display label, language-specific: "Médecine Générale" (FR) / "General Medicine" (EN)
+  language     Language  @default(FR)
+  slug         String    // Internal slug e.g. "general" — shared across languages
+  isActive     Boolean   @default(true)
+  displayOrder Int       @default(0)
+  createdAt    DateTime  @default(now())
+
+  clinic       Clinic    @relation(fields: [clinicId], references: [id])
+  doctors      Doctor[]
+  appointments Appointment[]
+
+  @@unique([clinicId, slug, language])
+}
+
+// ─── Doctors ─────────────────────────────────────────────────────────────────
+model Doctor {
+  id           String     @id @default(cuid())
+  clinicId     String
+  specialtyId  String
+  name         String
+  bio          String?
+  isActive     Boolean    @default(true)
+  displayOrder Int        @default(0)
+  createdAt    DateTime   @default(now())
+
+  clinic       Clinic     @relation(fields: [clinicId], references: [id])
+  specialty    Specialty  @relation(fields: [specialtyId], references: [id])
+  timeSlots    TimeSlot[]
+  appointments Appointment[]
+}
+
+// ─── Availability ─────────────────────────────────────────────────────────────
+model TimeSlot {
+  id                  String   @id @default(cuid())
+  doctorId            String
+  dayOfWeek           Int      // 0=Sunday … 6=Saturday
+  startTime           String   // "09:00"
+  endTime             String   // "17:00"
+  slotDurationMinutes Int      @default(30)
+  isActive            Boolean  @default(true)
+
+  doctor              Doctor   @relation(fields: [doctorId], references: [id])
+}
+
+// ─── Appointments ─────────────────────────────────────────────────────────────
+model Appointment {
+  id               String            @id @default(cuid())
+  clinicId         String
+  doctorId         String
+  specialtyId      String
+  patientName      String
+  patientPhone     String
+  appointmentDate  DateTime
+  appointmentTime  String            // "HH:mm"
+  status           AppointmentStatus @default(PENDING)
+  notes            String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  clinic           Clinic            @relation(fields: [clinicId], references: [id])
+  doctor           Doctor            @relation(fields: [doctorId], references: [id])
+  specialty        Specialty         @relation(fields: [specialtyId], references: [id])
+}
+
+// ─── FAQs ─────────────────────────────────────────────────────────────────────
+model FAQ {
+  id           String   @id @default(cuid())
+  clinicId     String
+  question     String
+  answer       String
+  keywords     String[] // for matching: ["horaires", "heures", "ouverture"]
+  isActive     Boolean  @default(true)
+  displayOrder Int      @default(0)
+  language     Language @default(FR)
+
+  clinic       Clinic   @relation(fields: [clinicId], references: [id])
+}
+
+// ─── Admin Users ──────────────────────────────────────────────────────────────
+model AdminUser {
+  id           String    @id @default(cuid())
+  clinicId     String?
+  email        String    @unique
+  passwordHash String
+  role         AdminRole @default(CLINIC_ADMIN)
+  createdAt    DateTime  @default(now())
+
+  clinic       Clinic?   @relation(fields: [clinicId], references: [id])
+  auditLogs    AuditLog[]
+}
+
+// ─── Audit Log ────────────────────────────────────────────────────────────────
+model AuditLog {
+  id          String    @id @default(cuid())
+  adminUserId String
+  action      String    // "CREATE_DOCTOR", "UPDATE_MESSAGE", etc.
+  entity      String
+  entityId    String?
+  payload     Json?
+  createdAt   DateTime  @default(now())
+
+  admin       AdminUser @relation(fields: [adminUserId], references: [id])
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+enum Language {
+  FR
+  AR
+  EN
+}
+
+enum AppointmentStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+  NO_SHOW
+}
+
+enum AdminRole {
+  SUPER_ADMIN
+  CLINIC_ADMIN
+}
+
+enum MessageKey {
+  WELCOME
+  LANGUAGE_PROMPT
+  ASK_NAME
+  SELECT_SPECIALTY
+  SELECT_DOCTOR
+  SELECT_DATE
+  SELECT_TIME
+  CONFIRM_BOOKING
+  BOOKING_SUCCESS
+  BOOKING_CANCELLED
+  FAQ_INTRO
+  FAQ_NOT_FOUND
+  FALLBACK
+  HANDOFF_TRIGGERED
+  SESSION_EXPIRED
+  NO_SLOTS_AVAILABLE
+  OUTSIDE_HOURS
+}

@@ -1,0 +1,19 @@
+[
+  { "key": "WELCOME",            "language": "EN", "body": "Hello 👋 I'm the assistant for {{clinicName}}. How can I help you?" },
+  { "key": "LANGUAGE_PROMPT",    "language": "EN", "body": "Choisissez votre langue / Choose your language:" },
+  { "key": "ASK_NAME",           "language": "EN", "body": "What is your first name?" },
+  { "key": "SELECT_SPECIALTY",   "language": "EN", "body": "Please choose your specialty:" },
+  { "key": "SELECT_DOCTOR",      "language": "EN", "body": "Here are the available doctors for {{specialty}}:" },
+  { "key": "SELECT_DATE",        "language": "EN", "body": "Please choose a date for your appointment:" },
+  { "key": "SELECT_TIME",        "language": "EN", "body": "Please choose a time slot:" },
+  { "key": "CONFIRM_BOOKING",    "language": "EN", "body": "📋 Summary:\n👤 {{patientName}}\n👨‍⚕️ {{doctorName}}\n📅 {{date}} at {{time}}\n\nConfirm?" },
+  { "key": "BOOKING_SUCCESS",    "language": "EN", "body": "✅ Appointment confirmed! {{doctorName}} will see you on {{date}} at {{time}}." },
+  { "key": "BOOKING_CANCELLED",  "language": "EN", "body": "❌ Appointment cancelled. See you soon!" },
+  { "key": "FAQ_INTRO",          "language": "EN", "body": "Here are the answers to your questions:" },
+  { "key": "FAQ_NOT_FOUND",      "language": "EN", "body": "I couldn't find an answer. Would you like to speak to an agent?" },
+  { "key": "FALLBACK",           "language": "EN", "body": "I didn't understand. Type *menu* to start over." },
+  { "key": "HANDOFF_TRIGGERED",  "language": "EN", "body": "Connecting you with our team. An agent will reply shortly 🙏" },
+  { "key": "SESSION_EXPIRED",    "language": "EN", "body": "Session expired. Type *hello* to start over." },
+  { "key": "NO_SLOTS_AVAILABLE", "language": "EN", "body": "No slots available for Dr {{doctorName}} on that date." },
+  { "key": "OUTSIDE_HOURS",      "language": "EN", "body": "Clinic is closed. Working hours: {{workingHours}}" }
+]

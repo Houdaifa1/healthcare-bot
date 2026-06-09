@@ -1,0 +1,37 @@
+[
+  {
+    "language": "FR",
+    "question": "Quels sont vos horaires ?",
+    "answer": "Nous sommes ouverts du lundi au vendredi de 9h à 18h, et le samedi de 9h à 13h.",
+    "keywords": ["horaires", "heures", "ouverture", "fermé", "ouvert"],
+    "displayOrder": 1
+  },
+  {
+    "language": "FR",
+    "question": "Comment prendre rendez-vous ?",
+    "answer": "Tapez *rdv* pour démarrer la prise de rendez-vous directement ici.",
+    "keywords": ["rdv", "rendez-vous", "réserver", "prendre", "consultation"],
+    "displayOrder": 2
+  },
+  {
+    "language": "FR",
+    "question": "Où êtes-vous situés ?",
+    "answer": "Nous sommes situés à {{clinicAddress}}.",
+    "keywords": ["adresse", "situé", "localisation", "où", "trouver", "plan"],
+    "displayOrder": 3
+  },
+  {
+    "language": "FR",
+    "question": "Quels sont vos tarifs ?",
+    "answer": "Les tarifs varient selon la spécialité et le médecin. Contactez-nous pour un devis.",
+    "keywords": ["tarif", "prix", "coût", "payer", "honoraires", "remboursement"],
+    "displayOrder": 4
+  },
+  {
+    "language": "FR",
+    "question": "Acceptez-vous les urgences ?",
+    "answer": "Pour les urgences médicales, composez le 15 (SAMU) ou le 112.",
+    "keywords": ["urgence", "urgent", "samu", "112", "15", "emergency"],
+    "displayOrder": 5
+  }
+]

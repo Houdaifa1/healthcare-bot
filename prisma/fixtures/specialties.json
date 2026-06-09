@@ -1,0 +1,5 @@
+[
+  { "slug": "general",    "displayOrder": 1, "labels": { "FR": "Médecine Générale", "EN": "General Medicine" } },
+  { "slug": "cardiology", "displayOrder": 2, "labels": { "FR": "Cardiologie",       "EN": "Cardiology" } },
+  { "slug": "pediatrics", "displayOrder": 3, "labels": { "FR": "Pédiatrie",         "EN": "Pediatrics" } }
+]

@@ -1,0 +1,19 @@
+[
+  { "key": "WELCOME",            "language": "FR", "body": "Bonjour 👋 Je suis l'assistant de {{clinicName}}. Comment puis-je vous aider ?" },
+  { "key": "LANGUAGE_PROMPT",    "language": "FR", "body": "Choisissez votre langue / Choose your language:" },
+  { "key": "ASK_NAME",           "language": "FR", "body": "Quel est votre prénom ?" },
+  { "key": "SELECT_SPECIALTY",   "language": "FR", "body": "Veuillez choisir votre spécialité :" },
+  { "key": "SELECT_DOCTOR",      "language": "FR", "body": "Voici les médecins disponibles pour {{specialty}} :" },
+  { "key": "SELECT_DATE",        "language": "FR", "body": "Choisissez une date pour votre rendez-vous :" },
+  { "key": "SELECT_TIME",        "language": "FR", "body": "Choisissez un créneau horaire :" },
+  { "key": "CONFIRM_BOOKING",    "language": "FR", "body": "📋 Récapitulatif :\n👤 {{patientName}}\n👨‍⚕️ {{doctorName}}\n📅 {{date}} à {{time}}\n\nConfirmez-vous ?" },
+  { "key": "BOOKING_SUCCESS",    "language": "FR", "body": "✅ Rendez-vous confirmé ! {{doctorName}} vous attend le {{date}} à {{time}}." },
+  { "key": "BOOKING_CANCELLED",  "language": "FR", "body": "❌ Rendez-vous annulé. À bientôt !" },
+  { "key": "FAQ_INTRO",          "language": "FR", "body": "Voici les réponses à vos questions :" },
+  { "key": "FAQ_NOT_FOUND",      "language": "FR", "body": "Je n'ai pas trouvé de réponse. Voulez-vous parler à un agent ?" },
+  { "key": "FALLBACK",           "language": "FR", "body": "Je n'ai pas compris. Tapez *menu* pour recommencer." },
+  { "key": "HANDOFF_TRIGGERED",  "language": "FR", "body": "Je vous mets en contact avec notre équipe. Un agent vous répondra sous peu 🙏" },
+  { "key": "SESSION_EXPIRED",    "language": "FR", "body": "Session expirée. Tapez *bonjour* pour recommencer." },
+  { "key": "NO_SLOTS_AVAILABLE", "language": "FR", "body": "Aucun créneau disponible pour Dr {{doctorName}} à cette date." },
+  { "key": "OUTSIDE_HOURS",      "language": "FR", "body": "Clinique fermée. Horaires : {{workingHours}}" }
+]

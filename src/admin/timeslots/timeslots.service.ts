@@ -8,9 +8,19 @@ import { UpdateTimeSlotDto } from './dto/update-timeslot.dto';
 export class TimeSlotsService {
   constructor(private prisma: PrismaService) {}
 
-  async create(createTimeSlotDto: CreateTimeSlotDto): Promise<TimeSlot> {
+  async create(
+    doctorId: string,
+    createTimeSlotDto: CreateTimeSlotDto,
+  ): Promise<TimeSlot> {
     return this.prisma.timeSlot.create({
-      data: createTimeSlotDto,
+      data: {
+        doctorId,
+        dayOfWeek: createTimeSlotDto.dayOfWeek,
+        startTime: createTimeSlotDto.startTime,
+        endTime: createTimeSlotDto.endTime,
+        slotDurationMinutes: createTimeSlotDto.slotDurationMinutes ?? 30,
+        isActive: createTimeSlotDto.isActive ?? true,
+      },
     });
   }
 

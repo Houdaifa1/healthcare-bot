@@ -23,7 +23,7 @@ export class TimeSlotsController {
     @Param('doctorId') doctorId: string,
     @Body() createTimeSlotDto: CreateTimeSlotDto,
   ) {
-    return this.timeSlotsService.create({ ...createTimeSlotDto, doctorId });
+    return this.timeSlotsService.create(doctorId, createTimeSlotDto);
   }
 
   @Get()

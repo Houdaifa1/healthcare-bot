@@ -18,14 +18,15 @@ export class FaqsService {
   }
 
   async findAll(clinicId: string, language?: Language): Promise<FAQ[]> {
-  return this.prisma.fAQ.findMany({
-    where: {
-      clinicId,
-      ...(language && { language }),
-    },
-    orderBy: { displayOrder: 'asc' },
-  });
-}
+    return this.prisma.fAQ.findMany({
+      where: {
+        clinicId,
+        isActive: true,
+        ...(language && { language }),
+      },
+      orderBy: { displayOrder: 'asc' },
+    });
+  }
 
   async update(id: string, updateFaqDto: UpdateFaqDto): Promise<FAQ> {
     return this.prisma.fAQ.update({
@@ -35,8 +36,9 @@ export class FaqsService {
   }
 
   async remove(id: string): Promise<FAQ> {
-    return this.prisma.fAQ.delete({
+    return this.prisma.fAQ.update({
       where: { id },
+      data: { isActive: false },
     });
   }
 }

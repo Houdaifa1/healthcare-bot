@@ -12,8 +12,17 @@ export class SpecialtiesService {
     clinicId: string,
     createSpecialtyDto: CreateSpecialtyDto,
   ): Promise<Specialty> {
-    return this.prisma.specialty.create({
-      data: {
+    const { slug, language } = createSpecialtyDto;
+
+    return this.prisma.specialty.upsert({
+      where: {
+        clinicId_slug_language: { clinicId, slug, language },
+      },
+      update: {
+        ...createSpecialtyDto,
+        isActive: createSpecialtyDto.isActive ?? true,
+      },
+      create: {
         ...createSpecialtyDto,
         clinicId,
       },
@@ -29,6 +38,7 @@ export class SpecialtiesService {
         clinicId,
         ...(language && { language }),
       },
+      orderBy: { displayOrder: 'asc' },
     });
   }
 

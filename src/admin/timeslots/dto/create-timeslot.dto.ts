@@ -9,10 +9,6 @@ import {
 } from 'class-validator';
 
 export class CreateTimeSlotDto {
-  @IsString()
-  @IsNotEmpty()
-  doctorId: string;
-
   @IsInt()
   @Min(0)
   @Max(6)

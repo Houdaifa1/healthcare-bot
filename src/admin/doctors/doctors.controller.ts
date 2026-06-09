@@ -8,12 +8,12 @@ import {
   Delete,
   Query,
   UseGuards,
-  ParseBoolPipe,
 } from '@nestjs/common';
 import { DoctorsService } from './doctors.service';
 import { CreateDoctorDto } from './dto/create-doctor.dto';
 import { UpdateDoctorDto } from './dto/update-doctor.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 
 @UseGuards(JwtAuthGuard)
 @Controller('api/admin/v1/doctors')
@@ -21,26 +21,22 @@ export class DoctorsController {
   constructor(private readonly doctorsService: DoctorsService) {}
 
   @Post()
-  create(
-    @Body() createDoctorDto: CreateDoctorDto,
-    @Query('clinicId') clinicId: string,
-  ) {
-    return this.doctorsService.create(clinicId, createDoctorDto);
+  create(@CurrentUser() user, @Body() dto: CreateDoctorDto) {
+    return this.doctorsService.create(user.clinicId, dto);
   }
 
   @Get()
-  findAll(
-    @Query('clinicId') clinicId: string,
-    @Query('specialtyId') specialtyId?: string,
-    @Query('isActive') isActive?: string,
-  ) {
-    const isActiveBool = isActive === undefined ? undefined : isActive === 'true';
-    return this.doctorsService.findAll(clinicId, specialtyId, isActiveBool);
+  findAll(@CurrentUser() user, @Query() query: any) {
+    return this.doctorsService.findAll(
+      user.clinicId,
+      query.specialtyId,
+      query.isActive ? query.isActive === 'true' : undefined,
+    );
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body() updateDoctorDto: UpdateDoctorDto) {
-    return this.doctorsService.update(id, updateDoctorDto);
+  update(@Param('id') id: string, @Body() dto: UpdateDoctorDto) {
+    return this.doctorsService.update(id, dto);
   }
 
   @Delete(':id')

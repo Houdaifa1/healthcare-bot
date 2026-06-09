@@ -2,30 +2,26 @@ import {
   Controller,
   Get,
   Patch,
-  Param,
   Body,
   UseGuards,
 } from '@nestjs/common';
 import { ClinicService } from './clinic.service';
 import { UpdateClinicDto } from './dto/update-clinic.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 
 @UseGuards(JwtAuthGuard)
-@Controller('api/admin/v1/clinic')
+@Controller('api/admin/v1/clinics')
 export class ClinicController {
   constructor(private readonly clinicService: ClinicService) {}
 
   @Get()
-  getClinic() {
-    // Assuming a single clinic, or you might get the id from user or other context
-    return this.clinicService.getClinic('main'); // Or a dynamic ID
+  getClinic(@CurrentUser() user) {
+    return this.clinicService.getClinic(user.clinicId);
   }
 
-  @Patch(':id')
-  updateClinic(
-    @Param('id') id: string,
-    @Body() updateClinicDto: UpdateClinicDto,
-  ) {
-    return this.clinicService.updateClinic(id, updateClinicDto);
+  @Patch()
+  updateClinic(@CurrentUser() user, @Body() dto: UpdateClinicDto) {
+    return this.clinicService.updateClinic(user.clinicId, dto);
   }
 }

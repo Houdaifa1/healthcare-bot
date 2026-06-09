@@ -6,15 +6,16 @@ import { UpdateDoctorDto } from './dto/update-doctor.dto';
 
 @Injectable()
 export class DoctorsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService) { }
 
-  async create(
-    clinicId: string,
-    createDoctorDto: CreateDoctorDto,
-  ): Promise<Doctor> {
+  async create(clinicId: string, dto: CreateDoctorDto): Promise<Doctor> {
+    if (!clinicId) {
+      throw new Error('clinicId missing from auth token');
+    }
+
     return this.prisma.doctor.create({
       data: {
-        ...createDoctorDto,
+        ...dto,
         clinicId,
       },
     });
@@ -34,10 +35,14 @@ export class DoctorsService {
     });
   }
 
-  async update(id: string, updateDoctorDto: UpdateDoctorDto): Promise<Doctor> {
+  async update(id: string, dto: UpdateDoctorDto): Promise<Doctor> {
+    if (dto.specialtyId === '') {
+      throw new Error('specialtyId cannot be empty');
+    }
+
     return this.prisma.doctor.update({
       where: { id },
-      data: updateDoctorDto,
+      data: dto,
     });
   }
 

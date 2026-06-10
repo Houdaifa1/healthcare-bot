@@ -4,7 +4,7 @@ import { AppointmentStatus } from '@prisma/client';
 
 @Injectable()
 export class AdminService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService) { }
 
   // ─── Dashboard stats ──────────────────────────────────
   async getStats() {
@@ -17,6 +17,8 @@ export class AdminService {
       totalAppointments,
       todayAppointments,
       pendingAppointments,
+      activeDoctors,
+      recentAppointments,
     ] = await Promise.all([
       this.prisma.appointment.count(),
       this.prisma.appointment.count({
@@ -25,12 +27,21 @@ export class AdminService {
       this.prisma.appointment.count({
         where: { status: AppointmentStatus.PENDING },
       }),
+      this.prisma.doctor.count({
+        where: { isActive: true },
+      }),
+      this.prisma.appointment.findMany({
+        take: 5,
+        orderBy: { createdAt: 'desc' },
+      }),
     ]);
 
     return {
       totalAppointments,
       todayAppointments,
       pendingAppointments,
+      activeDoctors,
+      recentAppointments,
     };
   }
 

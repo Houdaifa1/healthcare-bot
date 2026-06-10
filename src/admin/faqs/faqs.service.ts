@@ -17,11 +17,11 @@ export class FaqsService {
     });
   }
 
-  async findAll(clinicId: string, language?: Language): Promise<FAQ[]> {
+  async findAll(clinicId: string, language?: Language, includeInactive?: boolean): Promise<FAQ[]> {
     return this.prisma.fAQ.findMany({
       where: {
         clinicId,
-        isActive: true,
+        ...(includeInactive ? {} : { isActive: true }),
         ...(language && { language }),
       },
       orderBy: { displayOrder: 'asc' },

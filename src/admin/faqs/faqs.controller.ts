@@ -34,8 +34,9 @@ export class FaqsController {
   findAll(
     @CurrentUser() user: AuthUser,
     @Query('language') language?: Language,
+    @Query('includeInactive') includeInactive?: string,
   ) {
-    return this.faqsService.findAll(user.clinicId, language);
+    return this.faqsService.findAll(user.clinicId, language, includeInactive === 'true');
   }
 
   @Patch(':id')

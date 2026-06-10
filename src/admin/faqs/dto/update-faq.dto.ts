@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsInt } from 'class-validator';
+import { IsString, IsOptional, IsInt, IsBoolean, IsArray } from 'class-validator';
 import { Language } from '@prisma/client';
 
 export class UpdateFaqDto {
@@ -10,6 +10,11 @@ export class UpdateFaqDto {
   @IsOptional()
   answer?: string;
 
+  @IsString({ each: true })
+  @IsArray()
+  @IsOptional()
+  keywords?: string[];
+
   @IsString()
   @IsOptional()
   language?: Language;
@@ -17,4 +22,8 @@ export class UpdateFaqDto {
   @IsInt()
   @IsOptional()
   displayOrder?: number;
+
+  @IsBoolean()
+  @IsOptional()
+  isActive?: boolean;
 }

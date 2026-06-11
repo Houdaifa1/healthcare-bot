@@ -21,6 +21,9 @@ import * as QRCode from 'qrcode';
 import { QUEUES, JOBS } from '../queue/queue.constants';
 import type { MessageJob } from '../queue/message.processor';
 
+// How long (ms) a QR code is valid before WhatsApp rejects it
+const QR_TTL_MS = 18_000;
+
 @Injectable()
 export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(WhatsAppService.name);
@@ -31,8 +34,10 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
   private reconnectAttempts = 0;
   private readonly MAX_RECONNECT_DELAY = 60_000;
 
-  // QR state — read by QrController
+  // ── QR state — read by QrController ──────────────────────────────────────
   public qrDataUrl: string | null = null;
+  public qrRawString: string | null = null; // raw string for freshness check
+  public qrGeneratedAt: number | null = null;
   public isConnected = false;
 
   constructor(
@@ -58,6 +63,29 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
     this.logger.log('WhatsApp service shut down cleanly');
   }
 
+  // ─── Public helpers ───────────────────────────────────────────────────────
+
+  /** Returns true if the current QR is still within its validity window */
+  get qrIsValid(): boolean {
+    if (!this.qrGeneratedAt || !this.qrDataUrl) return false;
+    return Date.now() - this.qrGeneratedAt < QR_TTL_MS;
+  }
+
+  /** Seconds remaining before the current QR expires (0 if already expired) */
+  get qrSecondsRemaining(): number {
+    if (!this.qrGeneratedAt) return 0;
+    return Math.max(
+      0,
+      Math.floor((QR_TTL_MS - (Date.now() - this.qrGeneratedAt)) / 1000),
+    );
+  }
+
+  /** Seconds since the current QR was generated */
+  get qrAgeSeconds(): number {
+    if (!this.qrGeneratedAt) return 0;
+    return Math.floor((Date.now() - this.qrGeneratedAt) / 1000);
+  }
+
   // ─── Connection ────────────────────────────────────────────────────────────
 
   private async connect(): Promise<void> {
@@ -73,32 +101,32 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
           creds: state.creds,
           keys: makeCacheableSignalKeyStore(state.keys, {
             level: 'silent',
-            trace: () => { },
-            debug: () => { },
-            info: () => { },
-            warn: () => { },
-            error: () => { },
-            fatal: () => { },
+            trace: () => {},
+            debug: () => {},
+            info: () => {},
+            warn: () => {},
+            error: () => {},
+            fatal: () => {},
             child: () => ({} as any),
           } as any),
         },
         printQRInTerminal: true,
         logger: {
           level: 'silent',
-          trace: () => { },
-          debug: () => { },
-          info: () => { },
+          trace: () => {},
+          debug: () => {},
+          info: () => {},
           warn: (msg: any) => this.logger.warn(JSON.stringify(msg)),
           error: (msg: any) => this.logger.error(JSON.stringify(msg)),
           fatal: (msg: any) => this.logger.error(JSON.stringify(msg)),
           child: () => ({
             level: 'silent',
-            trace: () => { },
-            debug: () => { },
-            info: () => { },
-            warn: () => { },
-            error: () => { },
-            fatal: () => { },
+            trace: () => {},
+            debug: () => {},
+            info: () => {},
+            warn: () => {},
+            error: () => {},
+            fatal: () => {},
             child: () => ({} as any),
           }),
         } as any,
@@ -127,9 +155,14 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
-      this.logger.log('📱 QR code ready — visit scan.houdaifa.dev to scan');
+      this.logger.log('📱 New QR code generated — valid for ~18s');
       try {
+        this.qrRawString = qr;
+        this.qrGeneratedAt = Date.now();
         this.qrDataUrl = await QRCode.toDataURL(qr, { width: 400, margin: 2 });
+        this.logger.log(
+          `QR ready — visit https://scan.houdaifa.dev?token=<QR_TOKEN>`,
+        );
       } catch (err) {
         this.logger.error('Failed to generate QR data URL', err);
       }
@@ -138,6 +171,8 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
     if (connection === 'open') {
       this.isConnected = true;
       this.qrDataUrl = null;
+      this.qrRawString = null;
+      this.qrGeneratedAt = null;
       this.reconnectAttempts = 0;
       this.logger.log('✅ WhatsApp connected successfully');
     }
@@ -157,8 +192,8 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
         this.logger.error(
           '🚨 Logged out — visit scan.houdaifa.dev to re-scan QR code',
         );
-        // Still reconnect — will show new QR
-        this.scheduleReconnect(3000);
+        // Always reconnect on logout — will surface a new QR
+        this.scheduleReconnect(3_000);
       } else if (shouldReconnect && !this.isShuttingDown) {
         this.scheduleReconnect();
       }
@@ -171,7 +206,7 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
     const delay =
       overrideDelay ??
       Math.min(
-        5000 * Math.pow(2, this.reconnectAttempts),
+        5_000 * Math.pow(2, this.reconnectAttempts),
         this.MAX_RECONNECT_DELAY,
       );
 
@@ -264,11 +299,12 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
     buttons: { id: string; title: string }[],
   ): Promise<void> {
     if (!this.sock) {
-      this.logger.warn(`sendButtons — not connected, dropping message to ${to}`);
+      this.logger.warn(
+        `sendButtons — not connected, dropping message to ${to}`,
+      );
       return;
     }
     try {
-      // Safe text-based numbered menu — works on every WhatsApp client
       const numbered = buttons
         .map((btn, i) => `${i + 1}. ${btn.title}`)
         .join('\n');
@@ -292,11 +328,12 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
     }[],
   ): Promise<void> {
     if (!this.sock) {
-      this.logger.warn(`sendInteractiveList — not connected, dropping message to ${to}`);
+      this.logger.warn(
+        `sendInteractiveList — not connected, dropping message to ${to}`,
+      );
       return;
     }
     try {
-      // Safe text-based numbered list — works on every WhatsApp client
       let text = `*${header}*\n${body}\n`;
       let index = 1;
       for (const section of sections) {

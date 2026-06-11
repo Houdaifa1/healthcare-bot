@@ -21,6 +21,7 @@ import * as QRCode from 'qrcode';
 import { QUEUES, JOBS } from '../queue/queue.constants';
 import type { MessageJob } from '../queue/message.processor';
 
+// How long (ms) a QR code is valid before WhatsApp rejects it
 const QR_TTL_MS = 18_000;
 
 @Injectable()
@@ -35,7 +36,7 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
 
   // ── QR state — read by QrController ──────────────────────────────────────
   public qrDataUrl: string | null = null;
-  public qrRawString: string | null = null;
+  public qrRawString: string | null = null; // raw string for freshness check
   public qrGeneratedAt: number | null = null;
   public isConnected = false;
 
@@ -63,11 +64,14 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
   }
 
   // ─── Public helpers ───────────────────────────────────────────────────────
+
+  /** Returns true if the current QR is still within its validity window */
   get qrIsValid(): boolean {
     if (!this.qrGeneratedAt || !this.qrDataUrl) return false;
     return Date.now() - this.qrGeneratedAt < QR_TTL_MS;
   }
 
+  /** Seconds remaining before the current QR expires (0 if already expired) */
   get qrSecondsRemaining(): number {
     if (!this.qrGeneratedAt) return 0;
     return Math.max(
@@ -76,6 +80,7 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
+  /** Seconds since the current QR was generated */
   get qrAgeSeconds(): number {
     if (!this.qrGeneratedAt) return 0;
     return Math.floor((Date.now() - this.qrGeneratedAt) / 1000);
@@ -217,7 +222,7 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
 
   // ─── Incoming messages ─────────────────────────────────────────────────────
 
-    private async onMessage(upsert: {
+  private async onMessage(upsert: {
     messages: proto.IWebMessageInfo[];
     type: string;
   }): Promise<void> {
@@ -228,43 +233,8 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
       if (msg.key.fromMe) continue;
       if (!msg.key.remoteJid) continue;
 
-      let jid = msg.key.remoteJid;
+      const jid = msg.key.remoteJid;
       if (jid.endsWith('@g.us')) continue;
-      if (jid === 'status@broadcast') continue;
-
-      // ─── Resolve Linked Device ID (LID) to real phone JID ─────────────
-      if (jid.endsWith('@lid') && this.sock) {
-        try {
-          let pn: string | null = null;
-
-          // Attempt 1: via lidMapping (present in some Baileys builds)
-          if (typeof (this.sock as any).lidMapping?.getPNForLID === 'function') {
-            pn = await (this.sock as any).lidMapping.getPNForLID(jid);
-          }
-
-          // Attempt 2: direct method (added in Baileys 6.6.0+)
-          if (!pn && typeof (this.sock as any).getPNFromLID === 'function') {
-            pn = await (this.sock as any).getPNFromLID(jid);
-          }
-
-          if (pn) {
-            this.logger.log(`Resolved LID ${jid} → ${pn}`);
-            jid = pn;
-          } else {
-            this.logger.warn(`Could not resolve LID ${jid} – ignoring message`);
-            continue; // skip this message – replying to an LID will disconnect us
-          }
-        } catch (err: any) {
-          this.logger.error(`Error resolving LID ${jid}: ${err.message}`);
-          continue; // skip
-        }
-      }
-
-      // jid is now guaranteed to be a real phone JID (e.g. 212644645877@s.whatsapp.net)
-      if (!jid.endsWith('@s.whatsapp.net')) {
-        this.logger.warn(`Unexpected JID format: ${jid} – ignoring`);
-        continue;
-      }
 
       const phone = jid.replace('@s.whatsapp.net', '');
       const name = msg.pushName ?? 'Patient';

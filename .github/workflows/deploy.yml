@@ -42,8 +42,23 @@ jobs:
           username: root
           key: ${{ secrets.DROPLET_SSH_KEY }}
           script: |
+            set -e
+
+            # ── Ensure Redis is installed and running ─────────────────────
+            if ! command -v redis-server &> /dev/null; then
+              echo "Installing Redis..."
+              apt-get update -qq
+              apt-get install -y redis-server
+              sed -i 's/^bind .*/bind 127.0.0.1/' /etc/redis/redis.conf
+              systemctl enable redis-server
+            fi
+            systemctl start redis-server || true
+            redis-cli ping | grep -q PONG && echo "✅ Redis is up" || echo "❌ Redis failed to start"
+
+            # ── Ensure baileys auth dir exists ────────────────────────────
             mkdir -p /root/baileys-auth
 
+            # ── Pull and redeploy container ───────────────────────────────
             echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
             docker pull ghcr.io/${{ steps.repo.outputs.name }}:latest
             docker stop healthcare-bot || true
@@ -55,6 +70,9 @@ jobs:
               --env-file /root/.env.production \
               -v /root/baileys-auth:/app/baileys-auth \
               ghcr.io/${{ steps.repo.outputs.name }}:latest
+
             docker image prune -f
+
             sleep 10
             docker ps | grep healthcare-bot && echo "✅ Deployment successful" || echo "❌ Container not running"
+            docker logs healthcare-bot --tail 20

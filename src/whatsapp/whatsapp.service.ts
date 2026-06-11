@@ -22,7 +22,7 @@ import { QUEUES, JOBS } from '../queue/queue.constants';
 import type { MessageJob } from '../queue/message.processor';
 
 // How long (ms) a QR code is valid before WhatsApp rejects it
-const QR_TTL_MS = 18_000;
+const QR_TTL_MS = 20_000;
 
 // How long send methods will wait for a live connection before giving up
 const SEND_CONNECTION_TIMEOUT_MS = 20_000;

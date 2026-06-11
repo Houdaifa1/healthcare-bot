@@ -9,7 +9,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { Response } from 'express';
-import { Observable, interval, map, takeWhile } from 'rxjs';
+import { Observable, interval, map } from 'rxjs';
 import { WhatsAppService } from './whatsapp.service';
 
 @Controller('qr')
@@ -19,11 +19,7 @@ export class QrController {
     private readonly configService: ConfigService,
   ) {}
 
-  // ─── SSE endpoint — streams QR state every second ─────────────────────────
-  // GET /qr/events?token=xxx
-  // Note: X-Accel-Buffering: no tells Nginx to flush immediately.
-  // Cloudflare on free tier buffers SSE — the client JS falls back to polling
-  // automatically if the SSE connection stalls.
+  // ─── SSE — streams state every second forever ─────────────────────────────
   @Sse('events')
   streamQrState(
     @Query('token') token: string,
@@ -31,7 +27,6 @@ export class QrController {
   ): Observable<MessageEvent> {
     this.validateToken(token);
 
-    // Force Nginx / upstream proxies to stop buffering this response
     res.setHeader('Cache-Control', 'no-cache, no-store');
     res.setHeader('X-Accel-Buffering', 'no');
     res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
@@ -41,34 +36,19 @@ export class QrController {
 
     return interval(1000).pipe(
       map(() => ({
-        data: JSON.stringify({
-          isConnected: this.whatsappService.isConnected,
-          qrDataUrl: this.whatsappService.qrDataUrl,
-          qrIsValid: this.whatsappService.qrIsValid,
-          qrSecondsRemaining: this.whatsappService.qrSecondsRemaining,
-          qrAgeSeconds: this.whatsappService.qrAgeSeconds,
-        }),
+        data: JSON.stringify(this.getState()),
       })),
-      takeWhile(() => !this.whatsappService.isConnected, true),
     );
   }
 
-  // ─── JSON state endpoint — polling fallback + direct state checks ─────────
-  // GET /qr/state?token=xxx
+  // ─── JSON state — polling fallback ────────────────────────────────────────
   @Get('state')
-  getState(@Query('token') token: string): object {
+  getStateEndpoint(@Query('token') token: string): object {
     this.validateToken(token);
-    return {
-      isConnected: this.whatsappService.isConnected,
-      qrDataUrl: this.whatsappService.qrDataUrl,
-      qrIsValid: this.whatsappService.qrIsValid,
-      qrSecondsRemaining: this.whatsappService.qrSecondsRemaining,
-      qrAgeSeconds: this.whatsappService.qrAgeSeconds,
-    };
+    return this.getState();
   }
 
-  // ─── Main QR page ──────────────────────────────────────────────────────────
-  // GET /qr?token=xxx
+  // ─── Main page ────────────────────────────────────────────────────────────
   @Get()
   getQr(
     @Query('token') token: string,
@@ -80,7 +60,7 @@ export class QrController {
     res.send(this.buildHtml(token));
   }
 
-  // ─── Private helpers ───────────────────────────────────────────────────────
+  // ─── Helpers ──────────────────────────────────────────────────────────────
 
   private validateToken(token: string): void {
     const secret = this.configService.get<string>('whatsapp.qrToken');
@@ -89,51 +69,16 @@ export class QrController {
     }
   }
 
+  private getState() {
+    return {
+      isConnected: this.whatsappService.isConnected,
+      qrDataUrl: this.whatsappService.qrDataUrl,
+      qrIsValid: this.whatsappService.qrIsValid,
+      qrSecondsRemaining: this.whatsappService.qrSecondsRemaining,
+    };
+  }
+
   private buildHtml(token: string): string {
-    const { isConnected, qrDataUrl, qrIsValid, qrSecondsRemaining } =
-      this.whatsappService;
-
-    const initialState: 'connected' | 'qr_valid' | 'qr_expired' | 'generating' =
-      isConnected
-        ? 'connected'
-        : qrDataUrl && qrIsValid
-          ? 'qr_valid'
-          : qrDataUrl && !qrIsValid
-            ? 'qr_expired'
-            : 'generating';
-
-    const initialStatusClass =
-      initialState === 'connected' ? 'connected' :
-      initialState === 'qr_valid'  ? 'scanning'  :
-      initialState === 'qr_expired'? 'expired'   : 'waiting';
-
-    const initialStatusText =
-      initialState === 'connected'  ? '✅ Connected'            :
-      initialState === 'qr_valid'   ? '📷 Ready to scan'        :
-      initialState === 'qr_expired' ? '⏰ QR expired — hold on' :
-                                      '⏳ Generating QR…';
-
-    const initialQrHtml = isConnected
-      ? `<p class="state-message success">WhatsApp is connected.<br>No QR code needed.</p>`
-      : qrDataUrl && qrIsValid
-        ? `<img src="${qrDataUrl}" alt="WhatsApp QR Code" id="qr-img">
-           <div class="countdown-wrap">
-             <div class="countdown-ring">
-               <svg viewBox="0 0 36 36" width="36" height="36">
-                 <circle class="track" cx="18" cy="18" r="15.9"/>
-                 <circle class="fill" cx="18" cy="18" r="15.9"
-                   id="ring-fill" stroke="#3b82f6"
-                   stroke-dasharray="100"
-                   stroke-dashoffset="${100 - Math.round((qrSecondsRemaining / 18) * 100)}"/>
-               </svg>
-             </div>
-             <span class="countdown-label">Expires in <span id="countdown">${qrSecondsRemaining}s</span></span>
-           </div>`
-        : qrDataUrl
-          ? `<img src="${qrDataUrl}" alt="Expired QR" id="qr-img" class="faded">
-             <div class="expired-overlay">⏰ New QR incoming…</div>`
-          : `<p class="state-message">Generating QR code…<br>usually a few seconds.</p>`;
-
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -167,74 +112,91 @@ export class QrController {
     }
     h1 { font-size: 1.2rem; font-weight: 700; color: #0f172a; }
     .subtitle { font-size: .825rem; color: #94a3b8; margin-top: .2rem; margin-bottom: 1.5rem; }
+
     .status {
       display: inline-flex; align-items: center; gap: .4rem;
       padding: .35rem .85rem; border-radius: 999px;
       font-size: .775rem; font-weight: 600; margin-bottom: 1.5rem;
-      transition: all .3s ease;
+      transition: background .3s, color .3s, border-color .3s;
     }
-    .status-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+    .status-dot {
+      width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+      transition: background .3s;
+    }
     .status.connected  { color:#15803d; background:#f0fdf4; border:1px solid #bbf7d0; }
-    .status.connected  .status-dot { background:#22c55e; box-shadow:0 0 0 2px #dcfce7; }
+    .status.connected  .status-dot { background:#22c55e; }
     .status.scanning   { color:#1d4ed8; background:#eff6ff; border:1px solid #bfdbfe; }
     .status.scanning   .status-dot { background:#3b82f6; animation:pulse 1.2s infinite; }
-    .status.expired    { color:#dc2626; background:#fef2f2; border:1px solid #fecaca; }
-    .status.expired    .status-dot { background:#ef4444; }
-    .status.waiting    { color:#92400e; background:#fffbeb; border:1px solid #fde68a; }
-    .status.waiting    .status-dot { background:#f59e0b; animation:pulse 1.5s infinite; }
-    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
-    .qr-wrap {
-      min-height: 230px;
+    .status.expired    { color:#b45309; background:#fffbeb; border:1px solid #fde68a; }
+    .status.expired    .status-dot { background:#f59e0b; animation:pulse 1s infinite; }
+    .status.waiting    { color:#6b7280; background:#f9fafb; border:1px solid #e5e7eb; }
+    .status.waiting    .status-dot { background:#9ca3af; animation:pulse 1.5s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.25} }
+
+    .qr-section {
+      min-height: 240px;
       display: flex; flex-direction: column;
       align-items: center; justify-content: center;
-      margin-bottom: 1.5rem; position: relative;
+      margin-bottom: 1.25rem; position: relative;
     }
-    .qr-wrap img {
+
+    /* QR image — always in DOM, src swapped silently */
+    #qr-img {
       border-radius: 12px;
       box-shadow: 0 2px 16px rgba(0,0,0,.1);
       max-width: 260px; width: 100%;
-      transition: opacity .3s ease, filter .3s ease;
+      display: none;
+      transition: opacity .25s ease;
     }
-    .qr-wrap img.faded { opacity: .2; filter: blur(3px); }
-    .expired-overlay {
+    #qr-img.visible { display: block; opacity: 1; }
+    #qr-img.faded   { display: block; opacity: .15; filter: blur(2px); }
+
+    .state-msg {
+      font-size: .9rem; color: #64748b; line-height: 1.7;
+      display: none;
+    }
+    .state-msg.visible { display: block; }
+    .state-msg.success { color: #15803d; font-weight: 600; font-size: 1rem; }
+
+    /* Expired overlay */
+    #expired-overlay {
       position: absolute; top: 50%; left: 50%;
       transform: translate(-50%,-50%);
       background: rgba(255,255,255,.93);
-      border: 1.5px solid #fca5a5; border-radius: 10px;
-      padding: .6rem 1rem; font-size: .85rem; font-weight: 600;
-      color: #dc2626; backdrop-filter: blur(2px);
-      white-space: nowrap;
+      border: 1.5px solid #fde68a; border-radius: 10px;
+      padding: .5rem .9rem; font-size: .82rem; font-weight: 600;
+      color: #b45309; white-space: nowrap;
+      display: none;
     }
-    .countdown-wrap {
+    #expired-overlay.visible { display: block; }
+
+    /* Countdown */
+    #countdown-wrap {
       margin-top: .75rem;
-      display: flex; align-items: center; justify-content: center; gap: .5rem;
+      display: none; align-items: center; justify-content: center; gap: .5rem;
     }
-    .countdown-ring { width: 36px; height: 36px; flex-shrink: 0; }
-    .countdown-ring svg { transform: rotate(-90deg); }
-    .countdown-ring .track { fill: none; stroke: #e2e8f0; stroke-width: 3; }
-    .countdown-ring .fill  {
-      fill: none; stroke-width: 3; stroke-linecap: round;
-      transition: stroke-dashoffset 1s linear, stroke .5s ease;
-    }
+    #countdown-wrap.visible { display: flex; }
+    .cring { width: 36px; height: 36px; flex-shrink: 0; }
+    .cring svg { transform: rotate(-90deg); }
+    .cring .track { fill: none; stroke: #e2e8f0; stroke-width: 3; }
+    .cring .fill  { fill: none; stroke-width: 3; stroke-linecap: round; transition: stroke .4s ease; }
     .countdown-label { font-size: .8rem; font-weight: 600; color: #475569; }
     .countdown-label span { color: #0f172a; font-size: .9rem; }
-    .state-message { font-size: .9rem; color: #64748b; line-height: 1.6; }
-    .state-message.success { color: #15803d; font-weight: 600; font-size: 1rem; }
-    .instructions {
+
+    /* Instructions */
+    #instructions {
       font-size: .775rem; color: #94a3b8; line-height: 1.7;
       border-top: 1px solid #f1f5f9; padding-top: 1rem;
     }
-    .instructions strong { color: #64748b; }
-    .step { display: flex; align-items: flex-start; gap: .5rem; text-align: left; margin-top: .4rem; }
+    .step { display: flex; align-items: flex-start; gap: .5rem; text-align: left; margin-top: .35rem; }
     .step-num {
       min-width: 18px; height: 18px; background: #e2e8f0; border-radius: 50%;
       font-size: .7rem; font-weight: 700; color: #475569;
       display: flex; align-items: center; justify-content: center;
       flex-shrink: 0; margin-top: 1px;
     }
-    .debug-bar {
-      margin-top: 1rem; padding: .5rem; background: #f8fafc;
-      border-radius: 8px; font-size: .7rem; color: #94a3b8;
+    .transport-bar {
+      margin-top: .85rem; font-size: .68rem; color: #cbd5e1;
       font-family: monospace;
     }
   </style>
@@ -250,22 +212,47 @@ export class QrController {
   <h1>Healthcare Bot</h1>
   <p class="subtitle">WhatsApp Connection</p>
 
-  <div class="status ${initialStatusClass}" id="status-pill">
+  <div class="status waiting" id="status-pill">
     <span class="status-dot"></span>
-    <span id="status-text">${initialStatusText}</span>
+    <span id="status-text">Connecting…</span>
   </div>
 
-  <div class="qr-wrap" id="qr-wrap">${initialQrHtml}</div>
+  <div class="qr-section">
+    <img id="qr-img" alt="WhatsApp QR Code">
 
-  <div class="instructions" id="instructions"${isConnected ? ' style="display:none"' : ''}>
-    <strong>How to scan:</strong>
+    <div id="expired-overlay">⏰ Refreshing QR…</div>
+
+    <p class="state-msg" id="msg-generating">
+      Generating QR code…<br>usually a few seconds.
+    </p>
+    <p class="state-msg success" id="msg-connected">
+      WhatsApp is connected.<br>No QR code needed.
+    </p>
+
+    <div id="countdown-wrap">
+      <div class="cring">
+        <svg viewBox="0 0 36 36" width="36" height="36">
+          <circle class="track" cx="18" cy="18" r="15.9"/>
+          <circle class="fill" id="ring-fill"
+            cx="18" cy="18" r="15.9"
+            stroke="#3b82f6"
+            stroke-dasharray="100"
+            stroke-dashoffset="0"/>
+        </svg>
+      </div>
+      <span class="countdown-label">Expires in <span id="countdown">--</span></span>
+    </div>
+  </div>
+
+  <div id="instructions">
+    <strong style="color:#64748b">How to scan:</strong>
     <div class="step"><span class="step-num">1</span><span>Open WhatsApp on your phone</span></div>
     <div class="step"><span class="step-num">2</span><span>Tap ⋮ (Android) or Settings (iOS) → Linked Devices</span></div>
     <div class="step"><span class="step-num">3</span><span>Tap <strong>Link a Device</strong></span></div>
-    <div class="step"><span class="step-num">4</span><span>Point your camera at the QR code — you have ~18 seconds</span></div>
+    <div class="step"><span class="step-num">4</span><span>Point your camera at the QR — you have ~20 seconds</span></div>
   </div>
 
-  <div class="debug-bar" id="debug-bar">transport: initializing…</div>
+  <div class="transport-bar" id="transport-bar">initializing…</div>
 </div>
 
 <script>
@@ -273,159 +260,169 @@ export class QrController {
   'use strict';
 
   var TOKEN = ${JSON.stringify(token)};
-  var lastQrDataUrl = ${JSON.stringify(qrDataUrl ?? null)};
-  var countdownTimer = null;
-  var sseOk = false;
 
-  var statusPill = document.getElementById('status-pill');
-  var statusText = document.getElementById('status-text');
-  var qrWrap     = document.getElementById('qr-wrap');
-  var instrBox   = document.getElementById('instructions');
-  var debugBar   = document.getElementById('debug-bar');
+  // DOM refs
+  var pill        = document.getElementById('status-pill');
+  var pillText    = document.getElementById('status-text');
+  var qrImg       = document.getElementById('qr-img');
+  var expiredOvl  = document.getElementById('expired-overlay');
+  var msgGen      = document.getElementById('msg-generating');
+  var msgConn     = document.getElementById('msg-connected');
+  var cdWrap      = document.getElementById('countdown-wrap');
+  var cdLabel     = document.getElementById('countdown');
+  var ringFill    = document.getElementById('ring-fill');
+  var instructions= document.getElementById('instructions');
+  var transportBar= document.getElementById('transport-bar');
 
-  // ── Try SSE first, fall back to polling if it stalls ──────────────────────
-  var sseStallTimer = setTimeout(function () {
-    if (!sseOk) {
-      debugBar.textContent = 'transport: SSE stalled (Cloudflare?) → polling every 2s';
+  // Local state
+  var currentQrUrl    = null;
+  var countdownHandle = null;
+  var lastState       = null; // 'connected' | 'qr_valid' | 'qr_expired' | 'generating'
+
+  // ── Transport: SSE with polling fallback ───────────────────────────────────
+  var sseActive  = false;
+  var pollHandle = null;
+
+  var stallTimer = setTimeout(function () {
+    if (!sseActive) {
+      transportBar.textContent = 'transport: SSE stalled → polling 2s';
       startPolling();
     }
-  }, 4000); // if no SSE message within 4s, switch to polling
+  }, 8000);
 
   try {
-    var evtSource = new EventSource('/qr/events?token=' + TOKEN);
+    var es = new EventSource('/qr/events?token=' + TOKEN);
 
-    evtSource.onmessage = function (e) {
-      if (!sseOk) {
-        sseOk = true;
-        clearTimeout(sseStallTimer);
-        debugBar.textContent = 'transport: SSE ✓';
+    es.onmessage = function (e) {
+      if (!sseActive) {
+        sseActive = true;
+        clearTimeout(stallTimer);
+        transportBar.textContent = 'transport: SSE ✓';
       }
-      var data = JSON.parse(e.data);
-      render(data);
+      render(JSON.parse(e.data));
     };
 
-    evtSource.onerror = function () {
-      if (!sseOk) {
-        clearTimeout(sseStallTimer);
-        debugBar.textContent = 'transport: SSE failed → polling every 2s';
-        evtSource.close();
+    es.onerror = function () {
+      if (!sseActive) {
+        clearTimeout(stallTimer);
+        es.close();
+        transportBar.textContent = 'transport: SSE error → polling 2s';
         startPolling();
+      } else {
+        // SSE was working but dropped — keep polling until it recovers
+        transportBar.textContent = 'transport: SSE dropped → polling 2s';
+        if (!pollHandle) startPolling();
       }
     };
-  } catch (err) {
-    clearTimeout(sseStallTimer);
-    debugBar.textContent = 'transport: SSE unavailable → polling every 2s';
+  } catch (e) {
+    clearTimeout(stallTimer);
+    transportBar.textContent = 'transport: SSE unavailable → polling 2s';
     startPolling();
   }
 
-  // ── Polling fallback ───────────────────────────────────────────────────────
-  var pollTimer = null;
   function startPolling() {
-    if (pollTimer) return; // already polling
-    poll(); // immediate first poll
-    pollTimer = setInterval(poll, 2000);
+    if (pollHandle) return;
+    fetchState();
+    pollHandle = setInterval(fetchState, 2000);
   }
 
-  function poll() {
+  function fetchState() {
     fetch('/qr/state?token=' + TOKEN)
       .then(function (r) { return r.json(); })
-      .then(function (data) { render(data); })
+      .then(render)
       .catch(function () {});
   }
 
   // ── Render ─────────────────────────────────────────────────────────────────
   function render(data) {
     if (data.isConnected) {
-      renderConnected();
-      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+      if (lastState !== 'connected') {
+        lastState = 'connected';
+        setStatus('connected', '✅ Connected');
+        showOnly(msgConn);
+        hideCountdown();
+        instructions.style.display = 'none';
+      }
       return;
     }
+
+    // Not connected — show instructions
+    instructions.style.display = '';
+
     if (data.qrDataUrl && data.qrIsValid) {
-      if (data.qrDataUrl !== lastQrDataUrl) {
-        lastQrDataUrl = data.qrDataUrl;
-        renderQr(data.qrDataUrl, data.qrSecondsRemaining);
-      } else {
-        updateCountdown(data.qrSecondsRemaining);
+      // QR valid — update image src in-place (no DOM rebuild = no flash)
+      if (data.qrDataUrl !== currentQrUrl) {
+        currentQrUrl = data.qrDataUrl;
+        qrImg.src = data.qrDataUrl;
       }
+      if (lastState !== 'qr_valid') {
+        lastState = 'qr_valid';
+        setStatus('scanning', '📷 Ready to scan');
+        qrImg.className = 'visible';
+        expiredOvl.className = '';
+        showOnly(null); // hide state messages
+        showCountdown();
+      }
+      updateRing(data.qrSecondsRemaining);
+
     } else if (data.qrDataUrl && !data.qrIsValid) {
-      renderExpired(data.qrDataUrl);
+      if (lastState !== 'qr_expired') {
+        lastState = 'qr_expired';
+        setStatus('expired', '⏰ Refreshing QR…');
+        qrImg.className = 'faded';
+        expiredOvl.className = 'visible';
+        showOnly(null);
+        hideCountdown();
+      }
+
     } else {
-      renderGenerating();
+      if (lastState !== 'generating') {
+        lastState = 'generating';
+        setStatus('waiting', '⏳ Generating QR…');
+        qrImg.className = '';
+        expiredOvl.className = '';
+        showOnly(msgGen);
+        hideCountdown();
+      }
     }
   }
 
-  function renderConnected() {
-    setStatus('connected', '✅ Connected');
-    qrWrap.innerHTML = '<p class="state-message success">WhatsApp is connected.<br>No QR code needed.</p>';
-    instrBox.style.display = 'none';
-    clearCountdown();
+  // ── Countdown ring ─────────────────────────────────────────────────────────
+  var QR_TTL = 20;
+
+  function showCountdown() {
+    cdWrap.className = 'visible';
   }
 
-  function renderQr(dataUrl, seconds) {
-    clearCountdown();
-    setStatus('scanning', '📷 Ready to scan');
-    qrWrap.innerHTML =
-      '<img src="' + dataUrl + '" alt="WhatsApp QR Code" id="qr-img">' +
-      '<div class="countdown-wrap">' +
-        '<div class="countdown-ring">' +
-          '<svg viewBox="0 0 36 36" width="36" height="36">' +
-            '<circle class="track" cx="18" cy="18" r="15.9"/>' +
-            '<circle class="fill" cx="18" cy="18" r="15.9"' +
-              ' id="ring-fill" stroke="#3b82f6" stroke-dasharray="100"' +
-              ' stroke-dashoffset="' + (100 - Math.round((seconds / 18) * 100)) + '"/>' +
-          '</svg>' +
-        '</div>' +
-        '<span class="countdown-label">Expires in <span id="countdown">' + seconds + 's</span></span>' +
-      '</div>';
-    instrBox.style.display = '';
-    startCountdown(seconds);
+  function hideCountdown() {
+    cdWrap.className = '';
+    if (countdownHandle) { clearInterval(countdownHandle); countdownHandle = null; }
   }
 
-  function renderExpired(dataUrl) {
-    clearCountdown();
-    setStatus('expired', '⏰ QR expired — new one incoming');
-    qrWrap.innerHTML =
-      '<img src="' + dataUrl + '" alt="Expired QR" id="qr-img" class="faded">' +
-      '<div class="expired-overlay">⏰ New QR incoming…</div>';
+  function updateRing(seconds) {
+    var s = Math.max(0, seconds);
+    cdLabel.textContent = s + 's';
+
+    var pct = Math.round((s / QR_TTL) * 100);
+    ringFill.setAttribute('stroke-dashoffset', String(100 - pct));
+    ringFill.setAttribute('stroke',
+      s > 10 ? '#3b82f6' : s > 5 ? '#f59e0b' : '#ef4444'
+    );
   }
 
-  function renderGenerating() {
-    clearCountdown();
-    setStatus('waiting', '⏳ Generating QR…');
-    qrWrap.innerHTML = '<p class="state-message">Generating QR code…<br>usually a few seconds.</p>';
-    instrBox.style.display = '';
+  // ── DOM helpers ────────────────────────────────────────────────────────────
+  function showOnly(el) {
+    [msgGen, msgConn].forEach(function (m) {
+      m.className = 'state-msg' + (m === msgConn ? ' success' : '');
+    });
+    if (el) el.className += ' visible';
   }
 
-  // ── Countdown ──────────────────────────────────────────────────────────────
-  function startCountdown(seconds) {
-    var s = seconds;
-    countdownTimer = setInterval(function () {
-      s--;
-      updateCountdown(s);
-      if (s <= 0) clearCountdown();
-    }, 1000);
-  }
-
-  function updateCountdown(s) {
-    var el   = document.getElementById('countdown');
-    var ring = document.getElementById('ring-fill');
-    if (el)   el.textContent = s + 's';
-    if (ring) {
-      var pct = Math.max(0, Math.round((s / 18) * 100));
-      ring.setAttribute('stroke-dashoffset', String(100 - pct));
-      ring.setAttribute('stroke', s > 8 ? '#3b82f6' : s > 4 ? '#f59e0b' : '#ef4444');
-    }
-  }
-
-  function clearCountdown() {
-    if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
-  }
-
-  // ── Status ─────────────────────────────────────────────────────────────────
   function setStatus(cls, text) {
-    statusPill.className = 'status ' + cls;
-    statusText.textContent = text;
+    pill.className = 'status ' + cls;
+    pillText.textContent = text;
   }
+
 }());
 </script>
 </body>

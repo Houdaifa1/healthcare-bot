@@ -6,7 +6,7 @@ import { SessionsService } from '../sessions/sessions.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 export interface MessageJob {
-  from: string;
+  from: string;   // full remoteJid, e.g. 123456789@s.whatsapp.net or @lid
   name: string;
   text: string;
   messageId: string;
@@ -29,32 +29,55 @@ export class MessageProcessor extends WorkerHost {
     const { from, name, text } = job.data;
     this.logger.log(`Processing message from ${name} (${from}): ${text}`);
 
-    // Load clinic — always "main" for single-clinic setup
     const clinic = await this.prisma.clinic.findUnique({
       where: { id: 'main' },
     });
 
     if (!clinic) {
+      // Permanent failure — no point retrying without seeded data
       this.logger.error('Clinic not found — run seed first');
       return;
     }
 
-    // Get or create session for this patient
     const session = await this.sessionsService.getOrCreate(
       from,
       clinic.id,
       clinic.defaultLanguage,
     );
 
-    // Route to orchestrator
     try {
       await this.orchestratorService.handleMessage(from, text, session);
     } catch (error: any) {
-      if (error?.response?.status === 400) {
-        this.logger.error(`Permanent failure for ${from} — not retrying: ${error.message}`);
+      const message: string = error?.message ?? '';
+      const statusCode: number =
+        error?.output?.statusCode ??
+        error?.response?.status ??
+        error?.response?.statusCode ??
+        0;
+
+      // 428 "Connection Closed" and our own timeout error are transient —
+      // throw so BullMQ retries with exponential backoff.
+      if (
+        message.includes('Connection Closed') ||
+        message.includes('not connected after') ||
+        statusCode === 428
+      ) {
+        this.logger.warn(
+          `Transient WhatsApp error for ${from} — job will be retried: ${message}`,
+        );
+        throw error;
+      }
+
+      // 400-range errors other than 428 are caller mistakes — don't retry.
+      if (statusCode >= 400 && statusCode < 500) {
+        this.logger.error(
+          `Permanent failure for ${from} (HTTP ${statusCode}) — not retrying: ${message}`,
+        );
         return;
       }
-      throw error; // Retry on other errors
+
+      // Everything else (500s, unknown) — rethrow so BullMQ retries.
+      throw error;
     }
   }
 
@@ -70,6 +93,6 @@ export class MessageProcessor extends WorkerHost {
 
   @OnWorkerEvent('failed')
   onFailed(job: Job, error: Error) {
-    this.logger.error(`Job ${job.id} failed:`, error.message);
+    this.logger.error(`Job ${job.id} failed:\n${error.message}`);
   }
 }

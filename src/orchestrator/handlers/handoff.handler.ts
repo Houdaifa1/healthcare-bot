@@ -27,15 +27,18 @@ export class HandoffHandler {
     );
     await this.whatsappService.sendText(phone, message);
 
-    const bossPhoneNumber = this.configService.get<string>('BOSS_PHONE_NUMBER');
-    if (bossPhoneNumber) {
+    // FIX: BOSS_PHONE_NUMBER is not a nested config key — read from env directly
+    const bossPhone = process.env.BOSS_PHONE_NUMBER;
+    if (bossPhone) {
+      // Normalise to JID format expected by Baileys
+      const bossJid = bossPhone.replace(/^\+/, '') + '@s.whatsapp.net';
       const alert =
-        `🔔 Handoff Alert\n` +
-        `Patient: ${session.data.patientName || 'Unknown'}\n` +
-        `Phone: ${phone}\n` +
-        `Last message: "${text}"\n` +
-        `Time: ${new Date().toLocaleString()}`;
-      await this.whatsappService.sendText(bossPhoneNumber, alert);
+        `🔔 *Handoff Alert*\n` +
+        `👤 Patient: ${session.data.patientName ?? 'Unknown'}\n` +
+        `📱 Phone: ${phone}\n` +
+        `💬 Last message: "${text}"\n` +
+        `🕐 Time: ${new Date().toLocaleString('fr-MA', { timeZone: 'Africa/Casablanca' })}`;
+      await this.whatsappService.sendText(bossJid, alert);
     }
   }
 }

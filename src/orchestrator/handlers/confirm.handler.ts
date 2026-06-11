@@ -7,6 +7,8 @@ import { AppointmentsService } from '../../appointments/appointments.service';
 import { DoctorService } from '../../bot-content/doctor.service';
 import { MessageKey } from '@prisma/client';
 import { AiService, Intent } from '../../ai/ai.service';
+import { format, parseISO } from 'date-fns';
+import { fr } from 'date-fns/locale';
 
 @Injectable()
 export class ConfirmHandler {
@@ -26,22 +28,27 @@ export class ConfirmHandler {
       session.data.language,
     );
 
-    // Anything that isn't an explicit CONFIRM is treated as a cancellation,
-    // which is the safer default (never book without clear confirmation).
     if (intent === Intent.CONFIRM) {
       await this.processConfirmation(phone, session);
     } else if (intent === Intent.CANCEL) {
       await this.processCancellation(phone, session);
     } else {
-      // Ambiguous input — re-show the confirmation prompt
       await this.reshowConfirmation(phone, session);
     }
   }
 
-  private async processConfirmation(
-    phone: string,
-    session: Session,
-  ): Promise<void> {
+  private formatDate(isoDate: string, language: string): string {
+    try {
+      const d = parseISO(isoDate);
+      return format(d, 'eeee dd MMMM yyyy', {
+        locale: language === 'FR' ? fr : undefined,
+      });
+    } catch {
+      return isoDate;
+    }
+  }
+
+  private async processConfirmation(phone: string, session: Session): Promise<void> {
     if (
       !session.data.doctorId ||
       !session.data.specialtyId ||
@@ -49,10 +56,7 @@ export class ConfirmHandler {
       !session.data.selectedDate ||
       !session.data.selectedTime
     ) {
-      await this.whatsappService.sendText(
-        phone,
-        'Missing booking information. Please start over.',
-      );
+      await this.whatsappService.sendText(phone, 'Missing booking information. Please start over.');
       await this.sessionsService.reset(phone);
       return;
     }
@@ -69,20 +73,20 @@ export class ConfirmHandler {
 
     const doctor = await this.doctorService.findById(session.data.doctorId);
     if (!doctor) {
-      await this.whatsappService.sendText(
-        phone,
-        'Doctor not found. Please start over.',
-      );
+      await this.whatsappService.sendText(phone, 'Doctor not found. Please start over.');
       await this.sessionsService.reset(phone);
       return;
     }
+
+    // FIX: format date as human-readable
+    const friendlyDate = this.formatDate(session.data.selectedDate, session.data.language);
 
     const message = await this.botMessageService.get(
       session.data.clinicId,
       MessageKey.BOOKING_SUCCESS,
       {
         doctorName: doctor.name,
-        date: session.data.selectedDate,
+        date: friendlyDate,
         time: session.data.selectedTime,
       },
       session.data.language,
@@ -91,10 +95,7 @@ export class ConfirmHandler {
     await this.sessionsService.reset(phone);
   }
 
-  private async processCancellation(
-    phone: string,
-    session: Session,
-  ): Promise<void> {
+  private async processCancellation(phone: string, session: Session): Promise<void> {
     const message = await this.botMessageService.get(
       session.data.clinicId,
       MessageKey.BOOKING_CANCELLED,
@@ -105,15 +106,8 @@ export class ConfirmHandler {
     await this.sessionsService.reset(phone);
   }
 
-  private async reshowConfirmation(
-    phone: string,
-    session: Session,
-  ): Promise<void> {
-    if (
-      !session.data.doctorId ||
-      !session.data.selectedDate ||
-      !session.data.selectedTime
-    ) {
+  private async reshowConfirmation(phone: string, session: Session): Promise<void> {
+    if (!session.data.doctorId || !session.data.selectedDate || !session.data.selectedTime) {
       await this.sessionsService.reset(phone);
       return;
     }
@@ -124,13 +118,16 @@ export class ConfirmHandler {
       return;
     }
 
+    // FIX: format date as human-readable
+    const friendlyDate = this.formatDate(session.data.selectedDate, session.data.language);
+
     const message = await this.botMessageService.get(
       session.data.clinicId,
       MessageKey.CONFIRM_BOOKING,
       {
         patientName: session.data.patientName ?? '',
         doctorName: doctor.name,
-        date: session.data.selectedDate,
+        date: friendlyDate,
         time: session.data.selectedTime,
         specialty: '',
       },

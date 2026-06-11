@@ -10,6 +10,7 @@ import { NameHandler } from './name.handler';
 import { SpecialtyHandler } from './specialty.handler';
 import { FaqHandler } from './faq.handler';
 import { HandoffHandler } from './handoff.handler';
+import { PrismaService } from '../../prisma/prisma.service';
 
 @Injectable()
 export class IdleHandler {
@@ -23,6 +24,7 @@ export class IdleHandler {
     private readonly specialtyHandler: SpecialtyHandler,
     private readonly faqHandler: FaqHandler,
     private readonly handoffHandler: HandoffHandler,
+    private readonly prisma: PrismaService,
   ) {}
 
   async handle(phone: string, text: string, session: Session): Promise<void> {
@@ -34,7 +36,6 @@ export class IdleHandler {
       );
 
       if (detected === null) {
-        // Ambiguous — ask the user to pick a language
         session.state = SessionState.LANGUAGE_SELECT;
         await this.sessionsService.save(session);
         const message = await this.botMessageService.get(
@@ -65,7 +66,6 @@ export class IdleHandler {
     // ── Step 3: Route by intent ─────────────────────────────────────────────
     if (intent === Intent.BOOK_APPOINTMENT) {
       if (session.data.patientName) {
-        // Name already known — go straight to specialty display
         session.state = SessionState.BOOKING_SPECIALTY;
         await this.sessionsService.save(session);
         await this.specialtyHandler.showSpecialtyList(phone, session);
@@ -86,7 +86,8 @@ export class IdleHandler {
     if (intent === Intent.ASK_FAQ) {
       session.state = SessionState.FAQ_BROWSING;
       await this.sessionsService.save(session);
-      await this.faqHandler.handle(phone, text, session);
+      // FIX: do NOT pass the menu digit as FAQ query — show the FAQ prompt instead
+      await this.faqHandler.showFaqPrompt(phone, session);
       return;
     }
 
@@ -100,10 +101,16 @@ export class IdleHandler {
   }
 
   async showWelcomeMenu(phone: string, session: Session): Promise<void> {
+    // FIX: fetch real clinic name from DB instead of hardcoding empty string
+    const clinic = await this.prisma.clinic.findUnique({
+      where: { id: session.data.clinicId },
+      select: { name: true },
+    });
+
     const message = await this.botMessageService.get(
       session.data.clinicId,
       MessageKey.WELCOME,
-      { clinicName: '' },
+      { clinicName: clinic?.name ?? '' },
       session.data.language,
     );
 

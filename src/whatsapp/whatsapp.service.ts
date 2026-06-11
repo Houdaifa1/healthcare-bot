@@ -21,7 +21,6 @@ import * as QRCode from 'qrcode';
 import { QUEUES, JOBS } from '../queue/queue.constants';
 import type { MessageJob } from '../queue/message.processor';
 
-// How long (ms) a QR code is valid before WhatsApp rejects it
 const QR_TTL_MS = 18_000;
 
 @Injectable()
@@ -36,7 +35,7 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
 
   // ── QR state — read by QrController ──────────────────────────────────────
   public qrDataUrl: string | null = null;
-  public qrRawString: string | null = null; // raw string for freshness check
+  public qrRawString: string | null = null;
   public qrGeneratedAt: number | null = null;
   public isConnected = false;
 
@@ -64,14 +63,11 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
   }
 
   // ─── Public helpers ───────────────────────────────────────────────────────
-
-  /** Returns true if the current QR is still within its validity window */
   get qrIsValid(): boolean {
     if (!this.qrGeneratedAt || !this.qrDataUrl) return false;
     return Date.now() - this.qrGeneratedAt < QR_TTL_MS;
   }
 
-  /** Seconds remaining before the current QR expires (0 if already expired) */
   get qrSecondsRemaining(): number {
     if (!this.qrGeneratedAt) return 0;
     return Math.max(
@@ -80,7 +76,6 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
-  /** Seconds since the current QR was generated */
   get qrAgeSeconds(): number {
     if (!this.qrGeneratedAt) return 0;
     return Math.floor((Date.now() - this.qrGeneratedAt) / 1000);
@@ -101,32 +96,32 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
           creds: state.creds,
           keys: makeCacheableSignalKeyStore(state.keys, {
             level: 'silent',
-            trace: () => {},
-            debug: () => {},
-            info: () => {},
-            warn: () => {},
-            error: () => {},
-            fatal: () => {},
+            trace: () => { },
+            debug: () => { },
+            info: () => { },
+            warn: () => { },
+            error: () => { },
+            fatal: () => { },
             child: () => ({} as any),
           } as any),
         },
         printQRInTerminal: true,
         logger: {
           level: 'silent',
-          trace: () => {},
-          debug: () => {},
-          info: () => {},
+          trace: () => { },
+          debug: () => { },
+          info: () => { },
           warn: (msg: any) => this.logger.warn(JSON.stringify(msg)),
           error: (msg: any) => this.logger.error(JSON.stringify(msg)),
           fatal: (msg: any) => this.logger.error(JSON.stringify(msg)),
           child: () => ({
             level: 'silent',
-            trace: () => {},
-            debug: () => {},
-            info: () => {},
-            warn: () => {},
-            error: () => {},
-            fatal: () => {},
+            trace: () => { },
+            debug: () => { },
+            info: () => { },
+            warn: () => { },
+            error: () => { },
+            fatal: () => { },
             child: () => ({} as any),
           }),
         } as any,
@@ -233,8 +228,33 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
       if (msg.key.fromMe) continue;
       if (!msg.key.remoteJid) continue;
 
-      const jid = msg.key.remoteJid;
+      let jid = msg.key.remoteJid;
       if (jid.endsWith('@g.us')) continue;
+      if (jid === 'status@broadcast') continue;
+
+      // Resolve Linked Device ID (LID) to real phone JID
+      if (jid.endsWith('@lid') && this.sock) {
+        try {
+          // Baileys exposes lidMapping at runtime, but typings lag – cast to any
+          const pn = await (this.sock as any).lidMapping.getPNForLID(jid);
+          if (pn) {
+            this.logger.log(`Resolved LID ${jid} → ${pn}`);
+            jid = pn;
+          } else {
+            this.logger.warn(`Could not resolve LID ${jid} – ignoring message`);
+            continue;
+          }
+        } catch (err: any) {
+          this.logger.error(`Error resolving LID ${jid}: ${err.message}`);
+          continue;
+        }
+      }
+
+      // Now jid is guaranteed to end with @s.whatsapp.net (or we skip)
+      if (!jid.endsWith('@s.whatsapp.net')) {
+        this.logger.warn(`Unexpected JID format: ${jid} – ignoring`);
+        continue;
+      }
 
       const phone = jid.replace('@s.whatsapp.net', '');
       const name = msg.pushName ?? 'Patient';

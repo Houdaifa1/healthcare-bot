@@ -19,7 +19,6 @@ export class QrController {
     private readonly configService: ConfigService,
   ) {}
 
-  // ─── SSE — streams state every second forever ─────────────────────────────
   @Sse('events')
   streamQrState(
     @Query('token') token: string,
@@ -41,14 +40,12 @@ export class QrController {
     );
   }
 
-  // ─── JSON state — polling fallback ────────────────────────────────────────
   @Get('state')
   getStateEndpoint(@Query('token') token: string): object {
     this.validateToken(token);
     return this.getState();
   }
 
-  // ─── Main page ────────────────────────────────────────────────────────────
   @Get()
   getQr(
     @Query('token') token: string,
@@ -59,8 +56,6 @@ export class QrController {
     res.setHeader('Cache-Control', 'no-store');
     res.send(this.buildHtml(token));
   }
-
-  // ─── Helpers ──────────────────────────────────────────────────────────────
 
   private validateToken(token: string): void {
     const secret = this.configService.get<string>('whatsapp.qrToken');
@@ -74,7 +69,7 @@ export class QrController {
       isConnected: this.whatsappService.isConnected,
       qrDataUrl: this.whatsappService.qrDataUrl,
       qrIsValid: this.whatsappService.qrIsValid,
-      qrSecondsRemaining: this.whatsappService.qrSecondsRemaining,
+      qrGeneratedAt: this.whatsappService.qrGeneratedAt,
     };
   }
 
@@ -112,35 +107,28 @@ export class QrController {
     }
     h1 { font-size: 1.2rem; font-weight: 700; color: #0f172a; }
     .subtitle { font-size: .825rem; color: #94a3b8; margin-top: .2rem; margin-bottom: 1.5rem; }
-
     .status {
       display: inline-flex; align-items: center; gap: .4rem;
       padding: .35rem .85rem; border-radius: 999px;
       font-size: .775rem; font-weight: 600; margin-bottom: 1.5rem;
       transition: background .3s, color .3s, border-color .3s;
     }
-    .status-dot {
-      width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
-      transition: background .3s;
-    }
-    .status.connected  { color:#15803d; background:#f0fdf4; border:1px solid #bbf7d0; }
-    .status.connected  .status-dot { background:#22c55e; }
-    .status.scanning   { color:#1d4ed8; background:#eff6ff; border:1px solid #bfdbfe; }
-    .status.scanning   .status-dot { background:#3b82f6; animation:pulse 1.2s infinite; }
-    .status.expired    { color:#b45309; background:#fffbeb; border:1px solid #fde68a; }
-    .status.expired    .status-dot { background:#f59e0b; animation:pulse 1s infinite; }
-    .status.waiting    { color:#6b7280; background:#f9fafb; border:1px solid #e5e7eb; }
-    .status.waiting    .status-dot { background:#9ca3af; animation:pulse 1.5s infinite; }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; transition: background .3s; }
+    .status.connected   { color:#15803d; background:#f0fdf4; border:1px solid #bbf7d0; }
+    .status.connected   .status-dot { background:#22c55e; }
+    .status.scanning    { color:#1d4ed8; background:#eff6ff; border:1px solid #bfdbfe; }
+    .status.scanning    .status-dot { background:#3b82f6; animation:pulse 1.2s infinite; }
+    .status.expired     { color:#b45309; background:#fffbeb; border:1px solid #fde68a; }
+    .status.expired     .status-dot { background:#f59e0b; animation:pulse 1s infinite; }
+    .status.waiting     { color:#6b7280; background:#f9fafb; border:1px solid #e5e7eb; }
+    .status.waiting     .status-dot { background:#9ca3af; animation:pulse 1.5s infinite; }
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.25} }
-
     .qr-section {
       min-height: 240px;
       display: flex; flex-direction: column;
       align-items: center; justify-content: center;
       margin-bottom: 1.25rem; position: relative;
     }
-
-    /* QR image — always in DOM, src swapped silently */
     #qr-img {
       border-radius: 12px;
       box-shadow: 0 2px 16px rgba(0,0,0,.1);
@@ -150,27 +138,18 @@ export class QrController {
     }
     #qr-img.visible { display: block; opacity: 1; }
     #qr-img.faded   { display: block; opacity: .15; filter: blur(2px); }
-
-    .state-msg {
-      font-size: .9rem; color: #64748b; line-height: 1.7;
-      display: none;
-    }
+    .state-msg { font-size: .9rem; color: #64748b; line-height: 1.7; display: none; }
     .state-msg.visible { display: block; }
     .state-msg.success { color: #15803d; font-weight: 600; font-size: 1rem; }
-
-    /* Expired overlay */
     #expired-overlay {
       position: absolute; top: 50%; left: 50%;
       transform: translate(-50%,-50%);
       background: rgba(255,255,255,.93);
       border: 1.5px solid #fde68a; border-radius: 10px;
       padding: .5rem .9rem; font-size: .82rem; font-weight: 600;
-      color: #b45309; white-space: nowrap;
-      display: none;
+      color: #b45309; white-space: nowrap; display: none;
     }
     #expired-overlay.visible { display: block; }
-
-    /* Countdown */
     #countdown-wrap {
       margin-top: .75rem;
       display: none; align-items: center; justify-content: center; gap: .5rem;
@@ -182,8 +161,6 @@ export class QrController {
     .cring .fill  { fill: none; stroke-width: 3; stroke-linecap: round; transition: stroke .4s ease; }
     .countdown-label { font-size: .8rem; font-weight: 600; color: #475569; }
     .countdown-label span { color: #0f172a; font-size: .9rem; }
-
-    /* Instructions */
     #instructions {
       font-size: .775rem; color: #94a3b8; line-height: 1.7;
       border-top: 1px solid #f1f5f9; padding-top: 1rem;
@@ -195,10 +172,7 @@ export class QrController {
       display: flex; align-items: center; justify-content: center;
       flex-shrink: 0; margin-top: 1px;
     }
-    .transport-bar {
-      margin-top: .85rem; font-size: .68rem; color: #cbd5e1;
-      font-family: monospace;
-    }
+    .transport-bar { margin-top: .85rem; font-size: .68rem; color: #cbd5e1; font-family: monospace; }
   </style>
 </head>
 <body>
@@ -219,16 +193,9 @@ export class QrController {
 
   <div class="qr-section">
     <img id="qr-img" alt="WhatsApp QR Code">
-
     <div id="expired-overlay">⏰ Refreshing QR…</div>
-
-    <p class="state-msg" id="msg-generating">
-      Generating QR code…<br>usually a few seconds.
-    </p>
-    <p class="state-msg success" id="msg-connected">
-      WhatsApp is connected.<br>No QR code needed.
-    </p>
-
+    <p class="state-msg" id="msg-generating">Generating QR code…<br>usually a few seconds.</p>
+    <p class="state-msg success" id="msg-connected">WhatsApp is connected.<br>No QR code needed.</p>
     <div id="countdown-wrap">
       <div class="cring">
         <svg viewBox="0 0 36 36" width="36" height="36">
@@ -259,27 +226,27 @@ export class QrController {
 (function () {
   'use strict';
 
-  var TOKEN = ${JSON.stringify(token)};
+  var TOKEN      = ${JSON.stringify(token)};
+  var QR_TTL_MS  = 20000;
 
-  // DOM refs
-  var pill        = document.getElementById('status-pill');
-  var pillText    = document.getElementById('status-text');
-  var qrImg       = document.getElementById('qr-img');
-  var expiredOvl  = document.getElementById('expired-overlay');
-  var msgGen      = document.getElementById('msg-generating');
-  var msgConn     = document.getElementById('msg-connected');
-  var cdWrap      = document.getElementById('countdown-wrap');
-  var cdLabel     = document.getElementById('countdown');
-  var ringFill    = document.getElementById('ring-fill');
-  var instructions= document.getElementById('instructions');
-  var transportBar= document.getElementById('transport-bar');
+  var pill         = document.getElementById('status-pill');
+  var pillText     = document.getElementById('status-text');
+  var qrImg        = document.getElementById('qr-img');
+  var expiredOvl   = document.getElementById('expired-overlay');
+  var msgGen       = document.getElementById('msg-generating');
+  var msgConn      = document.getElementById('msg-connected');
+  var cdWrap       = document.getElementById('countdown-wrap');
+  var cdLabel      = document.getElementById('countdown');
+  var ringFill     = document.getElementById('ring-fill');
+  var instructions = document.getElementById('instructions');
+  var transportBar = document.getElementById('transport-bar');
 
-  // Local state
-  var currentQrUrl    = null;
-  var countdownHandle = null;
-  var lastState       = null; // 'connected' | 'qr_valid' | 'qr_expired' | 'generating'
+  var currentQrUrl = null;
+  var lastState    = null;
+  var rafHandle    = null;
+  var qrGenAt      = null; // server-reported qrGeneratedAt (ms epoch)
 
-  // ── Transport: SSE with polling fallback ───────────────────────────────────
+  // ── Transport ──────────────────────────────────────────────────────────────
   var sseActive  = false;
   var pollHandle = null;
 
@@ -292,7 +259,6 @@ export class QrController {
 
   try {
     var es = new EventSource('/qr/events?token=' + TOKEN);
-
     es.onmessage = function (e) {
       if (!sseActive) {
         sseActive = true;
@@ -301,7 +267,6 @@ export class QrController {
       }
       render(JSON.parse(e.data));
     };
-
     es.onerror = function () {
       if (!sseActive) {
         clearTimeout(stallTimer);
@@ -309,7 +274,6 @@ export class QrController {
         transportBar.textContent = 'transport: SSE error → polling 2s';
         startPolling();
       } else {
-        // SSE was working but dropped — keep polling until it recovers
         transportBar.textContent = 'transport: SSE dropped → polling 2s';
         if (!pollHandle) startPolling();
       }
@@ -340,31 +304,32 @@ export class QrController {
         lastState = 'connected';
         setStatus('connected', '✅ Connected');
         showOnly(msgConn);
-        hideCountdown();
+        stopRaf();
+        cdWrap.className = '';
         instructions.style.display = 'none';
       }
       return;
     }
 
-    // Not connected — show instructions
     instructions.style.display = '';
 
     if (data.qrDataUrl && data.qrIsValid) {
-      // QR valid — update image src in-place (no DOM rebuild = no flash)
       if (data.qrDataUrl !== currentQrUrl) {
         currentQrUrl = data.qrDataUrl;
         qrImg.src = data.qrDataUrl;
+        qrGenAt = data.qrGeneratedAt; // update timestamp when QR rotates
+      } else if (data.qrGeneratedAt && data.qrGeneratedAt !== qrGenAt) {
+        qrGenAt = data.qrGeneratedAt;
       }
       if (lastState !== 'qr_valid') {
         lastState = 'qr_valid';
         setStatus('scanning', '📷 Ready to scan');
         qrImg.className = 'visible';
         expiredOvl.className = '';
-        showOnly(null); // hide state messages
-        showCountdown();
+        showOnly(null);
+        cdWrap.className = 'visible';
+        startRaf();
       }
-      updateRing(data.qrSecondsRemaining);
-
     } else if (data.qrDataUrl && !data.qrIsValid) {
       if (lastState !== 'qr_expired') {
         lastState = 'qr_expired';
@@ -372,9 +337,9 @@ export class QrController {
         qrImg.className = 'faded';
         expiredOvl.className = 'visible';
         showOnly(null);
-        hideCountdown();
+        stopRaf();
+        cdWrap.className = '';
       }
-
     } else {
       if (lastState !== 'generating') {
         lastState = 'generating';
@@ -382,32 +347,36 @@ export class QrController {
         qrImg.className = '';
         expiredOvl.className = '';
         showOnly(msgGen);
-        hideCountdown();
+        stopRaf();
+        cdWrap.className = '';
       }
     }
   }
 
-  // ── Countdown ring ─────────────────────────────────────────────────────────
-  var QR_TTL = 20;
+  // ── RAF-driven countdown — perfect sync with server timestamp ──────────────
+  function startRaf() {
+    stopRaf();
+    function tick() {
+      if (!qrGenAt) { rafHandle = requestAnimationFrame(tick); return; }
+      var elapsed   = Date.now() - qrGenAt;
+      var remaining = Math.max(0, QR_TTL_MS - elapsed);
+      var secs      = Math.ceil(remaining / 1000);
+      var pct       = Math.round((remaining / QR_TTL_MS) * 100);
+      pct = Math.min(100, Math.max(0, pct));
 
-  function showCountdown() {
-    cdWrap.className = 'visible';
+      cdLabel.textContent = secs + 's';
+      ringFill.setAttribute('stroke-dashoffset', String(100 - pct));
+      ringFill.setAttribute('stroke',
+        secs > 10 ? '#3b82f6' : secs > 5 ? '#f59e0b' : '#ef4444'
+      );
+
+      rafHandle = requestAnimationFrame(tick);
+    }
+    rafHandle = requestAnimationFrame(tick);
   }
 
-  function hideCountdown() {
-    cdWrap.className = '';
-    if (countdownHandle) { clearInterval(countdownHandle); countdownHandle = null; }
-  }
-
-  function updateRing(seconds) {
-    var s = Math.max(0, seconds);
-    cdLabel.textContent = s + 's';
-
-    var pct = Math.round((s / QR_TTL) * 100);
-    ringFill.setAttribute('stroke-dashoffset', String(100 - pct));
-    ringFill.setAttribute('stroke',
-      s > 10 ? '#3b82f6' : s > 5 ? '#f59e0b' : '#ef4444'
-    );
+  function stopRaf() {
+    if (rafHandle) { cancelAnimationFrame(rafHandle); rafHandle = null; }
   }
 
   // ── DOM helpers ────────────────────────────────────────────────────────────

@@ -3,25 +3,43 @@ import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
+import { Request, Response, NextFunction } from 'express';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   app.enableCors({
-  origin: [
-    'http://localhost:5173',
-    'https://admin.houdaifa.dev',
-  ],
-  credentials: true,
-});
+    origin: [
+      'http://localhost:5173',
+      'https://admin.houdaifa.dev',
+    ],
+    credentials: true,
+  });
 
-  app.use(helmet());
+  // Relax CSP only for the QR page — everywhere else stays strict
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    if (req.path.startsWith('/qr')) {
+      helmet({
+        contentSecurityPolicy: {
+          directives: {
+            defaultSrc: ["'self'"],
+            scriptSrc: ["'self'", "'unsafe-inline'"],
+            styleSrc: ["'self'", "'unsafe-inline'"],
+            imgSrc: ["'self'", "data:"],
+            connectSrc: ["'self'"],
+          },
+        },
+      })(req, res, next);
+    } else {
+      helmet()(req, res, next);
+    }
+  });
 
   app.useGlobalPipes(
     new ValidationPipe({
-      whitelist: true, // allow just the fileds in the dto
+      whitelist: true,
       forbidNonWhitelisted: true,
-      transform: true, 
+      transform: true,
     }),
   );
 

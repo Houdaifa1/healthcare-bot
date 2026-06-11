@@ -73,8 +73,7 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
   // ─── Public helpers ───────────────────────────────────────────────────────
 
   get qrIsValid(): boolean {
-    if (!this.qrGeneratedAt || !this.qrDataUrl) return false;
-    return Date.now() - this.qrGeneratedAt < QR_TTL_MS;
+    return !!this.qrDataUrl;
   }
 
   get qrSecondsRemaining(): number {
@@ -148,32 +147,32 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
           creds: state.creds,
           keys: makeCacheableSignalKeyStore(state.keys, {
             level: 'silent',
-            trace: () => {},
-            debug: () => {},
-            info: () => {},
-            warn: () => {},
-            error: () => {},
-            fatal: () => {},
+            trace: () => { },
+            debug: () => { },
+            info: () => { },
+            warn: () => { },
+            error: () => { },
+            fatal: () => { },
             child: () => ({} as any),
           } as any),
         },
         printQRInTerminal: true,
         logger: {
           level: 'silent',
-          trace: () => {},
-          debug: () => {},
-          info: () => {},
+          trace: () => { },
+          debug: () => { },
+          info: () => { },
           warn: (msg: any) => this.logger.warn(JSON.stringify(msg)),
           error: (msg: any) => this.logger.error(JSON.stringify(msg)),
           fatal: (msg: any) => this.logger.error(JSON.stringify(msg)),
           child: () => ({
             level: 'silent',
-            trace: () => {},
-            debug: () => {},
-            info: () => {},
-            warn: () => {},
-            error: () => {},
-            fatal: () => {},
+            trace: () => { },
+            debug: () => { },
+            info: () => { },
+            warn: () => { },
+            error: () => { },
+            fatal: () => { },
             child: () => ({} as any),
           }),
         } as any,

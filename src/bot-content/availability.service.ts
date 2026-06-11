@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { add, format, eachDayOfInterval, isSameDay } from 'date-fns';
+import { add, format, isSameDay } from 'date-fns';
 
 @Injectable()
 export class AvailabilityService {
@@ -16,18 +16,21 @@ export class AvailabilityService {
       orderBy: { dayOfWeek: 'asc' },
     });
 
-    if (timeSlots.length === 0) {
-      return [];
-    }
+    if (timeSlots.length === 0) return [];
 
     const availableDays = new Set(timeSlots.map((ts) => ts.dayOfWeek));
     const dates: string[] = [];
     let currentDate = startDate;
 
-    while (dates.length < count) {
+    // FIX: cap at 90 days to prevent infinite loop when all slots are booked
+    const MAX_DAYS = 90;
+    let daysChecked = 0;
+
+    while (dates.length < count && daysChecked < MAX_DAYS) {
       const dayOfWeek = currentDate.getDay();
+      daysChecked++;
+
       if (availableDays.has(dayOfWeek)) {
-        // Check for conflicts
         const appointments = await this.prisma.appointment.findMany({
           where: {
             doctorId,
@@ -35,15 +38,11 @@ export class AvailabilityService {
               gte: currentDate,
               lt: add(currentDate, { days: 1 }),
             },
-            status: {
-              in: ['PENDING', 'CONFIRMED'],
-            },
+            status: { in: ['PENDING', 'CONFIRMED'] },
           },
         });
 
-        const slotsForDay = timeSlots.filter(
-          (ts) => ts.dayOfWeek === dayOfWeek,
-        );
+        const slotsForDay = timeSlots.filter((ts) => ts.dayOfWeek === dayOfWeek);
         const totalSlots = slotsForDay.reduce((acc, slot) => {
           const start = new Date(`1970-01-01T${slot.startTime}:00`);
           const end = new Date(`1970-01-01T${slot.endTime}:00`);
@@ -55,6 +54,7 @@ export class AvailabilityService {
           dates.push(format(currentDate, 'yyyy-MM-dd'));
         }
       }
+
       currentDate = add(currentDate, { days: 1 });
     }
 
@@ -65,15 +65,11 @@ export class AvailabilityService {
     doctorId: string,
     date: string, // "yyyy-MM-dd"
   ): Promise<string[]> {
-    const targetDate = new Date(date);
+    const targetDate = new Date(`${date}T00:00:00`);
     const dayOfWeek = targetDate.getDay();
 
     const timeSlots = await this.prisma.timeSlot.findMany({
-      where: {
-        doctorId,
-        dayOfWeek,
-        isActive: true,
-      },
+      where: { doctorId, dayOfWeek, isActive: true },
     });
 
     const appointments = await this.prisma.appointment.findMany({

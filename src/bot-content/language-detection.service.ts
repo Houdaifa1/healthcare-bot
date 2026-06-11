@@ -5,37 +5,35 @@ import { Language } from '@prisma/client';
 export class LanguageDetectionService {
   /**
    * Detects FR or EN from the first user message.
-   * 1. Check for explicit language keywords.
-   * 2. If ambiguous, return null.
-   * 3. If clear, return Language.FR or Language.EN.
-   * 4. Default fallback = clinic.defaultLanguage.
+   *
+   * FIX: The original code used .includes('en') which matched ANY French word
+   * containing "en" (rendez-vous, prendre, bien, etc.) — causing French
+   * patients to get EN language.
+   *
+   * New approach: match whole words only using word boundaries.
    */
   async detect(
     text: string,
     clinicDefaultLanguage: Language,
   ): Promise<Language | null> {
-    const normalizedText = text.toLowerCase().trim();
+    const normalized = text.toLowerCase().trim();
 
-    const frKeywords = ['français', 'francais', 'fr', 'bonjour'];
-    const enKeywords = ['english', 'en', 'hello'];
+    // Whole-word matches only — prevents 'en' inside 'rendez-vous', 'bien', etc.
+    const frPatterns = [/\bfrançais\b/, /\bfrancais\b/, /\bbonjour\b/, /\bsalut\b/, /\bbonsoir\b/, /\boui\b/, /\bmerci\b/];
+    const enPatterns = [/\benglish\b/, /\bhello\b/, /\bhi\b/, /\byes\b/, /\bthank\b/];
 
-    const isFrench = frKeywords.some((kw) => normalizedText.includes(kw));
-    const isEnglish = enKeywords.some((kw) => normalizedText.includes(kw));
+    // Explicit language selection buttons
+    if (normalized === 'lang_fr' || normalized === '🇫🇷 français') return Language.FR;
+    if (normalized === 'lang_en' || normalized === '🇬🇧 english') return Language.EN;
 
-    if (isFrench && !isEnglish) {
-      return Language.FR;
-    }
+    const isFrench = frPatterns.some((re) => re.test(normalized));
+    const isEnglish = enPatterns.some((re) => re.test(normalized));
 
-    if (isEnglish && !isFrench) {
-      return Language.EN;
-    }
+    if (isFrench && !isEnglish) return Language.FR;
+    if (isEnglish && !isFrench) return Language.EN;
 
-    if (!isFrench && !isEnglish) {
-      // Could use AI fallback here, for now, use default
-      return clinicDefaultLanguage;
-    }
-
-    // Ambiguous
-    return null;
+    // Ambiguous or undetected — use clinic default (don't return null for
+    // common neutral inputs like "1", "rdv", etc. which should just use the default)
+    return clinicDefaultLanguage;
   }
 }

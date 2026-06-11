@@ -7,6 +7,8 @@ import { MessageKey } from '@prisma/client';
 import { DoctorService } from '../../bot-content/doctor.service';
 import { SpecialtyService } from '../../bot-content/specialty.service';
 import { AvailabilityService } from '../../bot-content/availability.service';
+import { format, parseISO } from 'date-fns';
+import { fr } from 'date-fns/locale';
 
 @Injectable()
 export class TimeHandler {
@@ -25,19 +27,14 @@ export class TimeHandler {
     const selectedDate = session.data.selectedDate;
 
     if (!doctorId || !specialtyId || !selectedDate) {
-      await this.whatsappService.sendText(
-        phone,
-        'Missing booking information. Please start over.',
-      );
+      await this.whatsappService.sendText(phone, 'Missing booking information. Please start over.');
       await this.sessionsService.reset(phone);
       return;
     }
 
-    // ── Resolve the selected time ──────────────────────────────────────────
     const time = await this.resolveTime(text, doctorId, selectedDate);
 
     if (!time) {
-      // Input is not a valid time selection — re-show available slots
       await this.showTimeList(phone, session, doctorId, selectedDate);
       return;
     }
@@ -48,25 +45,15 @@ export class TimeHandler {
 
     const doctor = await this.doctorService.findById(doctorId);
     if (!doctor) {
-      await this.whatsappService.sendText(
-        phone,
-        'Doctor not found. Please start over.',
-      );
+      await this.whatsappService.sendText(phone, 'Doctor not found. Please start over.');
       await this.sessionsService.reset(phone);
       return;
     }
 
-    // Find the specialty label for the confirmation message
-    const specialties = await this.specialtyService.findActive(
-      session.data.clinicId,
-      session.data.language,
-    );
+    const specialties = await this.specialtyService.findActive(session.data.clinicId, session.data.language);
     const matchedSpecialty = specialties.find((s) => s.id === specialtyId);
     if (!matchedSpecialty) {
-      await this.whatsappService.sendText(
-        phone,
-        'Specialty not found. Please start over.',
-      );
+      await this.whatsappService.sendText(phone, 'Specialty not found. Please start over.');
       await this.sessionsService.reset(phone);
       return;
     }
@@ -77,13 +64,13 @@ export class TimeHandler {
       session.data.language,
     );
     if (!specialty) {
-      await this.whatsappService.sendText(
-        phone,
-        'Specialty not found. Please start over.',
-      );
+      await this.whatsappService.sendText(phone, 'Specialty not found. Please start over.');
       await this.sessionsService.reset(phone);
       return;
     }
+
+    // FIX: format ISO date as human-readable before passing to template
+    const friendlyDate = this.formatDate(selectedDate, session.data.language);
 
     const message = await this.botMessageService.get(
       session.data.clinicId,
@@ -91,7 +78,7 @@ export class TimeHandler {
       {
         patientName: session.data.patientName ?? '',
         doctorName: doctor.name,
-        date: selectedDate,
+        date: friendlyDate,
         time,
         specialty: specialty.label,
       },
@@ -104,19 +91,19 @@ export class TimeHandler {
     ]);
   }
 
-  /**
-   * Re-shows the time slot list when the user sends an unrecognised value.
-   */
-  private async showTimeList(
-    phone: string,
-    session: Session,
-    doctorId: string,
-    date: string,
-  ): Promise<void> {
-    const availableSlots = await this.availabilityService.getAvailableSlots(
-      doctorId,
-      date,
-    );
+  private formatDate(isoDate: string, language: string): string {
+    try {
+      const d = parseISO(isoDate);
+      return format(d, 'eeee dd MMMM yyyy', {
+        locale: language === 'FR' ? fr : undefined,
+      });
+    } catch {
+      return isoDate;
+    }
+  }
+
+  private async showTimeList(phone: string, session: Session, doctorId: string, date: string): Promise<void> {
+    const availableSlots = await this.availabilityService.getAvailableSlots(doctorId, date);
 
     if (availableSlots.length === 0) {
       const message = await this.botMessageService.get(
@@ -141,63 +128,36 @@ export class TimeHandler {
     await this.whatsappService.sendInteractiveList(
       phone,
       message,
-      'Times',
-      'Select a time',
+      session.data.language === 'FR' ? 'Créneaux disponibles' : 'Available Times',
+      session.data.language === 'FR' ? 'Choisissez un créneau' : 'Select a time',
       [
         {
-          title: 'Available Times',
-          rows: availableSlots.map((t) => ({
-            id: `time_${t}`,
-            title: t,
-          })),
+          title: session.data.language === 'FR' ? 'Créneaux' : 'Times',
+          rows: availableSlots.map((t) => ({ id: `time_${t}`, title: t })),
         },
       ],
     );
   }
 
-  /**
-   * Resolves user input to a time string ("HH:mm").
-   * Accepts:
-   * 1. "time_<HH:mm>" prefix (from list selection)
-   * 2. Numbered choice ("1", "2", …) mapped to available slots
-   * 3. Direct HH:mm input ("09:00")
-   */
-  private async resolveTime(
-    text: string,
-    doctorId: string,
-    date: string,
-  ): Promise<string | null> {
+  private async resolveTime(text: string, doctorId: string, date: string): Promise<string | null> {
     const trimmed = text.trim();
 
-    // Prefixed time from interactive list
     if (trimmed.startsWith('time_')) {
       const candidate = trimmed.replace('time_', '');
-      if (/^\d{2}:\d{2}$/.test(candidate)) {
-        return candidate;
-      }
+      if (/^\d{2}:\d{2}$/.test(candidate)) return candidate;
       return null;
     }
 
-    // Direct HH:mm entry
     if (/^\d{1,2}:\d{2}$/.test(trimmed)) {
       const padded = trimmed.padStart(5, '0');
-      const slots = await this.availabilityService.getAvailableSlots(
-        doctorId,
-        date,
-      );
+      const slots = await this.availabilityService.getAvailableSlots(doctorId, date);
       return slots.includes(padded) ? padded : null;
     }
 
-    // Numbered choice
     const index = parseInt(trimmed, 10);
     if (!isNaN(index) && index >= 1) {
-      const slots = await this.availabilityService.getAvailableSlots(
-        doctorId,
-        date,
-      );
-      if (index <= slots.length) {
-        return slots[index - 1];
-      }
+      const slots = await this.availabilityService.getAvailableSlots(doctorId, date);
+      if (index <= slots.length) return slots[index - 1];
     }
 
     return null;

@@ -217,7 +217,7 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
 
   // ─── Incoming messages ─────────────────────────────────────────────────────
 
-  private async onMessage(upsert: {
+    private async onMessage(upsert: {
     messages: proto.IWebMessageInfo[];
     type: string;
   }): Promise<void> {
@@ -233,24 +233,34 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
       if (jid === 'status@broadcast') continue;
 
       // ─── Resolve Linked Device ID (LID) to real phone JID ─────────────
-     if (jid.endsWith('@lid') && this.sock) {
+      if (jid.endsWith('@lid') && this.sock) {
         try {
-          // getPNFromLID exists at runtime on Baileys ≥6.0
-          const pn = await (this.sock as any).getPNFromLID(jid);
+          let pn: string | null = null;
+
+          // Attempt 1: via lidMapping (present in some Baileys builds)
+          if (typeof (this.sock as any).lidMapping?.getPNForLID === 'function') {
+            pn = await (this.sock as any).lidMapping.getPNForLID(jid);
+          }
+
+          // Attempt 2: direct method (added in Baileys 6.6.0+)
+          if (!pn && typeof (this.sock as any).getPNFromLID === 'function') {
+            pn = await (this.sock as any).getPNFromLID(jid);
+          }
+
           if (pn) {
             this.logger.log(`Resolved LID ${jid} → ${pn}`);
             jid = pn;
           } else {
             this.logger.warn(`Could not resolve LID ${jid} – ignoring message`);
-            continue;
+            continue; // skip this message – replying to an LID will disconnect us
           }
         } catch (err: any) {
           this.logger.error(`Error resolving LID ${jid}: ${err.message}`);
-          continue;
+          continue; // skip
         }
       }
 
-      // Now jid is guaranteed to end with @s.whatsapp.net (or we skip)
+      // jid is now guaranteed to be a real phone JID (e.g. 212644645877@s.whatsapp.net)
       if (!jid.endsWith('@s.whatsapp.net')) {
         this.logger.warn(`Unexpected JID format: ${jid} – ignoring`);
         continue;

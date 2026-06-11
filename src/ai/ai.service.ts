@@ -39,8 +39,16 @@ export class AiService {
     state: string,
     language: string,
   ): Promise<Intent> {
+    // Always run fallback first — it handles unambiguous cases instantly
+    // and saves Gemini quota for truly ambiguous messages.
+    const fallback = this.fallbackIntentDetection(userMessage, state);
+    if (fallback !== Intent.UNKNOWN) {
+      this.logger.log(`Fallback intent: "${fallback}" for: "${userMessage}"`);
+      return fallback;
+    }
+
     if (!this.isEnabled) {
-      return this.fallbackIntentDetection(userMessage);
+      return Intent.UNKNOWN;
     }
 
     try {
@@ -54,11 +62,13 @@ export class AiService {
         return response as Intent;
       }
 
-      this.logger.warn(`Gemini returned unknown intent: "${response}" — using fallback`);
-      return this.fallbackIntentDetection(userMessage);
-    } catch (error) {
+      this.logger.warn(
+        `Gemini returned unknown intent: "${response}" — using UNKNOWN`,
+      );
+      return Intent.UNKNOWN;
+    } catch (error: any) {
       this.logger.error('Gemini intent detection failed', error.message);
-      return this.fallbackIntentDetection(userMessage);
+      return Intent.UNKNOWN;
     }
   }
 
@@ -74,21 +84,84 @@ export class AiService {
 
       if (response === 'FR' || response === 'EN') return response;
       return 'UNKNOWN';
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error('Gemini language detection failed', error.message);
       return 'UNKNOWN';
     }
   }
 
-  private fallbackIntentDetection(message: string): Intent {
+  /**
+   * Fast keyword fallback — handles the most common Moroccan French patterns
+   * without burning Gemini quota. Returns UNKNOWN only when truly ambiguous.
+   */
+  private fallbackIntentDetection(message: string, state: string): Intent {
     const lower = message.toLowerCase().trim();
 
-    if (/^(bonjour|hello|hi|salut|hey|bonsoir)/i.test(lower)) return Intent.GREETING;
-    if (/(rdv|rendez-vous|réserv|book|appointment|prendre|schedule|consulter|medecin|doctor)/i.test(lower)) return Intent.BOOK_APPOINTMENT;
-    if (/(horaire|heure|adresse|prix|tarif|coût|où|quand|ouvert|fermé|time|open|close|location)/i.test(lower)) return Intent.ASK_FAQ;
-    if (/(agent|humain|human|operator|personne|parler|speak|talk|someone)/i.test(lower)) return Intent.HUMAN_AGENT;
-    if (/^(oui|yes|confirm|confirmer|d'accord|ok|yep|sure)/i.test(lower)) return Intent.CONFIRM;
-    if (/^(non|no|cancel|annuler|quitter|stop|nope)/i.test(lower)) return Intent.CANCEL;
+    // ── Numbered menu shortcuts (context-aware) ────────────────────────────
+    if (lower === '1') {
+      if (state === 'IDLE') return Intent.BOOK_APPOINTMENT;
+      if (state === 'BOOKING_CONFIRM') return Intent.CONFIRM;
+    }
+    if (lower === '2') {
+      if (state === 'IDLE') return Intent.ASK_FAQ;
+      if (state === 'BOOKING_CONFIRM') return Intent.CANCEL;
+    }
+    if (lower === '3' && state === 'IDLE') return Intent.HUMAN_AGENT;
+
+    // ── Confirm / Cancel ───────────────────────────────────────────────────
+    if (
+      /^(oui|yes|yep|confirm|confirmer|d'accord|ok|okay|c'est bon|exact|correct|✅|sure)$/i.test(
+        lower,
+      ) ||
+      lower.includes('confirm_yes') ||
+      lower.includes('✅ confirmer')
+    ) {
+      return Intent.CONFIRM;
+    }
+
+    if (
+      /^(non|no|nope|cancel|annuler|quitter|stop|retour|menu|↩|exit)$/i.test(
+        lower,
+      ) ||
+      lower.includes('confirm_no') ||
+      lower.includes('❌ annuler') ||
+      lower.includes('menu principal') ||
+      lower.includes('↩️ menu')
+    ) {
+      return Intent.CANCEL;
+    }
+
+    // ── Human agent ────────────────────────────────────────────────────────
+    if (
+      /(agent|humain|human|operator|opérateur|personne|parler à|speak to|talk to|someone|conseiller|👤)/i.test(
+        lower,
+      )
+    ) {
+      return Intent.HUMAN_AGENT;
+    }
+
+    // ── Book appointment — includes Moroccan French abbreviations ──────────
+    if (
+      /\b(rdv|r\.d\.v|rndv|rendez-vous|rendezvous|appointment|réserver|reserver|booking|consulter|consultation|médecin|medecin|docteur|doctor|prendre|schedule|موعد)\b/i.test(
+        lower,
+      )
+    ) {
+      return Intent.BOOK_APPOINTMENT;
+    }
+
+    // ── FAQ ────────────────────────────────────────────────────────────────
+    if (
+      /(horaire|heure|adresse|prix|tarif|coût|cout|où|ou est|quand|ouvert|fermé|ferme|time|open|close|location|téléphone|telephone|contact|faq)/i.test(
+        lower,
+      )
+    ) {
+      return Intent.ASK_FAQ;
+    }
+
+    // ── Greeting — only if message is purely a greeting ────────────────────
+    if (/^(bonjour|bonsoir|salam|salut|hello|hi|hey|bonne journée|ahlan)[\s!,.]*$/i.test(lower)) {
+      return Intent.GREETING;
+    }
 
     return Intent.UNKNOWN;
   }

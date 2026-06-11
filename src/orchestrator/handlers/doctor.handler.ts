@@ -5,6 +5,8 @@ import { SessionsService } from '../../sessions/sessions.service';
 import { AvailabilityService } from '../../bot-content/availability.service';
 import { BotMessageService } from '../../bot-content/bot-message.service';
 import { MessageKey } from '@prisma/client';
+import { DoctorService } from '../../bot-content/doctor.service';
+import { Doctor } from '@prisma/client';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
 
@@ -15,30 +17,53 @@ export class DoctorHandler {
     private readonly sessionsService: SessionsService,
     private readonly availabilityService: AvailabilityService,
     private readonly botMessageService: BotMessageService,
+    private readonly doctorService: DoctorService,
   ) {}
 
   async handle(phone: string, text: string, session: Session): Promise<void> {
-    const doctorId = text.replace('doctor_', '');
-    session.data.doctorId = doctorId;
+    if (!session.data.specialtyId) {
+      await this.whatsappService.sendText(
+        phone,
+        'Missing specialty. Please start over.',
+      );
+      await this.sessionsService.reset(phone);
+      return;
+    }
+
+    const doctors = await this.doctorService.findBySpecialty(
+      session.data.clinicId,
+      session.data.specialtyId,
+    );
+
+    const doctor = this.resolveDoctor(text, doctors);
+
+    if (!doctor) {
+      // Could not match — re-show the doctor list
+      await this.showDoctorList(phone, session, doctors);
+      return;
+    }
+
+    session.data.doctorId = doctor.id;
     session.state = SessionState.BOOKING_DATE;
     await this.sessionsService.save(session);
 
     const availableDates = await this.availabilityService.getAvailableDates(
-      doctorId,
+      doctor.id,
       3,
     );
 
     if (availableDates.length === 0) {
-        const message = await this.botMessageService.get(
-            session.data.clinicId,
-            MessageKey.NO_SLOTS_AVAILABLE,
-            {},
-            session.data.language,
-        );
-        await this.whatsappService.sendText(phone, message);
-        session.state = SessionState.BOOKING_DOCTOR;
-        await this.sessionsService.save(session);
-        return;
+      const message = await this.botMessageService.get(
+        session.data.clinicId,
+        MessageKey.NO_SLOTS_AVAILABLE,
+        {},
+        session.data.language,
+      );
+      await this.whatsappService.sendText(phone, message);
+      session.state = SessionState.BOOKING_DOCTOR;
+      await this.sessionsService.save(session);
+      await this.showDoctorList(phone, session, doctors);
+      return;
     }
 
     const message = await this.botMessageService.get(
@@ -53,11 +78,81 @@ export class DoctorHandler {
       message,
       availableDates.map((date) => {
         const d = new Date(date);
-        const label = format(d, 'eeee dd MMMM', { locale: session.data.language === 'FR' ? fr : undefined });
+        const label = format(d, 'eeee dd MMMM', {
+          locale: session.data.language === 'FR' ? fr : undefined,
+        });
         return {
-        id: `date_${date}`,
-        title: label.charAt(0).toUpperCase() + label.slice(1),
-      }}),
+          id: `date_${date}`,
+          title: label.charAt(0).toUpperCase() + label.slice(1),
+        };
+      }),
     );
+  }
+
+  private async showDoctorList(
+    phone: string,
+    session: Session,
+    doctors: Doctor[],
+  ): Promise<void> {
+    if (doctors.length === 0) {
+      const fallback = await this.botMessageService.get(
+        session.data.clinicId,
+        MessageKey.FALLBACK,
+        {},
+        session.data.language,
+      );
+      await this.whatsappService.sendText(phone, fallback);
+      return;
+    }
+
+    // Re-fetch specialty label for the header
+    const message = await this.botMessageService.get(
+      session.data.clinicId,
+      MessageKey.SELECT_DOCTOR,
+      { specialty: '' },
+      session.data.language,
+    );
+
+    await this.whatsappService.sendInteractiveList(
+      phone,
+      message,
+      'Doctors',
+      'Select a doctor',
+      [
+        {
+          title: 'Doctors',
+          rows: doctors.map((d) => ({
+            id: `doctor_${d.id}`,
+            title: d.name,
+          })),
+        },
+      ],
+    );
+  }
+
+  /**
+   * Tries to match user input to a doctor by:
+   * 1. Exact "doctor_<id>" prefix
+   * 2. Numbered choice ("1", "2", …)
+   * 3. Case-insensitive name match
+   */
+  private resolveDoctor(text: string, doctors: Doctor[]): Doctor | null {
+    const trimmed = text.trim();
+
+    // Prefixed ID from interactive list
+    if (trimmed.startsWith('doctor_')) {
+      const id = trimmed.replace('doctor_', '');
+      return doctors.find((d) => d.id === id) ?? null;
+    }
+
+    // Numbered choice
+    const index = parseInt(trimmed, 10);
+    if (!isNaN(index) && index >= 1 && index <= doctors.length) {
+      return doctors[index - 1];
+    }
+
+    // Name match (case-insensitive)
+    const normalised = trimmed.toLowerCase();
+    return doctors.find((d) => d.name.toLowerCase() === normalised) ?? null;
   }
 }

@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { Session, SessionState } from '../../sessions/sessions.service';
 import { WhatsAppService } from '../../whatsapp/whatsapp.service';
 import { SessionsService } from '../../sessions/sessions.service';
-import { SpecialtyService } from '../../bot-content/specialty.service';
+import { SpecialtyHandler } from './specialty.handler';
 import { BotMessageService } from '../../bot-content/bot-message.service';
 import { MessageKey } from '@prisma/client';
 
@@ -11,41 +11,30 @@ export class NameHandler {
   constructor(
     private readonly whatsappService: WhatsAppService,
     private readonly sessionsService: SessionsService,
-    private readonly specialtyService: SpecialtyService,
+    private readonly specialtyHandler: SpecialtyHandler,
     private readonly botMessageService: BotMessageService,
   ) {}
 
   async handle(phone: string, text: string, session: Session): Promise<void> {
-    session.data.patientName = text;
+    const name = text.trim();
+
+    if (!name || name.length < 2) {
+      // Name too short — ask again
+      const message = await this.botMessageService.get(
+        session.data.clinicId,
+        MessageKey.ASK_NAME,
+        {},
+        session.data.language,
+      );
+      await this.whatsappService.sendText(phone, message);
+      return;
+    }
+
+    session.data.patientName = name;
     session.state = SessionState.BOOKING_SPECIALTY;
     await this.sessionsService.save(session);
 
-    const specialties = await this.specialtyService.findActive(
-      session.data.clinicId,
-      session.data.language,
-    );
-
-    const message = await this.botMessageService.get(
-      session.data.clinicId,
-      MessageKey.SELECT_SPECIALTY,
-      {},
-      session.data.language,
-    );
-
-    await this.whatsappService.sendInteractiveList(
-      phone,
-      message,
-      'Specialties',
-      'Select a specialty',
-      [
-        {
-          title: 'Specialties',
-          rows: specialties.map((s) => ({
-            id: `specialty_${s.slug}`,
-            title: s.label,
-          })),
-        },
-      ],
-    );
+    // Show the specialty list — do NOT pass the name text as a selection
+    await this.specialtyHandler.showSpecialtyList(phone, session);
   }
 }

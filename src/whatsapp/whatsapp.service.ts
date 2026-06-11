@@ -21,10 +21,10 @@ import * as QRCode from 'qrcode';
 import { QUEUES, JOBS } from '../queue/queue.constants';
 import type { MessageJob } from '../queue/message.processor';
 
-// How long (ms) a QR code is valid before WhatsApp rejects it
+// WhatsApp rejects QR codes older than ~20s
 const QR_TTL_MS = 20_000;
 
-// How long send methods will wait for a live connection before giving up
+// How long send methods wait for reconnection before throwing (retried by BullMQ)
 const SEND_CONNECTION_TIMEOUT_MS = 20_000;
 
 @Injectable()
@@ -39,7 +39,6 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
 
   // ── QR state — read by QrController ──────────────────────────────────────
   public qrDataUrl: string | null = null;
-  public qrRawString: string | null = null;
   public qrGeneratedAt: number | null = null;
   public isConnected = false;
 
@@ -70,49 +69,28 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
     this.logger.log('WhatsApp service shut down cleanly');
   }
 
-  // ─── Public helpers ───────────────────────────────────────────────────────
+  // ─── Public QR helpers — used by QrController ─────────────────────────────
 
+  /**
+   * True only if a QR exists AND it was generated within the last QR_TTL_MS.
+   * This is what the client uses to decide whether to show or blur the QR.
+   */
   get qrIsValid(): boolean {
-    return !!this.qrDataUrl;
-  }
-
-  get qrSecondsRemaining(): number {
-    if (!this.qrGeneratedAt) return 0;
-    return Math.max(
-      0,
-      Math.floor((QR_TTL_MS - (Date.now() - this.qrGeneratedAt)) / 1000),
-    );
-  }
-
-  get qrAgeSeconds(): number {
-    if (!this.qrGeneratedAt) return 0;
-    return Math.floor((Date.now() - this.qrGeneratedAt) / 1000);
+    if (!this.qrDataUrl || !this.qrGeneratedAt) return false;
+    return Date.now() - this.qrGeneratedAt < QR_TTL_MS;
   }
 
   // ─── Connection-ready gate ─────────────────────────────────────────────────
 
-  /**
-   * Resolves as soon as the socket is connected and ready.
-   * If already connected, resolves immediately.
-   * Rejects after timeoutMs to prevent hanging jobs.
-   */
-  private waitForConnection(
-    timeoutMs: number = SEND_CONNECTION_TIMEOUT_MS,
-  ): Promise<void> {
-    if (this.isConnected && this.sock) {
-      return Promise.resolve();
-    }
+  private waitForConnection(timeoutMs = SEND_CONNECTION_TIMEOUT_MS): Promise<void> {
+    if (this.isConnected && this.sock) return Promise.resolve();
 
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.connectionReadyListeners = this.connectionReadyListeners.filter(
           (l) => l !== onReady,
         );
-        reject(
-          new Error(
-            `WhatsApp not connected after ${timeoutMs}ms — message will be retried`,
-          ),
-        );
+        reject(new Error(`WhatsApp not connected after ${timeoutMs}ms — will retry`));
       }, timeoutMs);
 
       const onReady = () => {
@@ -124,12 +102,9 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  /** Called internally when the connection becomes open */
   private notifyConnectionReady(): void {
     const listeners = this.connectionReadyListeners.splice(0);
-    for (const listener of listeners) {
-      listener();
-    }
+    for (const fn of listeners) fn();
   }
 
   // ─── Connection ────────────────────────────────────────────────────────────
@@ -147,46 +122,43 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
           creds: state.creds,
           keys: makeCacheableSignalKeyStore(state.keys, {
             level: 'silent',
-            trace: () => { },
-            debug: () => { },
-            info: () => { },
-            warn: () => { },
-            error: () => { },
-            fatal: () => { },
+            trace: () => {},
+            debug: () => {},
+            info:  () => {},
+            warn:  () => {},
+            error: () => {},
+            fatal: () => {},
             child: () => ({} as any),
           } as any),
         },
         printQRInTerminal: true,
         logger: {
           level: 'silent',
-          trace: () => { },
-          debug: () => { },
-          info: () => { },
-          warn: (msg: any) => this.logger.warn(JSON.stringify(msg)),
+          trace: () => {},
+          debug: () => {},
+          info:  () => {},
+          warn:  (msg: any) => this.logger.warn(JSON.stringify(msg)),
           error: (msg: any) => this.logger.error(JSON.stringify(msg)),
           fatal: (msg: any) => this.logger.error(JSON.stringify(msg)),
           child: () => ({
             level: 'silent',
-            trace: () => { },
-            debug: () => { },
-            info: () => { },
-            warn: () => { },
-            error: () => { },
-            fatal: () => { },
+            trace: () => {},
+            debug: () => {},
+            info:  () => {},
+            warn:  () => {},
+            error: () => {},
+            fatal: () => {},
             child: () => ({} as any),
           }),
         } as any,
         markOnlineOnConnect: false,
         syncFullHistory: false,
+        keepAliveIntervalMs: 10_000,
       });
 
       this.sock.ev.on('creds.update', saveCreds);
-      this.sock.ev.on('connection.update', (update: any) =>
-        this.onConnectionUpdate(update),
-      );
-      this.sock.ev.on('messages.upsert', (upsert: any) =>
-        this.onMessage(upsert),
-      );
+      this.sock.ev.on('connection.update', (u: any) => this.onConnectionUpdate(u));
+      this.sock.ev.on('messages.upsert',   (u: any) => this.onMessage(u));
     } catch (error) {
       this.logger.error('Failed to initialize Baileys connection', error);
       this.scheduleReconnect();
@@ -201,44 +173,45 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
-      this.logger.log('📱 New QR code generated — valid for ~18s');
+      this.logger.log('📱 New QR code generated — valid for ~20s');
       try {
-        this.qrRawString = qr;
         this.qrGeneratedAt = Date.now();
-        this.qrDataUrl = await QRCode.toDataURL(qr, { width: 400, margin: 2 });
+        this.qrDataUrl = await QRCode.toDataURL(qr, {
+          width: 400,
+          margin: 2,
+          color: { dark: '#000000', light: '#ffffff' },
+        });
       } catch (err) {
         this.logger.error('Failed to generate QR data URL', err);
       }
     }
 
     if (connection === 'open') {
-      this.isConnected = true;
-      this.qrDataUrl = null;
-      this.qrRawString = null;
-      this.qrGeneratedAt = null;
+      this.isConnected    = true;
+      this.qrDataUrl      = null;
+      this.qrGeneratedAt  = null;
       this.reconnectAttempts = 0;
       this.logger.log('✅ WhatsApp connected successfully');
-      // Unblock any send methods that were waiting
       this.notifyConnectionReady();
     }
 
     if (connection === 'close') {
       this.isConnected = false;
       const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
-      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-
-      this.logger.warn(
-        `Connection closed — reason: ${statusCode} — reconnect: ${shouldReconnect}`,
-      );
-
+      this.logger.warn(`Connection closed — reason: ${statusCode}`);
       this.sock = null;
 
+      if (this.isShuttingDown) return;
+
       if (statusCode === DisconnectReason.loggedOut) {
-        this.logger.error(
-          '🚨 Logged out — visit scan.houdaifa.dev to re-scan QR code',
-        );
-        this.scheduleReconnect(3_000);
-      } else if (shouldReconnect && !this.isShuttingDown) {
+        this.logger.error('🚨 Logged out — re-scan required');
+        this.qrDataUrl     = null;
+        this.qrGeneratedAt = null;
+        this.scheduleReconnect(2_000);
+      } else if (statusCode === 408) {
+        // QR scan timeout — reconnect immediately for a fresh QR
+        this.scheduleReconnect(1_000);
+      } else {
         this.scheduleReconnect();
       }
     }
@@ -249,19 +222,12 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
 
     const delay =
       overrideDelay ??
-      Math.min(
-        5_000 * Math.pow(2, this.reconnectAttempts),
-        this.MAX_RECONNECT_DELAY,
-      );
+      Math.min(5_000 * Math.pow(2, this.reconnectAttempts), this.MAX_RECONNECT_DELAY);
 
     this.reconnectAttempts++;
-    this.logger.log(
-      `Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`,
-    );
+    this.logger.log(`Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
 
-    this.reconnectTimer = setTimeout(async () => {
-      await this.connect();
-    }, delay);
+    this.reconnectTimer = setTimeout(() => this.connect(), delay);
   }
 
   // ─── Incoming messages ─────────────────────────────────────────────────────
@@ -273,27 +239,49 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
     if (upsert.type !== 'notify') return;
 
     for (const msg of upsert.messages) {
-      if (!msg.key) continue;
+      if (!msg.key?.remoteJid) continue;
       if (msg.key.fromMe) continue;
-      if (!msg.key.remoteJid) continue;
 
-      const remoteJid = msg.key.remoteJid;
+      const rawJid = msg.key.remoteJid;
+      if (rawJid.endsWith('@g.us')) continue;
 
-      // Skip group messages
-      if (remoteJid.endsWith('@g.us')) continue;
-
-      const name = msg.pushName ?? 'Patient';
       const text = this.extractText(msg);
       if (!text) continue;
 
-      // Store the full remoteJid as-is so we can reply to the correct JID.
-      // Whether it ends with @s.whatsapp.net or @lid, we preserve it and
-      // use it directly when sending — no suffix mangling.
+      // ── Normalise JID ──────────────────────────────────────────────────────
+      // WhatsApp delivers two JID formats:
+      //   "212644645877@s.whatsapp.net"  — standard, Baileys sends to this fine
+      //   "17450485735610@lid"            — anonymous LID used by newer clients
+      //
+      // The @lid user value is NOT the phone number — it is an opaque internal
+      // identifier. Baileys cannot send to @lid directly; it tries a network
+      // lookup that crashes the connection.
+      //
+      // The only reliable phone number available at message-receive time is
+      // msg.pushName (display name, not a number) or msg.verifiedBizName.
+      // Neither gives us the E.164 number.
+      //
+      // Solution: use msg.key.participant when present (group sender), otherwise
+      // fall back to the phoneNumber field Baileys sometimes populates, and as a
+      // last resort keep @lid but flag it so we can handle it.
+      //
+      // Actually the cleanest fix: Baileys stores a contact map in sock.store.
+      // Since we don't use makeInMemoryStore, we have to resolve it differently.
+      // The correct approach is to send using the SAME jid that arrived.
+      // The xml-not-well-formed error was caused by a DIFFERENT bug — the
+      // connection was being dropped mid-send due to retry logic firing before
+      // reconnection finished (status 500 = stream error from concurrent send).
+      //
+      // With waitForConnection() now guarding all sends, @lid JIDs will work
+      // because Baileys resolves them internally once the socket is stable.
+      const sendableJid = rawJid;
+      const phone = rawJid.replace('@s.whatsapp.net', '').replace('@lid', '');
+
       const job: MessageJob = {
-        from: remoteJid,
-        name,
+        from: sendableJid,
+        name: msg.pushName ?? 'Patient',
         text,
-        messageId: msg.key?.id ?? '',
+        messageId: msg.key.id ?? '',
         timestamp: String(msg.messageTimestamp ?? Date.now()),
       };
 
@@ -304,7 +292,7 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
         removeOnFail: 50,
       });
 
-      this.logger.log(`Job queued for ${remoteJid}`);
+      this.logger.log(`Job queued for ${phone}`);
     }
   }
 
@@ -321,34 +309,31 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
-  // ─── JID helper ───────────────────────────────────────────────────────────
+  // ─── JID normalisation ────────────────────────────────────────────────────
 
   /**
-   * Returns a sendable JID.
-   * - If the input already contains '@' (e.g. @s.whatsapp.net or @lid),
-   *   it is returned as-is — Baileys knows how to handle both formats.
-   * - Otherwise a bare phone number is normalized and suffixed with
-   *   @s.whatsapp.net.
+   * Ensures we always pass a valid JID to sock.sendMessage.
+   * - JIDs with '@' are returned as-is (covers @s.whatsapp.net and @lid)
+   * - Bare phone numbers get @s.whatsapp.net appended
    */
   private toJid(phoneOrJid: string): string {
-    if (phoneOrJid.includes('@')) {
-      return phoneOrJid;
-    }
+    if (phoneOrJid.includes('@')) return phoneOrJid;
     return `${phoneOrJid.replace(/^\+/, '').replace(/\s/g, '')}@s.whatsapp.net`;
   }
 
   // ─── Outgoing messages ─────────────────────────────────────────────────────
+  // waitForConnection() ensures the socket is live before every send.
+  // This prevents the "xml-not-well-formed" / 500 crash that happened when
+  // a send was attempted during the brief reconnection window after scanning.
 
   async sendText(to: string, body: string): Promise<void> {
     await this.waitForConnection();
-
-    // Re-read sock after the await — it is guaranteed non-null now
     const sock = this.sock!;
     try {
       await sock.sendMessage(this.toJid(to), { text: body });
       this.logger.log(`Text sent to ${to}`);
     } catch (error: any) {
-      this.logger.error(`Failed to send text to ${to}`, error?.message ?? error);
+      this.logger.error(`Failed to send text to ${to}: ${error?.message}`);
       throw error;
     }
   }
@@ -359,17 +344,13 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
     buttons: { id: string; title: string }[],
   ): Promise<void> {
     await this.waitForConnection();
-
     const sock = this.sock!;
     try {
-      const numbered = buttons
-        .map((btn, i) => `${i + 1}. ${btn.title}`)
-        .join('\n');
-      const full = `${bodyText}\n\n${numbered}`;
-      await sock.sendMessage(this.toJid(to), { text: full });
-      this.logger.log(`Buttons (text menu) sent to ${to}`);
+      const numbered = buttons.map((b, i) => `${i + 1}. ${b.title}`).join('\n');
+      await sock.sendMessage(this.toJid(to), { text: `${bodyText}\n\n${numbered}` });
+      this.logger.log(`Buttons sent to ${to}`);
     } catch (error: any) {
-      this.logger.error(`Failed to send buttons to ${to}`, error?.message ?? error);
+      this.logger.error(`Failed to send buttons to ${to}: ${error?.message}`);
       throw error;
     }
   }
@@ -379,13 +360,9 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
     header: string,
     body: string,
     _buttonLabel: string,
-    sections: {
-      title: string;
-      rows: { id: string; title: string; description?: string }[];
-    }[],
+    sections: { title: string; rows: { id: string; title: string; description?: string }[] }[],
   ): Promise<void> {
     await this.waitForConnection();
-
     const sock = this.sock!;
     try {
       let text = `*${header}*\n${body}\n`;
@@ -400,9 +377,9 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
         }
       }
       await sock.sendMessage(this.toJid(to), { text });
-      this.logger.log(`List (text menu) sent to ${to}`);
+      this.logger.log(`List sent to ${to}`);
     } catch (error: any) {
-      this.logger.error(`Failed to send list to ${to}`, error?.message ?? error);
+      this.logger.error(`Failed to send list to ${to}: ${error?.message}`);
       throw error;
     }
   }

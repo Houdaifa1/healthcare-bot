@@ -96,32 +96,32 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
           creds: state.creds,
           keys: makeCacheableSignalKeyStore(state.keys, {
             level: 'silent',
-            trace: () => { },
-            debug: () => { },
-            info: () => { },
-            warn: () => { },
-            error: () => { },
-            fatal: () => { },
+            trace: () => {},
+            debug: () => {},
+            info: () => {},
+            warn: () => {},
+            error: () => {},
+            fatal: () => {},
             child: () => ({} as any),
           } as any),
         },
         printQRInTerminal: true,
         logger: {
           level: 'silent',
-          trace: () => { },
-          debug: () => { },
-          info: () => { },
+          trace: () => {},
+          debug: () => {},
+          info: () => {},
           warn: (msg: any) => this.logger.warn(JSON.stringify(msg)),
           error: (msg: any) => this.logger.error(JSON.stringify(msg)),
           fatal: (msg: any) => this.logger.error(JSON.stringify(msg)),
           child: () => ({
             level: 'silent',
-            trace: () => { },
-            debug: () => { },
-            info: () => { },
-            warn: () => { },
-            error: () => { },
-            fatal: () => { },
+            trace: () => {},
+            debug: () => {},
+            info: () => {},
+            warn: () => {},
+            error: () => {},
+            fatal: () => {},
             child: () => ({} as any),
           }),
         } as any,
@@ -232,11 +232,11 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
       if (jid.endsWith('@g.us')) continue;
       if (jid === 'status@broadcast') continue;
 
-      // Resolve Linked Device ID (LID) to real phone JID
-      if (jid.endsWith('@lid') && this.sock) {
+      // ─── Resolve Linked Device ID (LID) to real phone JID ─────────────
+     if (jid.endsWith('@lid') && this.sock) {
         try {
-          // Baileys exposes lidMapping at runtime, but typings lag – cast to any
-          const pn = await (this.sock as any).lidMapping.getPNForLID(jid);
+          // getPNFromLID exists at runtime on Baileys ≥6.0
+          const pn = await (this.sock as any).getPNFromLID(jid);
           if (pn) {
             this.logger.log(`Resolved LID ${jid} → ${pn}`);
             jid = pn;

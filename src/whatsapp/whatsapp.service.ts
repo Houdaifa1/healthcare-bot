@@ -17,6 +17,7 @@ import makeWASocket, {
 } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
 import * as path from 'path';
+import * as fs from 'fs';
 import * as QRCode from 'qrcode';
 import { QUEUES, JOBS } from '../queue/queue.constants';
 import type { MessageJob } from '../queue/message.processor';
@@ -204,9 +205,20 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
       if (this.isShuttingDown) return;
 
       if (statusCode === DisconnectReason.loggedOut) {
-        this.logger.error('🚨 Logged out — re-scan required');
+        this.logger.error('🚨 Logged out — wiping auth and re-scanning');
         this.qrDataUrl     = null;
         this.qrGeneratedAt = null;
+        // Wipe stale credentials so Baileys shows a fresh QR instead of
+        // silently failing to reconnect with an invalid session.
+        try {
+          const files = fs.readdirSync(this.authPath);
+          for (const file of files) {
+            fs.unlinkSync(path.join(this.authPath, file));
+          }
+          this.logger.log('Auth files cleared — fresh QR will be generated');
+        } catch (err: any) {
+          this.logger.warn(`Could not clear auth files: ${err?.message}`);
+        }
         this.scheduleReconnect(2_000);
       } else if (statusCode === 408) {
         // QR scan timeout — reconnect immediately for a fresh QR

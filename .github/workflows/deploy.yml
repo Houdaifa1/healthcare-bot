@@ -42,6 +42,8 @@ jobs:
           username: root
           key: ${{ secrets.DROPLET_SSH_KEY }}
           script: |
+            mkdir -p /root/baileys-auth
+
             echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
             docker pull ghcr.io/${{ steps.repo.outputs.name }}:latest
             docker stop healthcare-bot || true
@@ -51,6 +53,7 @@ jobs:
               --restart unless-stopped \
               --network host \
               --env-file /root/.env.production \
+              -v /root/baileys-auth:/app/baileys-auth \
               ghcr.io/${{ steps.repo.outputs.name }}:latest
             docker image prune -f
             sleep 10

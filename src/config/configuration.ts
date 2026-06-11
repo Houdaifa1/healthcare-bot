@@ -11,16 +11,13 @@ export default () => ({
   },
 
   whatsapp: {
-    verifyToken: process.env.META_VERIFY_TOKEN,
-    accessToken: process.env.META_ACCESS_TOKEN,
-    phoneNumberId: process.env.META_PHONE_NUMBER_ID,
-    appSecret: process.env.META_APP_SECRET,
-    bossPhone: process.env.BOSS_PHONE_NUMBER,
+    authPath: process.env.BAILEYS_AUTH_PATH || './baileys-auth',
+    qrToken: process.env.QR_TOKEN,
   },
 
   ai: {
-  apiKey: process.env.GEMINI_API_KEY,
-},
+    apiKey: process.env.GEMINI_API_KEY,
+  },
 
   jwt: {
     secret: process.env.JWT_SECRET,

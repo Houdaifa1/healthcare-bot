@@ -1,14 +1,12 @@
 import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { WebhookController } from './webhook.controller';
 import { WhatsAppService } from './whatsapp.service';
+import { QrController } from './qr.controller';
 import { QUEUES } from '../queue/queue.constants';
 
 @Module({
   imports: [
-    // Register the queue connection directly here
-    // instead of importing the full QueueModule which creates a circular dep
     BullModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => {
@@ -27,7 +25,7 @@ import { QUEUES } from '../queue/queue.constants';
     }),
     BullModule.registerQueue({ name: QUEUES.MESSAGES }),
   ],
-  controllers: [WebhookController],
+  controllers: [QrController],
   providers: [WhatsAppService],
   exports: [WhatsAppService],
 })

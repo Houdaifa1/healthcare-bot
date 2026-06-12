@@ -1,403 +1,259 @@
-import {
-  Injectable,
-  Logger,
-  OnModuleInit,
-  OnModuleDestroy,
-} from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
-import makeWASocket, {
-  useMultiFileAuthState,
-  DisconnectReason,
-  fetchLatestBaileysVersion,
-  makeCacheableSignalKeyStore,
-  proto,
-  WASocket,
-} from '@whiskeysockets/baileys';
-import { Boom } from '@hapi/boom';
-import * as path from 'path';
-import * as fs from 'fs';
-import * as QRCode from 'qrcode';
 import { QUEUES, JOBS } from '../queue/queue.constants';
 import type { MessageJob } from '../queue/message.processor';
 
-// WhatsApp rejects QR codes older than ~20s
-const QR_TTL_MS = 20_000;
-
-// How long send methods wait for reconnection before throwing (retried by BullMQ)
-const SEND_CONNECTION_TIMEOUT_MS = 20_000;
+// ─── Meta Cloud API base URL ───────────────────────────────────────────────
+// All outbound requests go to:
+//   POST https://graph.facebook.com/{apiVersion}/{phoneNumberId}/messages
+//   Authorization: Bearer {accessToken}
 
 @Injectable()
-export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
+export class WhatsAppService {
   private readonly logger = new Logger(WhatsAppService.name);
-  private sock: WASocket | null = null;
-  private authPath: string;
-  private reconnectTimer: NodeJS.Timeout | null = null;
-  private isShuttingDown = false;
-  private reconnectAttempts = 0;
-  private readonly MAX_RECONNECT_DELAY = 60_000;
 
-  // ── QR state — read by QrController ──────────────────────────────────────
-  public qrDataUrl: string | null = null;
-  public qrGeneratedAt: number | null = null;
-  public isConnected = false;
-
-  // Listeners waiting for the connection to become ready
-  private connectionReadyListeners: Array<() => void> = [];
+  private readonly accessToken:   string;
+  private readonly phoneNumberId: string;
+  private readonly apiVersion:    string;
+  private readonly baseUrl:       string;
 
   constructor(
     private readonly configService: ConfigService,
     @InjectQueue(QUEUES.MESSAGES) private readonly messageQueue: Queue,
   ) {
-    this.authPath =
-      this.configService.get<string>('whatsapp.authPath') ??
-      path.join(process.cwd(), 'baileys-auth');
+    const accessToken   = this.configService.get<string>('whatsapp.accessToken');
+    const phoneNumberId = this.configService.get<string>('whatsapp.phoneNumberId');
+    const apiVersion    = this.configService.get<string>('whatsapp.apiVersion') ?? 'v20.0';
+
+    if (!accessToken)   throw new Error('META_ACCESS_TOKEN is not set');
+    if (!phoneNumberId) throw new Error('META_PHONE_NUMBER_ID is not set');
+
+    this.accessToken   = accessToken;
+    this.phoneNumberId = phoneNumberId;
+    this.apiVersion    = apiVersion;
+    this.baseUrl       = `https://graph.facebook.com/${this.apiVersion}/${this.phoneNumberId}/messages`;
   }
 
-  async onModuleInit() {
-    await this.connect();
-  }
-
-  async onModuleDestroy() {
-    this.isShuttingDown = true;
-    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-    this.connectionReadyListeners = [];
-    if (this.sock) {
-      this.sock.end(undefined);
-      this.sock = null;
-    }
-    this.logger.log('WhatsApp service shut down cleanly');
-  }
-
-  // ─── Public QR helpers — used by QrController ─────────────────────────────
+  // ─── Incoming webhook entry point — called by WhatsAppController ──────────
 
   /**
-   * True only if a QR exists AND it was generated within the last QR_TTL_MS.
-   * This is what the client uses to decide whether to show or blur the QR.
+   * Parses a verified webhook payload and enqueues one job per inbound message.
+   * Statuses (delivered, read, failed) are acknowledged and ignored.
    */
-  get qrIsValid(): boolean {
-    if (!this.qrDataUrl || !this.qrGeneratedAt) return false;
-    return Date.now() - this.qrGeneratedAt < QR_TTL_MS;
-  }
+  async handleIncomingWebhook(body: any): Promise<void> {
+    const entries: any[] = body?.entry ?? [];
 
-  // ─── Connection-ready gate ─────────────────────────────────────────────────
+    for (const entry of entries) {
+      const changes: any[] = entry?.changes ?? [];
 
-  private waitForConnection(timeoutMs = SEND_CONNECTION_TIMEOUT_MS): Promise<void> {
-    if (this.isConnected && this.sock) return Promise.resolve();
+      for (const change of changes) {
+        if (change?.field !== 'messages') continue;
 
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.connectionReadyListeners = this.connectionReadyListeners.filter(
-          (l) => l !== onReady,
-        );
-        reject(new Error(`WhatsApp not connected after ${timeoutMs}ms — will retry`));
-      }, timeoutMs);
+        const value = change?.value;
+        if (!value) continue;
 
-      const onReady = () => {
-        clearTimeout(timer);
-        resolve();
-      };
+        // ── Inbound messages ──────────────────────────────────────────────
+        const messages: any[] = value?.messages ?? [];
+        const contacts: any[] = value?.contacts ?? [];
 
-      this.connectionReadyListeners.push(onReady);
-    });
-  }
+        for (const msg of messages) {
+          // Only process inbound text and interactive replies
+          const type: string = msg?.type;
+          if (!['text', 'interactive'].includes(type)) continue;
 
-  private notifyConnectionReady(): void {
-    const listeners = this.connectionReadyListeners.splice(0);
-    for (const fn of listeners) fn();
-  }
+          const from: string = msg?.from; // E.164 without '+', e.g. "212644645877"
+          if (!from) continue;
 
-  // ─── Connection ────────────────────────────────────────────────────────────
+          const text = this.extractText(msg);
+          if (!text) continue;
 
-  private async connect(): Promise<void> {
-    try {
-      const { state, saveCreds } = await useMultiFileAuthState(this.authPath);
-      const { version } = await fetchLatestBaileysVersion();
+          // Resolve display name from contacts array (best-effort)
+          const contact = contacts.find((c: any) => c?.wa_id === from);
+          const name: string = contact?.profile?.name ?? 'Patient';
 
-      this.logger.log(`Connecting with Baileys v${version.join('.')}`);
+          const job: MessageJob = {
+            from,
+            name,
+            text,
+            messageId:  msg?.id ?? '',
+            timestamp:  msg?.timestamp ?? String(Math.floor(Date.now() / 1000)),
+          };
 
-      this.sock = makeWASocket({
-        version,
-        auth: {
-          creds: state.creds,
-          keys: makeCacheableSignalKeyStore(state.keys, {
-            level: 'silent',
-            trace: () => {},
-            debug: () => {},
-            info:  () => {},
-            warn:  () => {},
-            error: () => {},
-            fatal: () => {},
-            child: () => ({} as any),
-          } as any),
-        },
-        printQRInTerminal: true,
-        logger: {
-          level: 'silent',
-          trace: () => {},
-          debug: () => {},
-          info:  () => {},
-          warn:  (msg: any) => this.logger.warn(JSON.stringify(msg)),
-          error: (msg: any) => this.logger.error(JSON.stringify(msg)),
-          fatal: (msg: any) => this.logger.error(JSON.stringify(msg)),
-          child: () => ({
-            level: 'silent',
-            trace: () => {},
-            debug: () => {},
-            info:  () => {},
-            warn:  () => {},
-            error: () => {},
-            fatal: () => {},
-            child: () => ({} as any),
-          }),
-        } as any,
-        markOnlineOnConnect: false,
-        syncFullHistory: false,
-        keepAliveIntervalMs: 10_000,
-      });
+          await this.messageQueue.add(JOBS.PROCESS_MESSAGE, job, {
+            attempts:         5,
+            backoff:          { type: 'exponential', delay: 5_000 },
+            removeOnComplete: 100,
+            removeOnFail:     50,
+          });
 
-      this.sock.ev.on('creds.update', saveCreds);
-      this.sock.ev.on('connection.update', (u: any) => this.onConnectionUpdate(u));
-      this.sock.ev.on('messages.upsert',   (u: any) => this.onMessage(u));
-    } catch (error) {
-      this.logger.error('Failed to initialize Baileys connection', error);
-      this.scheduleReconnect();
-    }
-  }
-
-  private async onConnectionUpdate(update: {
-    connection?: string;
-    lastDisconnect?: { error?: Error };
-    qr?: string;
-  }): Promise<void> {
-    const { connection, lastDisconnect, qr } = update;
-
-    if (qr) {
-      this.logger.log('📱 New QR code generated — valid for ~20s');
-      try {
-        this.qrGeneratedAt = Date.now();
-        this.qrDataUrl = await QRCode.toDataURL(qr, {
-          width: 400,
-          margin: 2,
-          color: { dark: '#000000', light: '#ffffff' },
-        });
-      } catch (err) {
-        this.logger.error('Failed to generate QR data URL', err);
-      }
-    }
-
-    if (connection === 'open') {
-      this.isConnected    = true;
-      this.qrDataUrl      = null;
-      this.qrGeneratedAt  = null;
-      this.reconnectAttempts = 0;
-      this.logger.log('✅ WhatsApp connected successfully');
-      this.notifyConnectionReady();
-    }
-
-    if (connection === 'close') {
-      this.isConnected = false;
-      const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
-      this.logger.warn(`Connection closed — reason: ${statusCode}`);
-      this.sock = null;
-
-      if (this.isShuttingDown) return;
-
-      if (statusCode === DisconnectReason.loggedOut) {
-        this.logger.error('🚨 Logged out — wiping auth and re-scanning');
-        this.qrDataUrl     = null;
-        this.qrGeneratedAt = null;
-        // Wipe stale credentials so Baileys shows a fresh QR instead of
-        // silently failing to reconnect with an invalid session.
-        try {
-          const files = fs.readdirSync(this.authPath);
-          for (const file of files) {
-            fs.unlinkSync(path.join(this.authPath, file));
-          }
-          this.logger.log('Auth files cleared — fresh QR will be generated');
-        } catch (err: any) {
-          this.logger.warn(`Could not clear auth files: ${err?.message}`);
+          this.logger.log(`Job queued for ${from} (${name}): "${text}"`);
         }
-        this.scheduleReconnect(2_000);
-      } else if (statusCode === 408) {
-        // QR scan timeout — reconnect immediately for a fresh QR
-        this.scheduleReconnect(1_000);
-      } else {
-        this.scheduleReconnect();
       }
     }
   }
 
-  private scheduleReconnect(overrideDelay?: number): void {
-    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+  // ─── Text extraction ───────────────────────────────────────────────────────
 
-    const delay =
-      overrideDelay ??
-      Math.min(5_000 * Math.pow(2, this.reconnectAttempts), this.MAX_RECONNECT_DELAY);
-
-    this.reconnectAttempts++;
-    this.logger.log(`Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
-
-    this.reconnectTimer = setTimeout(() => this.connect(), delay);
-  }
-
-  // ─── Incoming messages ─────────────────────────────────────────────────────
-
-  private async onMessage(upsert: {
-    messages: proto.IWebMessageInfo[];
-    type: string;
-  }): Promise<void> {
-    if (upsert.type !== 'notify') return;
-
-    for (const msg of upsert.messages) {
-      if (!msg.key?.remoteJid) continue;
-      if (msg.key.fromMe) continue;
-
-      const rawJid = msg.key.remoteJid;
-      if (rawJid.endsWith('@g.us')) continue;
-
-      const text = this.extractText(msg);
-      if (!text) continue;
-
-      // ── Normalise JID ──────────────────────────────────────────────────────
-      // WhatsApp delivers two JID formats:
-      //   "212644645877@s.whatsapp.net"  — standard, Baileys sends to this fine
-      //   "17450485735610@lid"            — anonymous LID used by newer clients
-      //
-      // The @lid user value is NOT the phone number — it is an opaque internal
-      // identifier. Baileys cannot send to @lid directly; it tries a network
-      // lookup that crashes the connection.
-      //
-      // The only reliable phone number available at message-receive time is
-      // msg.pushName (display name, not a number) or msg.verifiedBizName.
-      // Neither gives us the E.164 number.
-      //
-      // Solution: use msg.key.participant when present (group sender), otherwise
-      // fall back to the phoneNumber field Baileys sometimes populates, and as a
-      // last resort keep @lid but flag it so we can handle it.
-      //
-      // Actually the cleanest fix: Baileys stores a contact map in sock.store.
-      // Since we don't use makeInMemoryStore, we have to resolve it differently.
-      // The correct approach is to send using the SAME jid that arrived.
-      // The xml-not-well-formed error was caused by a DIFFERENT bug — the
-      // connection was being dropped mid-send due to retry logic firing before
-      // reconnection finished (status 500 = stream error from concurrent send).
-      //
-      // With waitForConnection() now guarding all sends, @lid JIDs will work
-      // because Baileys resolves them internally once the socket is stable.
-      const sendableJid = rawJid;
-      const phone = rawJid.replace('@s.whatsapp.net', '').replace('@lid', '');
-
-      const job: MessageJob = {
-        from: sendableJid,
-        name: msg.pushName ?? 'Patient',
-        text,
-        messageId: msg.key.id ?? '',
-        timestamp: String(msg.messageTimestamp ?? Date.now()),
-      };
-
-      await this.messageQueue.add(JOBS.PROCESS_MESSAGE, job, {
-        attempts: 5,
-        backoff: { type: 'exponential', delay: 5_000 },
-        removeOnComplete: 100,
-        removeOnFail: 50,
-      });
-
-      this.logger.log(`Job queued for ${phone}`);
+  private extractText(msg: any): string | null {
+    if (msg.type === 'text') {
+      return msg?.text?.body?.trim() ?? null;
     }
+
+    if (msg.type === 'interactive') {
+      const interactive = msg?.interactive;
+      // button_reply: user tapped a quick-reply button
+      if (interactive?.type === 'button_reply') {
+        // Use the button ID so handlers can match by id (e.g. "lang_fr")
+        return interactive.button_reply?.id?.trim() ?? null;
+      }
+      // list_reply: user selected a row from a list message
+      if (interactive?.type === 'list_reply') {
+        return interactive.list_reply?.id?.trim() ?? null;
+      }
+    }
+
+    return null;
   }
 
-  private extractText(msg: proto.IWebMessageInfo): string | null {
-    const m = msg.message;
-    if (!m) return null;
-    return (
-      m.conversation ??
-      m.extendedTextMessage?.text ??
-      m.buttonsResponseMessage?.selectedDisplayText ??
-      m.listResponseMessage?.title ??
-      m.templateButtonReplyMessage?.selectedDisplayText ??
-      null
-    );
-  }
-
-  // ─── JID normalisation ────────────────────────────────────────────────────
+  // ─── Outbound helpers — all go through sendRaw() ──────────────────────────
 
   /**
-   * Ensures we always pass a valid JID to sock.sendMessage.
-   * - JIDs with '@' are returned as-is (covers @s.whatsapp.net and @lid)
-   * - Bare phone numbers get @s.whatsapp.net appended
+   * Sends a plain text message.
    */
-  private toJid(phoneOrJid: string): string {
-    // Baileys cannot send to @lid JIDs directly — convert to @s.whatsapp.net
-    if (phoneOrJid.endsWith('@lid')) {
-      return phoneOrJid.replace('@lid', '@s.whatsapp.net');
-    }
-    if (phoneOrJid.includes('@')) return phoneOrJid;
-    return `${phoneOrJid.replace(/^\+/, '').replace(/\s/g, '')}@s.whatsapp.net`;
-  }
-
-  // ─── Outgoing messages ─────────────────────────────────────────────────────
-  // waitForConnection() ensures the socket is live before every send.
-  // This prevents the "xml-not-well-formed" / 500 crash that happened when
-  // a send was attempted during the brief reconnection window after scanning.
-
   async sendText(to: string, body: string): Promise<void> {
-    await this.waitForConnection();
-    const sock = this.sock!;
-    try {
-      await sock.sendMessage(this.toJid(to), { text: body });
-      this.logger.log(`Text sent to ${to}`);
-    } catch (error: any) {
-      this.logger.error(`Failed to send text to ${to}: ${error?.message}`);
-      throw error;
-    }
+    await this.sendRaw({
+      messaging_product: 'whatsapp',
+      recipient_type:    'individual',
+      to:                this.normalisePhone(to),
+      type:              'text',
+      text:              { preview_url: false, body },
+    });
+    this.logger.log(`Text sent to ${to}`);
   }
 
+  /**
+   * Sends up to 3 quick-reply buttons.
+   * Meta only supports 1–3 buttons per message.
+   * If more than 3 are passed, excess buttons are silently dropped and a
+   * warning is logged — callers should never pass more than 3.
+   */
   async sendButtons(
-    to: string,
+    to:       string,
     bodyText: string,
-    buttons: { id: string; title: string }[],
+    buttons:  { id: string; title: string }[],
   ): Promise<void> {
-    await this.waitForConnection();
-    const sock = this.sock!;
-    try {
-      const numbered = buttons.map((b, i) => `${i + 1}. ${b.title}`).join('\n');
-      await sock.sendMessage(this.toJid(to), { text: `${bodyText}\n\n${numbered}` });
-      this.logger.log(`Buttons sent to ${to}`);
-    } catch (error: any) {
-      this.logger.error(`Failed to send buttons to ${to}: ${error?.message}`);
-      throw error;
+    if (buttons.length === 0) {
+      // Degrade gracefully to plain text
+      await this.sendText(to, bodyText);
+      return;
+    }
+
+    if (buttons.length > 3) {
+      this.logger.warn(
+        `sendButtons called with ${buttons.length} buttons for ${to} — Meta limit is 3. Truncating.`,
+      );
+    }
+
+    const safeButtons = buttons.slice(0, 3).map((b) => ({
+      type:  'reply',
+      reply: {
+        id:    b.id.slice(0, 256),    // Meta limit: 256 chars
+        title: b.title.slice(0, 20),  // Meta limit: 20 chars
+      },
+    }));
+
+    await this.sendRaw({
+      messaging_product: 'whatsapp',
+      recipient_type:    'individual',
+      to:                this.normalisePhone(to),
+      type:              'interactive',
+      interactive: {
+        type: 'button',
+        body: { text: bodyText.slice(0, 1024) }, // Meta body limit: 1024
+        action: { buttons: safeButtons },
+      },
+    });
+    this.logger.log(`Buttons sent to ${to}`);
+  }
+
+  /**
+   * Sends a list message (single section, up to 10 rows per section).
+   * Meta limits: button label ≤ 20 chars, row title ≤ 24 chars,
+   * row description ≤ 72 chars, max 10 rows per section, max 10 sections.
+   */
+  async sendInteractiveList(
+    to:          string,
+    header:      string,
+    body:        string,
+    buttonLabel: string,
+    sections:    { title: string; rows: { id: string; title: string; description?: string }[] }[],
+  ): Promise<void> {
+    if (sections.length === 0 || sections.every((s) => s.rows.length === 0)) {
+      await this.sendText(to, `${header}\n\n${body}`);
+      return;
+    }
+
+    const safeSections = sections.slice(0, 10).map((s) => ({
+      title: s.title.slice(0, 24),
+      rows:  s.rows.slice(0, 10).map((r) => ({
+        id:          r.id.slice(0, 200),
+        title:       r.title.slice(0, 24),
+        description: r.description ? r.description.slice(0, 72) : undefined,
+      })),
+    }));
+
+    await this.sendRaw({
+      messaging_product: 'whatsapp',
+      recipient_type:    'individual',
+      to:                this.normalisePhone(to),
+      type:              'interactive',
+      interactive: {
+        type:   'list',
+        header: { type: 'text', text: header.slice(0, 60) },
+        body:   { text: body.slice(0, 1024) },
+        action: {
+          button:   buttonLabel.slice(0, 20),
+          sections: safeSections,
+        },
+      },
+    });
+    this.logger.log(`List sent to ${to}`);
+  }
+
+  // ─── Core HTTP sender ──────────────────────────────────────────────────────
+
+  private async sendRaw(payload: Record<string, unknown>): Promise<void> {
+    const response = await fetch(this.baseUrl, {
+      method:  'POST',
+      headers: {
+        'Content-Type':  'application/json',
+        'Authorization': `Bearer ${this.accessToken}`,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      let errorBody = '';
+      try {
+        errorBody = JSON.stringify(await response.json());
+      } catch {
+        errorBody = await response.text().catch(() => '');
+      }
+      const msg = `Meta API error ${response.status}: ${errorBody}`;
+      this.logger.error(msg);
+      throw new Error(msg);
     }
   }
 
-  async sendInteractiveList(
-    to: string,
-    header: string,
-    body: string,
-    _buttonLabel: string,
-    sections: { title: string; rows: { id: string; title: string; description?: string }[] }[],
-  ): Promise<void> {
-    await this.waitForConnection();
-    const sock = this.sock!;
-    try {
-      let text = `*${header}*\n${body}\n`;
-      let index = 1;
-      for (const section of sections) {
-        // Only print section title if it differs from the header already shown
-        if (section.title && section.title !== header) text += `\n*${section.title}*\n`;
-        for (const row of section.rows) {
-          text += `${index}. ${row.title}`;
-          if (row.description) text += ` — ${row.description}`;
-          text += '\n';
-          index++;
-        }
-      }
-      await sock.sendMessage(this.toJid(to), { text });
-      this.logger.log(`List sent to ${to}`);
-    } catch (error: any) {
-      this.logger.error(`Failed to send list to ${to}: ${error?.message}`);
-      throw error;
-    }
+  // ─── Phone normalisation ───────────────────────────────────────────────────
+
+  /**
+   * Meta expects E.164 without the '+' sign, e.g. "212644645877".
+   * Strips leading '+' and any spaces. Does not add country code.
+   */
+  private normalisePhone(phone: string): string {
+    return phone.replace(/^\+/, '').replace(/\s/g, '');
   }
 }

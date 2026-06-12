@@ -6,7 +6,9 @@ import { AppModule } from './app.module';
 import { Request, Response, NextFunction } from 'express';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, {
+    rawBody: true,
+  });
 
   app.enableCors({
     origin: [
@@ -16,24 +18,8 @@ async function bootstrap() {
     credentials: true,
   });
 
-  // Relax CSP only for the QR page — everywhere else stays strict
-  app.use((req: Request, res: Response, next: NextFunction) => {
-    if (req.path.startsWith('/qr')) {
-      helmet({
-        contentSecurityPolicy: {
-          directives: {
-            defaultSrc: ["'self'"],
-            scriptSrc: ["'self'", "'unsafe-inline'", "https://static.cloudflareinsights.com"],
-            styleSrc: ["'self'", "'unsafe-inline'"],
-            imgSrc: ["'self'", "data:"],
-            connectSrc: ["'self'"],
-          },
-        },
-      })(req, res, next);
-    } else {
-      helmet()(req, res, next);
-    }
-  });
+  // Helmet — no QR page anymore, so one uniform policy for everything
+  app.use(helmet());
 
   app.useGlobalPipes(
     new ValidationPipe({

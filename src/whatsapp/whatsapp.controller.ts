@@ -10,9 +10,9 @@ import {
   Logger,
   UnauthorizedException,
   BadRequestException,
-  RawBodyRequest,
   Req,
 } from '@nestjs/common';
+import type { RawBodyRequest } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { Request, Response } from 'express';
 import * as crypto from 'crypto';

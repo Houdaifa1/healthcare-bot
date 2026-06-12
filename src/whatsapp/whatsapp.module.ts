@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { WhatsAppService } from './whatsapp.service';
-import { QrController } from './qr.controller';
+import { WhatsAppController } from './whatsapp.controller';
 import { QUEUES } from '../queue/queue.constants';
 
 @Module({
@@ -25,7 +25,7 @@ import { QUEUES } from '../queue/queue.constants';
     }),
     BullModule.registerQueue({ name: QUEUES.MESSAGES }),
   ],
-  controllers: [QrController],
+  controllers: [WhatsAppController],
   providers: [WhatsAppService],
   exports: [WhatsAppService],
 })

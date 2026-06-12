@@ -19,7 +19,7 @@ FROM node:20-alpine AS production
 
 WORKDIR /app
 
-RUN apk add --no-cache dumb-init python3 make g++
+RUN apk add --no-cache dumb-init
 
 RUN addgroup -g 1001 -S nodejs && adduser -S nestjs -u 1001
 
@@ -33,7 +33,7 @@ RUN npx prisma generate
 
 COPY --from=builder /app/dist ./dist
 
-RUN mkdir -p /app/baileys-auth && chown -R nestjs:nodejs /app
+RUN chown -R nestjs:nodejs /app
 
 USER nestjs
 

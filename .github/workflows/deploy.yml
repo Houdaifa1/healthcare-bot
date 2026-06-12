@@ -55,9 +55,21 @@ jobs:
             systemctl start redis-server || true
             redis-cli ping | grep -q PONG && echo "✅ Redis is up" || echo "❌ Redis failed to start"
 
-            # ── Pull and redeploy container ───────────────────────────────
+            # ── Pull latest image ─────────────────────────────────────────
             echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
             docker pull ghcr.io/${{ steps.repo.outputs.name }}:latest
+
+            # ── Run migrations BEFORE swapping the container ──────────────
+            # Ephemeral container: exits and self-destructs after migrate
+            # If this fails, set -e stops here — old container stays alive
+            docker run --rm \
+              --network host \
+              --env-file /root/.env.production \
+              ghcr.io/${{ steps.repo.outputs.name }}:latest \
+              sh -c "npx prisma migrate deploy"
+            echo "✅ Migrations applied"
+
+            # ── Swap container ────────────────────────────────────────────
             docker stop healthcare-bot || true
             docker rm healthcare-bot || true
             docker run -d \
@@ -67,11 +79,9 @@ jobs:
               --env-file /root/.env.production \
               ghcr.io/${{ steps.repo.outputs.name }}:latest
 
-            # ── Run Prisma migrations ─────────────────────────────────
-            docker exec healthcare-bot npx prisma migrate deploy
-
             docker image prune -f
 
+            # ── Verify ────────────────────────────────────────────────────
             sleep 10
             docker ps | grep healthcare-bot && echo "✅ Deployment successful" || echo "❌ Container not running"
             docker logs healthcare-bot --tail 20

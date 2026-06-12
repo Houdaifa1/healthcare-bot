@@ -47,8 +47,6 @@ export class HandoffService {
   }
 
   async getHandoffSessions(): Promise<{ phone: string; state: string; patientName?: string; lastMessage?: string; updatedAt: number }[]> {
-    // Session keys are stored as session:<phone> in Redis
-    // We use the SessionsService's Redis connection to scan for AWAITING_HANDOFF sessions
     try {
       const keys = await this.sessionsService.scanKeys();
       const sessions: { phone: string; state: string; patientName?: string; lastMessage?: string; updatedAt: number }[] = [];
@@ -72,8 +70,9 @@ export class HandoffService {
   }
 
   async resolveHandoff(phone: string): Promise<void> {
-    const cleanPhone = phone.replace(/@(lid|s\.whatsapp\.net)$/, '');
-    const session = await this.sessionsService.getOrCreate(cleanPhone, '', 'FR' as any);
+    // Use the FULL phone (with @lid / @s.whatsapp.net suffix) to look up the session,
+    // because that's how the key is stored in Redis.
+    const session = await this.sessionsService.getOrCreate(phone, '', 'FR' as any);
     if (!session || session.state !== SessionState.AWAITING_HANDOFF) {
       this.logger.warn(
         `Cannot resolve handoff for session ${phone} which is not in a handoff state.`,
@@ -84,5 +83,15 @@ export class HandoffService {
     this.logger.log(`Resolving handoff for session: ${phone}`);
     session.state = SessionState.IDLE;
     await this.sessionsService.save(session);
+
+    // Notify the user on WhatsApp that the handoff has been resolved
+    try {
+      const resolvedMessage = session.data.language === 'EN'
+        ? '✅ The handoff has been resolved. You can now continue chatting with the bot.'
+        : '✅ La mainlevée a été résolue. Vous pouvez maintenant continuer à discuter avec le bot.';
+      await this.whatsappService.sendText(phone, resolvedMessage);
+    } catch (err) {
+      this.logger.warn(`Failed to send resolution message to ${phone}`, err);
+    }
   }
 }

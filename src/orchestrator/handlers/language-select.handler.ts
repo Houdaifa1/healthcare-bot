@@ -36,17 +36,18 @@ export class LanguageSelectHandler {
       return;
     }
 
-    // Ambiguous — ask again
+    // Ambiguous — ask again with DB-driven labels
     const message = await this.botMessageService.get(
       session.data.clinicId,
       MessageKey.LANGUAGE_PROMPT,
       {},
       session.data.language,
     );
-
+    const btnFr = await this.botMessageService.get(session.data.clinicId, MessageKey.BUTTON_FRENCH, {}, session.data.language);
+    const btnEn = await this.botMessageService.get(session.data.clinicId, MessageKey.BUTTON_ENGLISH, {}, session.data.language);
     await this.whatsappService.sendButtons(phone, message, [
-      { id: 'lang_fr', title: '🇫🇷 Français' },
-      { id: 'lang_en', title: '🇬🇧 English' },
+      { id: 'lang_fr', title: btnFr },
+      { id: 'lang_en', title: btnEn },
     ]);
   }
 }

@@ -10,8 +10,7 @@ import {
 import { BotMessagesService } from './bot-messages.service';
 import { UpdateBotMessageDto } from './dto/update-bot-message.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { Language } from '@prisma/client';
-type MessageKey = 'WELCOME' | 'LANGUAGE_PROMPT' | 'ASK_NAME' | 'SELECT_SPECIALTY' | 'SELECT_DOCTOR' | 'SELECT_DATE' | 'SELECT_TIME' | 'CONFIRM_BOOKING' | 'BOOKING_SUCCESS' | 'BOOKING_CANCELLED' | 'FAQ_INTRO' | 'FAQ_NOT_FOUND' | 'FALLBACK' | 'HANDOFF_TRIGGERED' | 'SESSION_EXPIRED' | 'NO_SLOTS_AVAILABLE' | 'OUTSIDE_HOURS';
+import { Language, MessageKey } from '@prisma/client';
 
 @UseGuards(JwtAuthGuard)
 @Controller('api/admin/v1/clinic/:clinicId/messages')

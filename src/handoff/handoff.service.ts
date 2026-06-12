@@ -46,8 +46,34 @@ export class HandoffService {
     );
   }
 
+  async getHandoffSessions(): Promise<{ phone: string; state: string; patientName?: string; lastMessage?: string; updatedAt: number }[]> {
+    // Session keys are stored as session:<phone> in Redis
+    // We use the SessionsService's Redis connection to scan for AWAITING_HANDOFF sessions
+    try {
+      const keys = await this.sessionsService.scanKeys();
+      const sessions: { phone: string; state: string; patientName?: string; lastMessage?: string; updatedAt: number }[] = [];
+      for (const key of keys) {
+        const phone = key.replace('session:', '');
+        const session = await this.sessionsService.getOrCreate(phone, '', 'FR' as any);
+        if (session.state === SessionState.AWAITING_HANDOFF) {
+          sessions.push({
+            phone,
+            state: session.state,
+            patientName: session.data.patientName,
+            updatedAt: session.updatedAt,
+          });
+        }
+      }
+      return sessions;
+    } catch (error) {
+      this.logger.error('Failed to scan handoff sessions', error);
+      return [];
+    }
+  }
+
   async resolveHandoff(phone: string): Promise<void> {
-    const session = await this.sessionsService.getOrCreate(phone, '', 'FR' as any);
+    const cleanPhone = phone.replace(/@(lid|s\.whatsapp\.net)$/, '');
+    const session = await this.sessionsService.getOrCreate(cleanPhone, '', 'FR' as any);
     if (!session || session.state !== SessionState.AWAITING_HANDOFF) {
       this.logger.warn(
         `Cannot resolve handoff for session ${phone} which is not in a handoff state.`,

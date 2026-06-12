@@ -380,7 +380,8 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
       let text = `*${header}*\n${body}\n`;
       let index = 1;
       for (const section of sections) {
-        if (section.title) text += `\n*${section.title}*\n`;
+        // Only print section title if it differs from the header already shown
+        if (section.title && section.title !== header) text += `\n*${section.title}*\n`;
         for (const row of section.rows) {
           text += `${index}. ${row.title}`;
           if (row.description) text += ` — ${row.description}`;

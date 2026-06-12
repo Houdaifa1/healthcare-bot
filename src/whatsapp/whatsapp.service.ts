@@ -329,6 +329,10 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
    * - Bare phone numbers get @s.whatsapp.net appended
    */
   private toJid(phoneOrJid: string): string {
+    // Baileys cannot send to @lid JIDs directly — convert to @s.whatsapp.net
+    if (phoneOrJid.endsWith('@lid')) {
+      return phoneOrJid.replace('@lid', '@s.whatsapp.net');
+    }
     if (phoneOrJid.includes('@')) return phoneOrJid;
     return `${phoneOrJid.replace(/^\+/, '').replace(/\s/g, '')}@s.whatsapp.net`;
   }

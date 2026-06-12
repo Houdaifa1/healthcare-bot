@@ -48,14 +48,15 @@ export class SpecialtyHandler {
       session.data.language,
     );
 
+    const header = await this.botMessageService.get(session.data.clinicId, MessageKey.HEADER_SPECIALTIES, {}, session.data.language);
     await this.whatsappService.sendInteractiveList(
       phone,
       message,
-      'Specialties',
-      'Select a specialty',
+      header,
+      header,
       [
         {
-          title: 'Specialties',
+          title: '',
           rows: specialties.map((s) => ({
             id: `specialty_${s.slug}`,
             title: s.label,

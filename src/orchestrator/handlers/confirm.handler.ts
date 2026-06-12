@@ -61,12 +61,14 @@ export class ConfirmHandler {
       return;
     }
 
+    // Strip @lid and @s.whatsapp.net suffixes to store clean phone
+    const cleanPhone = phone.replace(/@(lid|s\.whatsapp\.net)$/, '');
     await this.appointmentsService.createAppointment(session.data.clinicId, {
       clinicId: session.data.clinicId,
       doctorId: session.data.doctorId,
       specialtyId: session.data.specialtyId,
       patientName: session.data.patientName,
-      patientPhone: phone,
+      patientPhone: cleanPhone,
       appointmentDate: session.data.selectedDate,
       appointmentTime: session.data.selectedTime,
     });
@@ -134,9 +136,11 @@ export class ConfirmHandler {
       session.data.language,
     );
 
+    const btnConfirm = await this.botMessageService.get(session.data.clinicId, MessageKey.BUTTON_CONFIRM, {}, session.data.language);
+    const btnCancel = await this.botMessageService.get(session.data.clinicId, MessageKey.BUTTON_CANCEL, {}, session.data.language);
     await this.whatsappService.sendButtons(phone, message, [
-      { id: 'confirm_yes', title: '✅ Confirmer' },
-      { id: 'confirm_no', title: '❌ Annuler' },
+      { id: 'confirm_yes', title: btnConfirm },
+      { id: 'confirm_no', title: btnCancel },
     ]);
   }
 }

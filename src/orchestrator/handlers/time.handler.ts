@@ -125,14 +125,16 @@ export class TimeHandler {
       session.data.language,
     );
 
+    const header = await this.botMessageService.get(session.data.clinicId, MessageKey.HEADER_TIMES, {}, session.data.language);
+    const selectLabel = await this.botMessageService.get(session.data.clinicId, MessageKey.HEADER_SELECT_TIME, {}, session.data.language);
     await this.whatsappService.sendInteractiveList(
       phone,
       message,
-      session.data.language === 'FR' ? 'Créneaux disponibles' : 'Available Times',
-      session.data.language === 'FR' ? 'Choisissez un créneau' : 'Select a time',
+      header,
+      selectLabel,
       [
         {
-          title: session.data.language === 'FR' ? 'Créneaux' : 'Times',
+          title: '',
           rows: availableSlots.map((t) => ({ id: `time_${t}`, title: t })),
         },
       ],

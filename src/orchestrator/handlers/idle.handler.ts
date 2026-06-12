@@ -44,9 +44,11 @@ export class IdleHandler {
           {},
           session.data.language,
         );
+        const btnFr = await this.botMessageService.get(session.data.clinicId, MessageKey.BUTTON_FRENCH, {}, session.data.language);
+        const btnEn = await this.botMessageService.get(session.data.clinicId, MessageKey.BUTTON_ENGLISH, {}, session.data.language);
         await this.whatsappService.sendButtons(phone, message, [
-          { id: 'lang_fr', title: '🇫🇷 Français' },
-          { id: 'lang_en', title: '🇬🇧 English' },
+          { id: 'lang_fr', title: btnFr },
+          { id: 'lang_en', title: btnEn },
         ]);
         return;
       }
@@ -86,7 +88,6 @@ export class IdleHandler {
     if (intent === Intent.ASK_FAQ) {
       session.state = SessionState.FAQ_BROWSING;
       await this.sessionsService.save(session);
-      // FIX: do NOT pass the menu digit as FAQ query — show the FAQ prompt instead
       await this.faqHandler.showFaqPrompt(phone, session);
       return;
     }
@@ -101,7 +102,6 @@ export class IdleHandler {
   }
 
   async showWelcomeMenu(phone: string, session: Session): Promise<void> {
-    // FIX: fetch real clinic name from DB instead of hardcoding empty string
     const clinic = await this.prisma.clinic.findUnique({
       where: { id: session.data.clinicId },
       select: { name: true },
@@ -114,10 +114,13 @@ export class IdleHandler {
       session.data.language,
     );
 
+    const btnBook = await this.botMessageService.get(session.data.clinicId, MessageKey.BUTTON_BOOK_APP, {}, session.data.language);
+    const btnFaq = await this.botMessageService.get(session.data.clinicId, MessageKey.BUTTON_FAQ, {}, session.data.language);
+    const btnAgent = await this.botMessageService.get(session.data.clinicId, MessageKey.BUTTON_AGENT, {}, session.data.language);
     await this.whatsappService.sendButtons(phone, message, [
-      { id: 'book_appointment', title: '📅 Prendre RDV' },
-      { id: 'faq', title: '❓ FAQ' },
-      { id: 'human_agent', title: '👤 Parler à un agent' },
+      { id: 'book_appointment', title: btnBook },
+      { id: 'faq', title: btnFaq },
+      { id: 'human_agent', title: btnAgent },
     ]);
   }
 }

@@ -19,6 +19,10 @@ export class BotMessagesService {
     });
   }
 
+  /**
+   * Upsert a message — creates if not exists, updates if exists.
+   * This allows the admin dashboard to add new keys dynamically.
+   */
   async updateMessage(
     clinicId: string,
     key: string,
@@ -31,7 +35,7 @@ export class BotMessagesService {
       );
     }
 
-    const message = await this.prisma.botMessage.findUnique({
+    return this.prisma.botMessage.upsert({
       where: {
         clinicId_key_language: {
           clinicId,
@@ -39,23 +43,13 @@ export class BotMessagesService {
           language,
         },
       },
-    });
-
-    if (!message) {
-      throw new NotFoundException(
-        `No message found for key "${key}" and language "${language}"`,
-      );
-    }
-
-    return this.prisma.botMessage.update({
-      where: {
-        clinicId_key_language: {
-          clinicId,
-          key: key as MessageKey,
-          language,
-        },
+      update: { body: data.body },
+      create: {
+        clinicId,
+        key: key as MessageKey,
+        language,
+        body: data.body,
       },
-      data,
     });
   }
 }

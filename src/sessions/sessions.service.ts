@@ -111,6 +111,18 @@ export class SessionsService {
     }
   }
 
+  async scanKeys(): Promise<string[]> {
+    return new Promise((resolve, reject) => {
+      const stream = this.redis.scanStream({ match: 'session:*', count: 100 });
+      const keys: string[] = [];
+      stream.on('data', (resultKeys: string[]) => {
+        for (const key of resultKeys) keys.push(key);
+      });
+      stream.on('end', () => resolve(keys));
+      stream.on('error', (err) => reject(err));
+    });
+  }
+
   async delete(phone: string): Promise<void> {
     await this.redis.del(this.key(phone));
   }

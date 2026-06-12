@@ -55,9 +55,6 @@ jobs:
             systemctl start redis-server || true
             redis-cli ping | grep -q PONG && echo "✅ Redis is up" || echo "❌ Redis failed to start"
 
-            # ── Ensure baileys auth dir exists ────────────────────────────
-            mkdir -p /root/baileys-auth
-
             # ── Pull and redeploy container ───────────────────────────────
             echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
             docker pull ghcr.io/${{ steps.repo.outputs.name }}:latest
@@ -68,8 +65,10 @@ jobs:
               --restart unless-stopped \
               --network host \
               --env-file /root/.env.production \
-              -v /root/baileys-auth:/app/baileys-auth \
               ghcr.io/${{ steps.repo.outputs.name }}:latest
+
+            # ── Run Prisma migrations ─────────────────────────────────
+            docker exec healthcare-bot npx prisma migrate deploy
 
             docker image prune -f
 

@@ -58,4 +58,10 @@ export class SpecialtiesService {
       data: { isActive: false },
     });
   }
+
+  async hardRemove(id: string): Promise<Specialty> {
+    return this.prisma.specialty.delete({
+      where: { id },
+    });
+  }
 }

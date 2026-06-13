@@ -20,10 +20,13 @@ export class DateHandler {
   async handle(phone: string, text: string, session: Session): Promise<void> {
     const doctorId = session.data.doctorId;
     if (!doctorId) {
-      await this.whatsappService.sendText(
-        phone,
-        'Missing doctor information. Please start over.',
+      const msg = await this.botMessageService.get(
+        session.data.clinicId,
+        MessageKey.ERROR_MISSING_DOCTOR,
+        {},
+        session.data.language,
       );
+      await this.whatsappService.sendText(phone, msg);
       await this.sessionsService.reset(phone);
       return;
     }
@@ -67,14 +70,27 @@ export class DateHandler {
       session.data.language,
     );
 
+    const headerTimes = await this.botMessageService.get(
+      session.data.clinicId,
+      MessageKey.HEADER_TIMES,
+      {},
+      session.data.language,
+    );
+    const headerSelectTime = await this.botMessageService.get(
+      session.data.clinicId,
+      MessageKey.HEADER_SELECT_TIME,
+      {},
+      session.data.language,
+    );
+
     await this.whatsappService.sendInteractiveList(
       phone,
+      headerTimes,
       message,
-      'Times',
-      'Select a time',
+      headerSelectTime,
       [
         {
-          title: 'Available Times',
+          title: '',
           rows: availableSlots.map((time) => ({
             id: `time_${time}`,
             title: time,

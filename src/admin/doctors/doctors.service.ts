@@ -56,4 +56,10 @@ export class DoctorsService {
       data: { isActive: false },
     });
   }
+
+  async hardRemove(id: string): Promise<Doctor> {
+    return this.prisma.doctor.delete({
+      where: { id },
+    });
+  }
 }

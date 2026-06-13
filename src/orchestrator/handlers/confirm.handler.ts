@@ -56,7 +56,13 @@ export class ConfirmHandler {
       !session.data.selectedDate ||
       !session.data.selectedTime
     ) {
-      await this.whatsappService.sendText(phone, 'Missing booking information. Please start over.');
+      const msg = await this.botMessageService.get(
+        session.data.clinicId,
+        MessageKey.ERROR_MISSING_INFO,
+        {},
+        session.data.language,
+      );
+      await this.whatsappService.sendText(phone, msg);
       await this.sessionsService.reset(phone);
       return;
     }
@@ -75,7 +81,13 @@ export class ConfirmHandler {
 
     const doctor = await this.doctorService.findById(session.data.doctorId);
     if (!doctor) {
-      await this.whatsappService.sendText(phone, 'Doctor not found. Please start over.');
+      const msg = await this.botMessageService.get(
+        session.data.clinicId,
+        MessageKey.ERROR_DOCTOR_NOT_FOUND,
+        {},
+        session.data.language,
+      );
+      await this.whatsappService.sendText(phone, msg);
       await this.sessionsService.reset(phone);
       return;
     }

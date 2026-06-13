@@ -4,8 +4,7 @@ import { SessionsService } from '../sessions/sessions.service';
 import { WhatsAppService } from '../whatsapp/whatsapp.service';
 import { BotMessageService } from '../bot-content/bot-message.service';
 import { Session, SessionState } from '../sessions/sessions.service';
-
-type MessageKey = 'WELCOME' | 'LANGUAGE_PROMPT' | 'ASK_NAME' | 'SELECT_SPECIALTY' | 'SELECT_DOCTOR' | 'SELECT_DATE' | 'SELECT_TIME' | 'CONFIRM_BOOKING' | 'BOOKING_SUCCESS' | 'BOOKING_CANCELLED' | 'FAQ_INTRO' | 'FAQ_NOT_FOUND' | 'FALLBACK' | 'HANDOFF_TRIGGERED' | 'SESSION_EXPIRED' | 'NO_SLOTS_AVAILABLE' | 'OUTSIDE_HOURS';
+import { MessageKey } from '@prisma/client';
 
 @Injectable()
 export class HandoffService {
@@ -25,7 +24,7 @@ export class HandoffService {
 
     const handoffMessage = await this.botMessageService.get(
       session.data.clinicId,
-      'HANDOFF_TRIGGERED' as MessageKey,
+      MessageKey.HANDOFF_TRIGGERED,
       {},
       session.data.language,
     );
@@ -52,7 +51,8 @@ export class HandoffService {
       const sessions: { phone: string; state: string; patientName?: string; lastMessage?: string; updatedAt: number }[] = [];
       for (const key of keys) {
         const phone = key.replace('session:', '');
-        const session = await this.sessionsService.getOrCreate(phone, '', 'FR' as any);
+        const result = await this.sessionsService.getOrCreate(phone, '', 'FR' as any);
+        const session = result.session;
         if (session.state === SessionState.AWAITING_HANDOFF) {
           sessions.push({
             phone,
@@ -72,7 +72,8 @@ export class HandoffService {
   async resolveHandoff(phone: string): Promise<void> {
     // Use the FULL phone (with @lid / @s.whatsapp.net suffix) to look up the session,
     // because that's how the key is stored in Redis.
-    const session = await this.sessionsService.getOrCreate(phone, '', 'FR' as any);
+    const result = await this.sessionsService.getOrCreate(phone, '', 'FR' as any);
+    const session = result.session;
     if (!session || session.state !== SessionState.AWAITING_HANDOFF) {
       this.logger.warn(
         `Cannot resolve handoff for session ${phone} which is not in a handoff state.`,
@@ -86,9 +87,12 @@ export class HandoffService {
 
     // Notify the user on WhatsApp that the handoff has been resolved
     try {
-      const resolvedMessage = session.data.language === 'EN'
-        ? '✅ The handoff has been resolved. You can now continue chatting with the bot.'
-        : '✅ La mainlevée a été résolue. Vous pouvez maintenant continuer à discuter avec le bot.';
+      const resolvedMessage = await this.botMessageService.get(
+        session.data.clinicId,
+        MessageKey.BOOKING_CANCELLED,
+        {},
+        session.data.language,
+      );
       await this.whatsappService.sendText(phone, resolvedMessage);
     } catch (err) {
       this.logger.warn(`Failed to send resolution message to ${phone}`, err);

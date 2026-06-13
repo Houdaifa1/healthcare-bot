@@ -4,6 +4,8 @@ import { Job } from 'bullmq';
 import { OrchestratorService } from '../orchestrator/orchestrator.service';
 import { SessionsService } from '../sessions/sessions.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { WhatsAppService } from '../whatsapp/whatsapp.service';
+import { BotMessageService } from '../bot-content/bot-message.service';
 
 export interface MessageJob {
   from:      string; // E.164 phone number without '+', e.g. "212644645877"
@@ -21,6 +23,8 @@ export class MessageProcessor extends WorkerHost {
     private readonly orchestratorService: OrchestratorService,
     private readonly sessionsService: SessionsService,
     private readonly prisma: PrismaService,
+    private readonly whatsappService: WhatsAppService,
+    private readonly botMessageService: BotMessageService,
   ) {
     super();
   }
@@ -44,12 +48,19 @@ export class MessageProcessor extends WorkerHost {
 
     // ── Load or create session ─────────────────────────────────────────────
     // `from` is a clean E.164 number — safe to use directly as the session key.
-    const session = await this.sessionsService.getOrCreate(
+    const { session, isNew } = await this.sessionsService.getOrCreate(
       from,
       clinic.id,
       clinic.defaultLanguage,
     );
 
+    // ── Session expiry notification ──────────────────────────────────────
+    // `isNew` is true on first-time visits OR when Redis TTL expires (30 min).
+    // Since we can't distinguish first visits from expired sessions,
+    // SESSION_EXPIRED notification is omitted here.
+    // The fresh session starts cleanly in IDLE state which is fine UX.
+    // If a more sophisticated expiry notification is needed later, store
+    // a separate "last phone number seen" set in Redis.
     // ── Route to orchestrator ──────────────────────────────────────────────
     try {
       await this.orchestratorService.handleMessage(from, text, session);

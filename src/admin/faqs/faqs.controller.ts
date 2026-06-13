@@ -48,4 +48,9 @@ export class FaqsController {
   remove(@Param('id') id: string) {
     return this.faqsService.remove(id);
   }
+
+  @Delete(':id/hard')
+  hardRemove(@Param('id') id: string) {
+    return this.faqsService.hardRemove(id);
+  }
 }

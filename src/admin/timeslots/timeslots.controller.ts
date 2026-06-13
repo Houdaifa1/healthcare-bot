@@ -14,11 +14,11 @@ import { UpdateTimeSlotDto } from './dto/update-timeslot.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
 @UseGuards(JwtAuthGuard)
-@Controller('api/admin/v1/doctors/:doctorId/timeslots')
+@Controller('api/admin/v1')
 export class TimeSlotsController {
   constructor(private readonly timeSlotsService: TimeSlotsService) {}
 
-  @Post()
+  @Post('doctors/:doctorId/timeslots')
   create(
     @Param('doctorId') doctorId: string,
     @Body() createTimeSlotDto: CreateTimeSlotDto,
@@ -26,12 +26,12 @@ export class TimeSlotsController {
     return this.timeSlotsService.create(doctorId, createTimeSlotDto);
   }
 
-  @Get()
+  @Get('doctors/:doctorId/timeslots')
   findAll(@Param('doctorId') doctorId: string) {
     return this.timeSlotsService.findAll(doctorId);
   }
 
-  @Patch(':id')
+  @Patch('timeslots/:id')
   update(
     @Param('id') id: string,
     @Body() updateTimeSlotDto: UpdateTimeSlotDto,
@@ -39,7 +39,7 @@ export class TimeSlotsController {
     return this.timeSlotsService.update(id, updateTimeSlotDto);
   }
 
-  @Delete(':id')
+  @Delete('timeslots/:id')
   remove(@Param('id') id: string) {
     return this.timeSlotsService.remove(id);
   }

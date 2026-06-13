@@ -106,6 +106,20 @@ export class AppointmentsService {
   });
 }
 
+  async remove(clinicId: string, id: string): Promise<Appointment> {
+    const appointment = await this.prisma.appointment.findFirst({
+      where: { id, clinicId },
+    });
+
+    if (!appointment) {
+      throw new Error('Appointment not found in this clinic');
+    }
+
+    return this.prisma.appointment.delete({
+      where: { id },
+    });
+  }
+
   async checkConflict(
     doctorId: string,
     date: Date,

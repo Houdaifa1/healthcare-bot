@@ -60,8 +60,18 @@ export class SpecialtiesService {
   }
 
   async hardRemove(id: string): Promise<Specialty> {
-    return this.prisma.specialty.delete({
-      where: { id },
+    return this.prisma.$transaction(async (tx) => {
+      // Delete associated records first to satisfy foreign key constraints
+      const doctors = await tx.doctor.findMany({ where: { specialtyId: id }, select: { id: true } });
+      const doctorIds = doctors.map((d) => d.id);
+
+      if (doctorIds.length > 0) {
+        await tx.timeSlot.deleteMany({ where: { doctorId: { in: doctorIds } } });
+        await tx.appointment.deleteMany({ where: { doctorId: { in: doctorIds } } });
+        await tx.doctor.deleteMany({ where: { specialtyId: id } });
+      }
+
+      return tx.specialty.delete({ where: { id } });
     });
   }
 }

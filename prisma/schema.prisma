@@ -25,9 +25,6 @@ model Clinic {
   faqs            FAQ[]
   appointments    Appointment[]
   adminUsers      AdminUser[]
-  flows           Flow[]
-  activeFlowId    String?
-  activeFlow      Flow?         @relation("ActiveFlow", fields: [activeFlowId], references: [id])
 }
 
 // ─── Bot Message Templates ───────────────────────────────────────────────────
@@ -129,42 +126,6 @@ model FAQ {
   clinic       Clinic   @relation(fields: [clinicId], references: [id])
 }
 
-// ─── Conversation Flows ─────────────────────────────────────────────────────
-// A flow represents a complete conversation tree that the bot executes.
-// Only one flow can be active per clinic at a time.
-model Flow {
-  id        String     @id @default(cuid())
-  clinicId  String
-  name      String     // Admin-friendly name e.g. "Appointment Booking v2"
-  createdAt DateTime   @default(now())
-  updatedAt DateTime   @updatedAt
-
-  clinic    Clinic     @relation(fields: [clinicId], references: [id])
-  nodes     FlowNode[]
-  // Clinics that have this flow as their active flow
-  clinics   Clinic[]   @relation("ActiveFlow")
-
-  @@unique([clinicId, name])
-}
-
-// ─── Flow Nodes ─────────────────────────────────────────────────────────────
-// Each node represents one step in the conversation.
-// The `config` JSON contains all node-type-specific configuration.
-model FlowNode {
-  id        String   @id @default(cuid())
-  flowId    String
-  type      NodeType // Determines how this node is executed
-  label     String   // Admin-friendly label e.g. "Ask for name"
-  config    Json     // Type-specific configuration
-  position  Int      // Order within the flow (0-based)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  flow      Flow     @relation(fields: [flowId], references: [id], onDelete: Cascade)
-
-  @@unique([flowId, position])
-}
-
 // ─── Admin Users ──────────────────────────────────────────────────────────────
 model AdminUser {
   id           String    @id @default(cuid())
@@ -248,19 +209,4 @@ enum MessageKey {
   HEADER_DOCTORS
   HEADER_TIMES
   HEADER_SELECT_TIME
-}
-
-// ─── Node Types ───────────────────────────────────────────────────────────────
-enum NodeType {
-  TEXT               // Plain text message, auto-advances after sending
-  BUTTONS            // Interactive buttons (up to 3), each with a target node
-  LIST               // Static interactive list with predefined rows
-  SPECIALTY_LIST     // Dynamic list of specialties from DB
-  DOCTOR_LIST        // Dynamic list of doctors (optionally filtered by specialty)
-  DATE_PICKER        // Shows available dates for a doctor
-  TIME_PICKER        // Shows available time slots for a date
-  FREE_TEXT_INPUT    // Collect free-text input and store as variable
-  CONDITION          // Conditional branch based on collected variable
-  BOOK_APPOINTMENT   // Create the appointment and store it
-  END                // End the conversation (optional message + reset)
 }

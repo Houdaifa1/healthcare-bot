@@ -27,7 +27,13 @@ export class TimeHandler {
     const selectedDate = session.data.selectedDate;
 
     if (!doctorId || !specialtyId || !selectedDate) {
-      await this.whatsappService.sendText(phone, 'Missing booking information. Please start over.');
+      const msg = await this.botMessageService.get(
+        session.data.clinicId,
+        MessageKey.ERROR_MISSING_INFO,
+        {},
+        session.data.language,
+      );
+      await this.whatsappService.sendText(phone, msg);
       await this.sessionsService.reset(phone);
       return;
     }
@@ -45,7 +51,13 @@ export class TimeHandler {
 
     const doctor = await this.doctorService.findById(doctorId);
     if (!doctor) {
-      await this.whatsappService.sendText(phone, 'Doctor not found. Please start over.');
+      const msg = await this.botMessageService.get(
+        session.data.clinicId,
+        MessageKey.ERROR_DOCTOR_NOT_FOUND,
+        {},
+        session.data.language,
+      );
+      await this.whatsappService.sendText(phone, msg);
       await this.sessionsService.reset(phone);
       return;
     }
@@ -53,7 +65,13 @@ export class TimeHandler {
     const specialties = await this.specialtyService.findActive(session.data.clinicId, session.data.language);
     const matchedSpecialty = specialties.find((s) => s.id === specialtyId);
     if (!matchedSpecialty) {
-      await this.whatsappService.sendText(phone, 'Specialty not found. Please start over.');
+      const msg = await this.botMessageService.get(
+        session.data.clinicId,
+        MessageKey.ERROR_SPECIALTY_NOT_FOUND,
+        {},
+        session.data.language,
+      );
+      await this.whatsappService.sendText(phone, msg);
       await this.sessionsService.reset(phone);
       return;
     }
@@ -64,7 +82,13 @@ export class TimeHandler {
       session.data.language,
     );
     if (!specialty) {
-      await this.whatsappService.sendText(phone, 'Specialty not found. Please start over.');
+      const msg = await this.botMessageService.get(
+        session.data.clinicId,
+        MessageKey.ERROR_SPECIALTY_NOT_FOUND,
+        {},
+        session.data.language,
+      );
+      await this.whatsappService.sendText(phone, msg);
       await this.sessionsService.reset(phone);
       return;
     }
@@ -85,9 +109,21 @@ export class TimeHandler {
       session.data.language,
     );
 
+    const btnConfirm = await this.botMessageService.get(
+      session.data.clinicId,
+      MessageKey.BUTTON_CONFIRM,
+      {},
+      session.data.language,
+    );
+    const btnCancel = await this.botMessageService.get(
+      session.data.clinicId,
+      MessageKey.BUTTON_CANCEL,
+      {},
+      session.data.language,
+    );
     await this.whatsappService.sendButtons(phone, message, [
-      { id: 'confirm_yes', title: '✅ Confirmer' },
-      { id: 'confirm_no', title: '❌ Annuler' },
+      { id: 'confirm_yes', title: btnConfirm },
+      { id: 'confirm_no', title: btnCancel },
     ]);
   }
 
@@ -129,9 +165,9 @@ export class TimeHandler {
     const selectLabel = await this.botMessageService.get(session.data.clinicId, MessageKey.HEADER_SELECT_TIME, {}, session.data.language);
     await this.whatsappService.sendInteractiveList(
       phone,
-      message,
-      header,
-      selectLabel,
+      header,     // header text (e.g. "Créneaux disponibles")
+      message,    // body text (e.g. "Choisissez un créneau horaire :")
+      selectLabel, // button label (e.g. "Choisissez un créneau")
       [
         {
           title: '',

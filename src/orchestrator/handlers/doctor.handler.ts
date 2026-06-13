@@ -22,10 +22,13 @@ export class DoctorHandler {
 
   async handle(phone: string, text: string, session: Session): Promise<void> {
     if (!session.data.specialtyId) {
-      await this.whatsappService.sendText(
-        phone,
-        'Missing specialty. Please start over.',
+      const msg = await this.botMessageService.get(
+        session.data.clinicId,
+        MessageKey.ERROR_MISSING_SPECIALTY,
+        {},
+        session.data.language,
       );
+      await this.whatsappService.sendText(phone, msg);
       await this.sessionsService.reset(phone);
       return;
     }
@@ -113,14 +116,21 @@ export class DoctorHandler {
       session.data.language,
     );
 
+    const headerDoctors = await this.botMessageService.get(
+      session.data.clinicId,
+      MessageKey.HEADER_DOCTORS,
+      {},
+      session.data.language,
+    );
+
     await this.whatsappService.sendInteractiveList(
       phone,
       message,
-      'Doctors',
-      'Select a doctor',
+      headerDoctors,
+      headerDoctors,
       [
         {
-          title: 'Doctors',
+          title: headerDoctors,
           rows: doctors.map((d) => ({
             id: `doctor_${d.id}`,
             title: d.name,

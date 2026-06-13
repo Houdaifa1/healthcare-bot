@@ -51,9 +51,9 @@ export class SpecialtyHandler {
     const header = await this.botMessageService.get(session.data.clinicId, MessageKey.HEADER_SPECIALTIES, {}, session.data.language);
     await this.whatsappService.sendInteractiveList(
       phone,
-      message,
-      header,
-      header,
+      header,     // header text (e.g. "Spécialités" / "Specialties")
+      message,    // body text (e.g. "Veuillez choisir votre spécialité :")
+      header,     // button label (e.g. "Spécialités")
       [
         {
           title: '',
@@ -127,14 +127,21 @@ export class SpecialtyHandler {
       session.data.language,
     );
 
+    const headerDoctors = await this.botMessageService.get(
+      session.data.clinicId,
+      MessageKey.HEADER_DOCTORS,
+      {},
+      session.data.language,
+    );
+
     await this.whatsappService.sendInteractiveList(
       phone,
+      headerDoctors,
       message,
-      'Doctors',
-      'Select a doctor',
+      headerDoctors,
       [
         {
-          title: 'Doctors',
+          title: headerDoctors,
           rows: doctors.map((d) => ({
             id: `doctor_${d.id}`,
             title: d.name,

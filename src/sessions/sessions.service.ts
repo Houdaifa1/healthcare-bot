@@ -34,6 +34,11 @@ export interface Session {
   updatedAt: number; // unix ms
 }
 
+export interface SessionResult {
+  session: Session;
+  isNew: boolean; // true if session was just created (previous one expired or first visit)
+}
+
 @Injectable()
 export class SessionsService {
   private readonly logger = new Logger(SessionsService.name);
@@ -62,22 +67,26 @@ export class SessionsService {
     return `session:${phone}`;
   }
 
-  async getOrCreate(phone: string, clinicId: string, defaultLanguage: Language): Promise<Session> {
+  async getOrCreate(phone: string, clinicId: string, defaultLanguage: Language): Promise<SessionResult> {
     const existing = await this.redis.get(this.key(phone));
 
     if (existing) {
       const session = JSON.parse(existing) as Session;
       // Basic migration if old structure exists
       if (!session.data) {
-        return this.createFreshSession(phone, clinicId, defaultLanguage);
+        const fresh = this.createFreshSession(phone, clinicId, defaultLanguage);
+        await this.save(fresh);
+        return { session: fresh, isNew: true };
       }
-      return session;
+      return { session, isNew: false };
     }
 
-    return this.createFreshSession(phone, clinicId, defaultLanguage);
+    const fresh = this.createFreshSession(phone, clinicId, defaultLanguage);
+    await this.save(fresh);
+    return { session: fresh, isNew: true };
   }
 
-  private async createFreshSession(phone: string, clinicId: string, defaultLanguage: Language): Promise<Session> {
+  private createFreshSession(phone: string, clinicId: string, defaultLanguage: Language): Session {
     const fresh: Session = {
       phone,
       state: SessionState.IDLE,
@@ -89,7 +98,6 @@ export class SessionsService {
       updatedAt: Date.now(),
     };
 
-    await this.save(fresh);
     return fresh;
   }
 
@@ -103,11 +111,11 @@ export class SessionsService {
   }
 
   async reset(phone: string): Promise<void> {
-    const session = await this.redis.get(this.key(phone));
-    if(session){
-        const parsed = JSON.parse(session) as Session;
-        const fresh = await this.createFreshSession(phone, parsed.data.clinicId, parsed.data.language);
-        await this.save(fresh);
+    const existing = await this.redis.get(this.key(phone));
+    if (existing) {
+      const parsed = JSON.parse(existing) as Session;
+      const fresh = this.createFreshSession(phone, parsed.data.clinicId, parsed.data.language);
+      await this.save(fresh);
     }
   }
 

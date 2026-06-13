@@ -5,6 +5,7 @@ import {
   Patch,
   Body,
   Query,
+  Delete,
   UseGuards,
 } from '@nestjs/common';
 import { AppointmentsService } from './appointments.service';
@@ -40,5 +41,10 @@ export class AppointmentsController {
     @Body() dto: UpdateStatusDto,
   ) {
     return this.appointmentsService.updateStatus(user.clinicId, id, dto.status);
+  }
+
+  @Delete(':id')
+  remove(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.appointmentsService.remove(user.clinicId, id);
   }
 }

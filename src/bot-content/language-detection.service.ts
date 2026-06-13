@@ -6,11 +6,9 @@ export class LanguageDetectionService {
   /**
    * Detects FR or EN from the first user message.
    *
-   * FIX: The original code used .includes('en') which matched ANY French word
-   * containing "en" (rendez-vous, prendre, bien, etc.) — causing French
-   * patients to get EN language.
-   *
-   * New approach: match whole words only using word boundaries.
+   * Returns Language if confidently detected, null if truly ambiguous.
+   * The caller (IdleHandler) will transition to LANGUAGE_SELECT when null
+   * so the user can explicitly choose.
    */
   async detect(
     text: string,
@@ -32,8 +30,10 @@ export class LanguageDetectionService {
     if (isFrench && !isEnglish) return Language.FR;
     if (isEnglish && !isFrench) return Language.EN;
 
-    // Ambiguous or undetected — use clinic default (don't return null for
-    // common neutral inputs like "1", "rdv", etc. which should just use the default)
-    return clinicDefaultLanguage;
+    // Both detected or neither detected — return null so the caller
+    // (IdleHandler) can transition to LANGUAGE_SELECT.
+    // Previously this returned clinicDefaultLanguage, which meant the
+    // language selection flow was dead code that could never be reached.
+    return null;
   }
 }

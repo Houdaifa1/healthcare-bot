@@ -50,4 +50,9 @@ export class SpecialtiesController {
   remove(@Param('id') id: string) {
     return this.specialtiesService.remove(id);
   }
+
+  @Delete(':id/hard')
+  hardRemove(@Param('id') id: string) {
+    return this.specialtiesService.hardRemove(id);
+  }
 }

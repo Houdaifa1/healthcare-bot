@@ -47,4 +47,9 @@ update(
   remove(@Param('id') id: string) {
     return this.doctorsService.remove(id);
   }
+
+  @Delete(':id/hard')
+  hardRemove(@Param('id') id: string) {
+    return this.doctorsService.hardRemove(id);
+  }
 }

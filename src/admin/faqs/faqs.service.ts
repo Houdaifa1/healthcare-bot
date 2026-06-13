@@ -41,4 +41,10 @@ export class FaqsService {
       data: { isActive: false },
     });
   }
+
+  async hardRemove(id: string): Promise<FAQ> {
+    return this.prisma.fAQ.delete({
+      where: { id },
+    });
+  }
 }

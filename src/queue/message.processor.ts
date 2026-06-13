@@ -6,6 +6,7 @@ import { SessionsService } from '../sessions/sessions.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { WhatsAppService } from '../whatsapp/whatsapp.service';
 import { BotMessageService } from '../bot-content/bot-message.service';
+import { FlowEngineService } from '../flows/flow-engine.service';
 
 export interface MessageJob {
   from:      string; // E.164 phone number without '+', e.g. "212644645877"
@@ -25,6 +26,7 @@ export class MessageProcessor extends WorkerHost {
     private readonly prisma: PrismaService,
     private readonly whatsappService: WhatsAppService,
     private readonly botMessageService: BotMessageService,
+    private readonly flowEngineService: FlowEngineService,
   ) {
     super();
   }
@@ -61,7 +63,19 @@ export class MessageProcessor extends WorkerHost {
     // The fresh session starts cleanly in IDLE state which is fine UX.
     // If a more sophisticated expiry notification is needed later, store
     // a separate "last phone number seen" set in Redis.
-    // ── Route to orchestrator ──────────────────────────────────────────────
+    // ── Try flow engine first (if active flow exists) ────────────────────────
+    const flowHandled = await this.flowEngineService.processMessage(
+      from,
+      text,
+      session,
+    );
+
+    if (flowHandled) {
+      this.logger.log(`Flow engine handled message from ${from}`);
+      return;
+    }
+
+    // ── Fallback to legacy orchestrator ──────────────────────────────────────
     try {
       await this.orchestratorService.handleMessage(from, text, session);
     } catch (error: any) {

@@ -14,7 +14,6 @@ import { SpecialtiesModule } from './specialties/specialties.module';
 import { DoctorsModule } from './doctors/doctors.module';
 import { TimeSlotsModule } from './timeslots/timeslots.module';
 import { FaqsModule } from './faqs/faqs.module';
-import { FlowsAdminModule } from './flows-admin/flows-admin.module';
 
 @Module({
   imports: [
@@ -35,7 +34,6 @@ import { FlowsAdminModule } from './flows-admin/flows-admin.module';
     DoctorsModule,
     TimeSlotsModule,
     FaqsModule,
-    FlowsAdminModule,
   ],
   controllers: [AdminController],
   providers: [AdminService, AuthService, JwtStrategy],

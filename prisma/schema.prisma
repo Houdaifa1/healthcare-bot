@@ -13,8 +13,8 @@ model Clinic {
   phone           String
   address         String?
   timezone        String       @default("Africa/Casablanca")
-  defaultLanguage Language     @default(FR)  // fallback if detection fails
-  supportedLangs  Language[]   @default([FR, EN])  // languages this clinic supports
+  defaultLanguage Language     @default(FR)
+  supportedLangs  Language[]   @default([FR, EN])
   isActive        Boolean      @default(true)
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt
@@ -28,12 +28,11 @@ model Clinic {
 }
 
 // ─── Bot Message Templates ───────────────────────────────────────────────────
-// Every single message the bot sends lives here. ZERO hardcoded strings.
 model BotMessage {
   id        String     @id @default(cuid())
   clinicId  String
-  key       MessageKey // enum — one entry per key per clinic per language
-  body      String     // supports {{patientName}}, {{doctorName}}, {{date}}, {{time}}, {{specialty}}
+  key       MessageKey
+  body      String
   language  Language   @default(FR)
   updatedAt DateTime   @updatedAt
 
@@ -44,13 +43,11 @@ model BotMessage {
 
 // ─── Specialties ─────────────────────────────────────────────────────────────
 // SINGLE row per specialty. Labels stored as JSON: { "FR": "général", "EN": "general" }
-// This ensures ONE ID shared across all languages — doctors always reference the
-// correct specialty regardless of language context.
 model Specialty {
   id           String    @id @default(cuid())
   clinicId     String
   labels       Json      // { "FR": "Médecine Générale", "EN": "General Medicine" }
-  slug         String    // Internal slug e.g. "general" — shared across languages
+  slug         String
   isActive     Boolean   @default(true)
   displayOrder Int       @default(0)
   createdAt    DateTime  @default(now())
@@ -83,9 +80,9 @@ model Doctor {
 model TimeSlot {
   id                  String   @id @default(cuid())
   doctorId            String
-  dayOfWeek           Int      // 0=Sunday … 6=Saturday
-  startTime           String   // "09:00"
-  endTime             String   // "17:00"
+  dayOfWeek           Int
+  startTime           String
+  endTime             String
   slotDurationMinutes Int      @default(30)
   isActive            Boolean  @default(true)
 
@@ -101,7 +98,7 @@ model Appointment {
   patientName      String
   patientPhone     String
   appointmentDate  DateTime
-  appointmentTime  String            // "HH:mm"
+  appointmentTime  String
   status           AppointmentStatus @default(PENDING)
   notes            String?
   createdAt        DateTime          @default(now())
@@ -118,7 +115,7 @@ model FAQ {
   clinicId     String
   question     String
   answer       String
-  keywords     String[] // for matching: ["horaires", "heures", "ouverture"]
+  keywords     String[]
   isActive     Boolean  @default(true)
   displayOrder Int      @default(0)
   language     Language @default(FR)
@@ -143,7 +140,7 @@ model AdminUser {
 model AuditLog {
   id          String    @id @default(cuid())
   adminUserId String
-  action      String    // "CREATE_DOCTOR", "UPDATE_MESSAGE", etc.
+  action      String
   entity      String
   entityId    String?
   payload     Json?
@@ -214,8 +211,6 @@ enum MessageKey {
   NO_DOCTORS_FOR_SPECIALTY
   NO_SPECIALTIES_AVAILABLE
   HANDOFF_WAITING
-
-  // FAQ improvements
   BUTTON_FAQ_LIST
   HEADER_SELECT_FAQ
 }

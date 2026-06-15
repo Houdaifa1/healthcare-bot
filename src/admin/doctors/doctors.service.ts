@@ -94,8 +94,11 @@ export class DoctorsService {
 
   /**
    * Initiates deletion. Checks for future appointments first.
-   * - No future appointments → deletes slots & doctor immediately (appointments kept).
-   * - Has future appointments → returns list for admin to review.
+   * - No future appointments → disconnects FK, deletes slots & doctor immediately
+   * - Has future appointments → returns list for admin to review
+   *
+   * Always nulls out doctorId on linked appointments before deleting to
+   * avoid FK constraint violations regardless of schema migration state.
    */
   async remove(id: string, clinicId: string): Promise<any> {
     const doctor = await this.clinicGuard.validateDoctorBelongsToClinic(
@@ -117,6 +120,11 @@ export class DoctorsService {
     // No future appointments → safe to delete immediately
     if (futureAppointments.length === 0) {
       await this.prisma.$transaction(async (tx) => {
+        // Null out doctorId on all linked appointments to break FK
+        await tx.appointment.updateMany({
+          where: { doctorId: doctor.id },
+          data: { doctorId: null as any, doctorName: doctor.name },
+        });
         await tx.timeSlot.deleteMany({ where: { doctorId: doctor.id } });
         await tx.doctor.delete({ where: { id: doctor.id } });
       });
@@ -142,8 +150,10 @@ export class DoctorsService {
 
   /**
    * Confirms deletion after admin review.
-   * @param notify Whether to send WhatsApp cancellation messages.
-   * @param customMessage Optional custom message with {patientName}, {doctorName}, {appointmentDate}, {appointmentTime} placeholders.
+   * 1. Nulls out doctorId on all linked appointments (breaks FK)
+   * 2. Cancels future appointments
+   * 3. Deletes slots & doctor atomically
+   * 4. Sends WhatsApp notifications if requested
    */
   async confirmDelete(
     id: string,
@@ -158,32 +168,36 @@ export class DoctorsService {
 
     const now = new Date();
 
-    // ── Atomic operation: cancel appointments + delete slots + delete doctor ──
+    // ── Atomic operation in transaction ────────────────────────────────────
     await this.prisma.$transaction(async (tx) => {
-      // Cancel future appointments
+      // 1. Null out doctorId on ALL appointments to break FK constraint
       await tx.appointment.updateMany({
+        where: { doctorId: doctor.id },
+        data: { doctorId: null as any, doctorName: doctor.name },
+      });
+
+      // 2. Cancel future PENDING/CONFIRMED appointments
+      const cancelled = await tx.appointment.updateMany({
         where: {
-          doctorId: doctor.id,
+          doctorName: doctor.name,
           appointmentDate: { gte: now },
           status: { in: ['PENDING', 'CONFIRMED'] },
         },
         data: { status: 'CANCELLED' as any },
       });
 
-      // Delete time slots
+      // 3. Delete time slots
       await tx.timeSlot.deleteMany({ where: { doctorId: doctor.id } });
 
-      // Delete doctor
+      // 4. Delete doctor (FK is already nulled out)
       await tx.doctor.delete({ where: { id: doctor.id } });
     });
 
-    // ── Send WhatsApp notifications (after deletion succeeds) ───────────────
+    // ── Send WhatsApp notifications after deletion succeeds ──────────
     let notifiedCount = 0;
-    const notifiedPatients: { patientName: string; patientPhone: string; appointmentDate: string; appointmentTime: string }[] = [];
     const notificationErrors: string[] = [];
 
     if (notify) {
-      // Re-fetch the cancelled appointments (still in DB since doctorName preserved)
       const cancelledAppointments = await this.prisma.appointment.findMany({
         where: {
           doctorName: doctor.name,
@@ -204,12 +218,6 @@ export class DoctorsService {
 
           await this.whatsapp.sendText(apt.patientPhone, message);
           notifiedCount++;
-          notifiedPatients.push({
-            patientName: apt.patientName,
-            patientPhone: apt.patientPhone,
-            appointmentDate: apt.appointmentDate.toISOString(),
-            appointmentTime: apt.appointmentTime,
-          });
         } catch (err: any) {
           this.logger.error(
             `Failed to notify ${apt.patientName} (${apt.patientPhone}): ${err.message}`,

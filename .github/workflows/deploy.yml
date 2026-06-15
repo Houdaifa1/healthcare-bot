@@ -26,14 +26,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # ✅ FIX: force clean build so Prisma migrations are always included
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
+          no-cache: true
           tags: ghcr.io/${{ steps.repo.outputs.name }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
       - name: Deploy to Droplet
         uses: appleboy/ssh-action@v1

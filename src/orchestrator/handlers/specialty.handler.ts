@@ -7,7 +7,7 @@ import { DoctorService } from '../../bot-content/doctor.service';
 import { BotMessageService } from '../../bot-content/bot-message.service';
 import { MessageKey } from '@prisma/client';
 import { Specialty } from '@prisma/client';
-import { IdleHandler } from './idle.handler';
+import { PrismaService } from '../../prisma/prisma.service';
 
 @Injectable()
 export class SpecialtyHandler {
@@ -17,7 +17,7 @@ export class SpecialtyHandler {
     private readonly specialtyService: SpecialtyService,
     private readonly doctorService: DoctorService,
     private readonly botMessageService: BotMessageService,
-    private readonly idleHandler: IdleHandler,
+    private readonly prisma: PrismaService,
   ) {}
 
   /**
@@ -41,7 +41,7 @@ export class SpecialtyHandler {
       await this.whatsappService.sendText(phone, message);
       session.state = SessionState.IDLE;
       await this.sessionsService.save(session);
-      await this.idleHandler.showWelcomeMenu(phone, session);
+      await this.showWelcomeMenu(phone, session);
       return;
     }
 
@@ -56,9 +56,9 @@ export class SpecialtyHandler {
     const header = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.HEADER_SPECIALTIES, {}, session.data.language, 'Specialties');
     await this.whatsappService.sendInteractiveList(
       phone,
-      header,     // header text (e.g. "Spécialités" / "Specialties")
-      message,    // body text (e.g. "Veuillez choisir votre spécialité :")
-      header,     // button label (e.g. "Spécialités")
+      header,
+      message,
+      header,
       [
         {
           title: '',
@@ -73,7 +73,7 @@ export class SpecialtyHandler {
 
   /**
    * Called by OrchestratorService when the session state is BOOKING_SPECIALTY
-   * and a new message arrives — i.e. the user is responding to the specialty list.
+   * and a new message arrives.
    */
   async handle(phone: string, text: string, session: Session): Promise<void> {
     const specialties = await this.specialtyService.findActive(
@@ -92,14 +92,13 @@ export class SpecialtyHandler {
       await this.whatsappService.sendText(phone, message);
       session.state = SessionState.IDLE;
       await this.sessionsService.save(session);
-      await this.idleHandler.showWelcomeMenu(phone, session);
+      await this.showWelcomeMenu(phone, session);
       return;
     }
 
     const specialty = this.resolveSpecialty(text, specialties);
 
     if (!specialty) {
-      // Could not match — re-show the list
       await this.showSpecialtyList(phone, session);
       return;
     }
@@ -125,7 +124,7 @@ export class SpecialtyHandler {
       await this.whatsappService.sendText(phone, message);
       session.state = SessionState.IDLE;
       await this.sessionsService.save(session);
-      await this.idleHandler.showWelcomeMenu(phone, session);
+      await this.showWelcomeMenu(phone, session);
       return;
     }
 
@@ -160,6 +159,30 @@ export class SpecialtyHandler {
         },
       ],
     );
+  }
+
+  private async showWelcomeMenu(phone: string, session: Session): Promise<void> {
+    const clinic = await this.prisma.clinic.findUnique({
+      where: { id: session.data.clinicId },
+      select: { name: true },
+    });
+
+    const message = await this.botMessageService.getSafe(
+      session.data.clinicId,
+      MessageKey.WELCOME,
+      { clinicName: clinic?.name ?? '' },
+      session.data.language,
+      'Welcome! How can I help you?',
+    );
+
+    const btnBook = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_BOOK_APP, {}, session.data.language, 'Book appointment');
+    const btnFaq = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_FAQ, {}, session.data.language, 'FAQ');
+    const btnAgent = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_AGENT, {}, session.data.language, 'Talk to agent');
+    await this.whatsappService.sendButtons(phone, message, [
+      { id: 'book_appointment', title: btnBook },
+      { id: 'faq', title: btnFaq },
+      { id: 'human_agent', title: btnAgent },
+    ]);
   }
 
   /**

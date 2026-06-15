@@ -76,6 +76,14 @@ export class SpecialtyHandler {
    * and a new message arrives.
    */
   async handle(phone: string, text: string, session: Session): Promise<void> {
+    const trimmed = text.trim().toLowerCase();
+
+    // Allow returning to main menu from any booking step
+    if (trimmed === 'menu') {
+      await this.showWelcomeMenu(phone, session);
+      return;
+    }
+
     const specialties = await this.specialtyService.findActive(
       session.data.clinicId,
       session.data.language,
@@ -161,7 +169,7 @@ export class SpecialtyHandler {
     );
   }
 
-  private async showWelcomeMenu(phone: string, session: Session): Promise<void> {
+  async showWelcomeMenu(phone: string, session: Session): Promise<void> {
     const clinic = await this.prisma.clinic.findUnique({
       where: { id: session.data.clinicId },
       select: { name: true },

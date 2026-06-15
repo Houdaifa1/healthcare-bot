@@ -73,6 +73,11 @@ function loadFixture<T>(filename: string): T {
   return JSON.parse(readFileSync(filepath, 'utf-8')) as T;
 }
 
+/**
+ * Create a record only if it doesn't exist yet.
+ * NEVER update existing records — dashboard data always wins.
+ * This makes the seed safe to run on any database without destroying data.
+ */
 async function main() {
   console.log('🌱 Starting seed...\n');
 
@@ -88,31 +93,29 @@ async function main() {
   const adminUserData = loadFixture<AdminUserFixture>('admin-user.json');
 
   // ── 2. Upsert clinic ─────────────────────────────────────────────────
-  const clinic = await prisma.clinic.upsert({
-    where: { id: 'main' },
-    update: {
-      name: clinicData.name,
-      phone: clinicData.phone,
-      address: clinicData.address,
-      timezone: clinicData.timezone,
-      defaultLanguage: clinicData.defaultLanguage as any,
-      supportedLangs: clinicData.supportedLangs as any,
-    },
-    create: {
-      id: 'main',
-      name: clinicData.name,
-      phone: clinicData.phone,
-      address: clinicData.address,
-      timezone: clinicData.timezone,
-      defaultLanguage: clinicData.defaultLanguage as any,
-      supportedLangs: clinicData.supportedLangs as any,
-    },
-  });
-  console.log(`✅ Clinic seeded: ${clinic.name}`);
+  const existingClinic = await prisma.clinic.findUnique({ where: { id: 'main' } });
+  if (!existingClinic) {
+    await prisma.clinic.create({
+      data: {
+        id: 'main',
+        name: clinicData.name,
+        phone: clinicData.phone,
+        address: clinicData.address,
+        timezone: clinicData.timezone,
+        defaultLanguage: clinicData.defaultLanguage as any,
+        supportedLangs: clinicData.supportedLangs as any,
+      },
+    });
+    console.log(`✅ Clinic created: ${clinicData.name}`);
+  } else {
+    console.log(`⏭️  Clinic already exists, skipping`);
+  }
+  const clinic = existingClinic ?? (await prisma.clinic.findUnique({ where: { id: 'main' } }))!;
 
-  // ── 3. Upsert all bot messages (FR + EN) ─────────────────────────────
+  // ── 3. Create bot messages only if missing ────────────────────────────
+  let createdCount = 0;
   for (const msg of [...messagesFR, ...messagesEN]) {
-    await prisma.botMessage.upsert({
+    const exists = await prisma.botMessage.findUnique({
       where: {
         clinicId_key_language: {
           clinicId: clinic.id,
@@ -120,21 +123,26 @@ async function main() {
           language: msg.language as any,
         },
       },
-      update: { body: msg.body },
-      create: {
-        clinicId: clinic.id,
-        key: msg.key as any,
-        language: msg.language as any,
-        body: msg.body,
-      },
     });
+    if (!exists) {
+      await prisma.botMessage.create({
+        data: {
+          clinicId: clinic.id,
+          key: msg.key as any,
+          language: msg.language as any,
+          body: msg.body,
+        },
+      });
+      createdCount++;
+    }
   }
-  console.log(`✅ Bot messages seeded: ${messagesFR.length + messagesEN.length} total`);
+  console.log(`✅ Bot messages seeded: ${createdCount} new (existing messages preserved)`);
 
-  // ── 4. Upsert specialties (expand labels into language-specific rows) ──
+  // ── 4. Create specialties only if missing ─────────────────────────────
+  createdCount = 0;
   for (const spec of specialtiesData) {
     for (const [lang, label] of Object.entries(spec.labels)) {
-      await prisma.specialty.upsert({
+      const exists = await prisma.specialty.findUnique({
         where: {
           clinicId_slug_language: {
             clinicId: clinic.id,
@@ -142,24 +150,24 @@ async function main() {
             language: lang as any,
           },
         },
-        update: {
-          label,
-          displayOrder: spec.displayOrder,
-        },
-        create: {
-          clinicId: clinic.id,
-          slug: spec.slug,
-          language: lang as any,
-          label,
-          displayOrder: spec.displayOrder,
-        },
       });
+      if (!exists) {
+        await prisma.specialty.create({
+          data: {
+            clinicId: clinic.id,
+            slug: spec.slug,
+            language: lang as any,
+            label,
+            displayOrder: spec.displayOrder,
+          },
+        });
+        createdCount++;
+      }
     }
   }
-  console.log(`✅ Specialties seeded: ${specialtiesData.length} specialties x ${Object.keys(specialtiesData[0]?.labels || {}).length} languages`);
+  console.log(`✅ Specialties seeded: ${createdCount} new (existing specialties preserved)`);
 
-  // ── 5. Upsert doctors (resolve specialtyId from slug) ────────────────
-  // Build a slug → ID map (slug is language-agnostic, use FR label as reference)
+  // ── 5. Create doctors only if missing ─────────────────────────────────
   const specialtyBySlug = new Map<string, string>();
   const allSpecialties = await prisma.specialty.findMany({
     where: { clinicId: clinic.id },
@@ -169,6 +177,7 @@ async function main() {
   }
 
   const doctorIdByName = new Map<string, string>();
+  createdCount = 0;
   for (const doc of doctorsData) {
     const specialtyId = specialtyBySlug.get(doc.specialtySlug);
     if (!specialtyId) {
@@ -176,31 +185,26 @@ async function main() {
       continue;
     }
 
-    const created = await prisma.doctor.upsert({
-      where: { id: `doctor_${doc.name.replace(/\s+/g, '_').replace(/\./g, '')}` },
-      update: {
-        name: doc.name,
-        specialtyId,
-        displayOrder: doc.displayOrder,
-        clinicId: clinic.id,
-      },
-      create: {
-        id: `doctor_${doc.name.replace(/\s+/g, '_').replace(/\./g, '')}`,
-        clinicId: clinic.id,
-        specialtyId,
-        name: doc.name,
-        displayOrder: doc.displayOrder,
-      },
-    });
-    doctorIdByName.set(doc.name, created.id);
+    const doctorId = `doctor_${doc.name.replace(/\s+/g, '_').replace(/\./g, '')}`;
+    const exists = await prisma.doctor.findUnique({ where: { id: doctorId } });
+    if (!exists) {
+      await prisma.doctor.create({
+        data: {
+          id: doctorId,
+          clinicId: clinic.id,
+          specialtyId,
+          name: doc.name,
+          displayOrder: doc.displayOrder,
+        },
+      });
+      createdCount++;
+    }
+    doctorIdByName.set(doc.name, doctorId);
   }
-  console.log(`✅ Doctors seeded: ${doctorsData.length} total`);
+  console.log(`✅ Doctors seeded: ${createdCount} new (existing doctors preserved)`);
 
-  // ── 6. Seed timeslots ONLY if doctor has NONE (preserve dashboard data) ──
-  // IMPORTANT: We NEVER delete or overwrite existing timeslots because
-  // the dashboard may have updated them. Only seed if the doctor has
-  // ZERO timeslots (i.e. first-time setup).
-  let seededCount = 0;
+  // ── 6. Create timeslots only if doctor has NONE ──────────────────────
+  createdCount = 0;
   for (const slot of timeslotsData) {
     const doctorId = doctorIdByName.get(slot.doctorName);
     if (!doctorId) {
@@ -208,17 +212,12 @@ async function main() {
       continue;
     }
 
-    // Check if this doctor already has any timeslots (from dashboard)
-    const existingCount = await prisma.timeSlot.count({
-      where: { doctorId },
-    });
-
+    const existingCount = await prisma.timeSlot.count({ where: { doctorId } });
     if (existingCount > 0) {
-      // Doctor already has timeslots — preserve them (dashboard data wins)
+      // Already has timeslots (from dashboard or previous seed) — preserve them
       continue;
     }
 
-    // First time setup — seed from fixtures
     await prisma.timeSlot.create({
       data: {
         doctorId,
@@ -228,36 +227,33 @@ async function main() {
         slotDurationMinutes: slot.slotDurationMinutes,
       },
     });
-    seededCount++;
+    createdCount++;
   }
-  console.log(`✅ Timeslots seeded: ${seededCount} new (existing data preserved for other doctors)`);
+  console.log(`✅ Timeslots seeded: ${createdCount} new (existing data preserved)`);
 
-  // ── 7. Upsert FAQs (FR + EN) ─────────────────────────────────────────
+  // ── 7. Create FAQs only if missing ────────────────────────────────────
+  createdCount = 0;
   for (const faq of [...faqsFR, ...faqsEN]) {
     const faqId = `faq_${faq.language}_${faq.displayOrder}`;
-    await prisma.fAQ.upsert({
-      where: { id: faqId },
-      update: {
-        question: faq.question,
-        answer: faq.answer,
-        keywords: faq.keywords,
-        displayOrder: faq.displayOrder,
-        isActive: true,
-      },
-      create: {
-        id: faqId,
-        clinicId: clinic.id,
-        language: faq.language as any,
-        question: faq.question,
-        answer: faq.answer,
-        keywords: faq.keywords,
-        displayOrder: faq.displayOrder,
-      },
-    });
+    const exists = await prisma.fAQ.findUnique({ where: { id: faqId } });
+    if (!exists) {
+      await prisma.fAQ.create({
+        data: {
+          id: faqId,
+          clinicId: clinic.id,
+          language: faq.language as any,
+          question: faq.question,
+          answer: faq.answer,
+          keywords: faq.keywords,
+          displayOrder: faq.displayOrder,
+        },
+      });
+      createdCount++;
+    }
   }
-  console.log(`✅ FAQs seeded: ${faqsFR.length + faqsEN.length} total`);
+  console.log(`✅ FAQs seeded: ${createdCount} new (existing FAQs preserved)`);
 
-  // ── 8. Upsert admin user — credentials from env, NEVER hardcoded ────
+  // ── 8. Create admin user only if missing ─────────────────────────────
   const adminEmail = process.env.SEED_ADMIN_EMAIL;
   const adminPassword = process.env.SEED_ADMIN_PASSWORD;
 
@@ -267,25 +263,24 @@ async function main() {
       '   Set them in .env or environment variables.',
     );
   } else {
-    const passwordHash = await bcrypt.hash(adminPassword, 12);
-    await prisma.adminUser.upsert({
-      where: { email: adminEmail },
-      update: {
-        passwordHash,
-        role: adminUserData.role as any,
-        clinicId: clinic.id,
-      },
-      create: {
-        email: adminEmail,
-        passwordHash,
-        role: adminUserData.role as any,
-        clinicId: clinic.id,
-      },
-    });
-    console.log(`✅ Admin user seeded: ${adminEmail}`);
+    const existingAdmin = await prisma.adminUser.findUnique({ where: { email: adminEmail } });
+    if (!existingAdmin) {
+      const passwordHash = await bcrypt.hash(adminPassword, 12);
+      await prisma.adminUser.create({
+        data: {
+          email: adminEmail,
+          passwordHash,
+          role: adminUserData.role as any,
+          clinicId: clinic.id,
+        },
+      });
+      console.log(`✅ Admin user created: ${adminEmail}`);
+    } else {
+      console.log(`⏭️  Admin user ${adminEmail} already exists, skipping`);
+    }
   }
 
-  console.log('\n🎉 Seed complete! All content loaded from fixtures.');
+  console.log('\n🎉 Seed complete! No existing data was overwritten.');
 }
 
 main()

@@ -43,13 +43,13 @@ model BotMessage {
 }
 
 // ─── Specialties ─────────────────────────────────────────────────────────────
-// label is language-specific. Store one row per language per specialty.
-// slug is language-agnostic and used for internal matching only.
+// SINGLE row per specialty. Labels stored as JSON: { "FR": "général", "EN": "general" }
+// This ensures ONE ID shared across all languages — doctors always reference the
+// correct specialty regardless of language context.
 model Specialty {
   id           String    @id @default(cuid())
   clinicId     String
-  label        String    // Display label, language-specific: "Médecine Générale" (FR) / "General Medicine" (EN)
-  language     Language  @default(FR)
+  labels       Json      // { "FR": "Médecine Générale", "EN": "General Medicine" }
   slug         String    // Internal slug e.g. "general" — shared across languages
   isActive     Boolean   @default(true)
   displayOrder Int       @default(0)
@@ -59,7 +59,7 @@ model Specialty {
   doctors      Doctor[]
   appointments Appointment[]
 
-  @@unique([clinicId, slug, language])
+  @@unique([clinicId, slug])
 }
 
 // ─── Doctors ─────────────────────────────────────────────────────────────────

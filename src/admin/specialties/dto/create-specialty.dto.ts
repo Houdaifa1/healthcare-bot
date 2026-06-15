@@ -1,25 +1,20 @@
 import {
   IsString,
   IsNotEmpty,
-  IsEnum,
   IsBoolean,
   IsInt,
   IsOptional,
+  IsObject,
 } from 'class-validator';
-import { Language } from '@prisma/client';
 
 export class CreateSpecialtyDto {
-  @IsString()
+  @IsObject()
   @IsNotEmpty()
-  label: string;
-
-  @IsEnum(Language)
-  @IsNotEmpty()
-  language: Language;
+  labels!: Record<string, string>;  // { "FR": "général", "EN": "general" }
 
   @IsString()
   @IsNotEmpty()
-  slug: string;
+  slug!: string;
 
   @IsBoolean()
   @IsOptional()

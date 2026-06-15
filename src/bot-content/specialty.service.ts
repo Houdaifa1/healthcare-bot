@@ -10,37 +10,41 @@ export class SpecialtyService {
     clinicId: string,
     language: Language,
   ): Promise<Specialty[]> {
-    return this.prisma.specialty.findMany({
+    const all = await this.prisma.specialty.findMany({
       where: {
         clinicId,
-        language,
         isActive: true,
       },
       orderBy: {
         displayOrder: 'asc',
       },
     });
+
+    // Filter out specialties that don't have a label for the requested language
+    return all.filter((s) => {
+      const labels = s.labels as Record<string, string> | null;
+      return labels && labels[language];
+    });
   }
 
   async findBySlug(
     clinicId: string,
     slug: string,
-    language: Language,
+    _language: Language,
   ): Promise<Specialty | null> {
     return this.prisma.specialty.findUnique({
       where: {
-        clinicId_slug_language: {
+        clinicId_slug: {
           clinicId,
           slug,
-          language,
         },
       },
     });
   }
 
-  async findById(id: string, language: Language): Promise<Specialty | null> {
+  async findById(id: string, _language: Language): Promise<Specialty | null> {
     return this.prisma.specialty.findFirst({
-      where: { id, language, isActive: true },
+      where: { id, isActive: true },
     });
   }
 }

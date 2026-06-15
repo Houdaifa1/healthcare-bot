@@ -1,4 +1,4 @@
-import { Injectable, ConflictException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TimeSlot } from '@prisma/client';
 import { CreateTimeSlotDto } from './dto/create-timeslot.dto';
@@ -9,11 +9,11 @@ export class TimeSlotsService {
   constructor(private prisma: PrismaService) {}
 
   /**
-   * Time ranges overlap if A starts before B ends AND A ends after B starts.
-   * Adjacent means A.end === B.start — they should be merged.
+   * Time ranges overlap if A starts before or at B ends AND A ends after or at B starts.
+   * Using <=/>= so touching/identical boundaries are detected as overlapping and merged.
    */
   private rangesOverlap(a: { start: string; end: string }, b: { start: string; end: string }): boolean {
-    return a.start < b.end && a.end > b.start;
+    return a.start <= b.end && a.end >= b.start;
   }
 
   /**
@@ -28,13 +28,55 @@ export class TimeSlotsService {
   }
 
   /**
-   * Merge two time ranges: take earliest start, latest end.
+   * Validate that endTime is strictly after startTime.
+   * Also validate that the range is large enough for at least one slot of the given duration.
    */
-  private mergeRanges(a: { start: string; end: string }, b: { start: string; end: string }): { start: string; end: string } {
-    return {
-      start: a.start < b.start ? a.start : b.start,
-      end: a.end > b.end ? a.end : b.end,
-    };
+  private validateTimeRange(startTime: string, endTime: string, slotDurationMinutes?: number): void {
+    if (startTime >= endTime) {
+      throw new BadRequestException(
+        `endTime (${endTime}) must be strictly after startTime (${startTime})`,
+      );
+    }
+    if (slotDurationMinutes && slotDurationMinutes > 0) {
+      const diffMinutes = this.timeToMinutes(endTime) - this.timeToMinutes(startTime);
+      if (diffMinutes < slotDurationMinutes) {
+        throw new BadRequestException(
+          `Time range (${startTime} to ${endTime}) is only ${diffMinutes}min but slot duration is ${slotDurationMinutes}min`,
+        );
+      }
+    }
+  }
+
+  /**
+   * Convert "HH:mm" to total minutes from midnight.
+   */
+  private timeToMinutes(time: string): number {
+    const [h, m] = time.split(':').map(Number);
+    return h * 60 + m;
+  }
+
+  /**
+   * Find the minimum slotDurationMinutes among a set of touching slots plus a new candidate.
+   * This ensures merging doesn't lose granularity (e.g., 15min slots merged with 30min → 15min).
+   */
+  private pickMergeDuration(
+    incomingDuration: number,
+    touchingSlots: { slotDurationMinutes: number }[],
+  ): number {
+    let min = incomingDuration;
+    for (const s of touchingSlots) {
+      if (s.slotDurationMinutes < min) min = s.slotDurationMinutes;
+    }
+    return min;
+  }
+
+  /**
+   * Validate slotDurationMinutes is positive (if provided).
+   */
+  private validateSlotDuration(slotDurationMinutes?: number): void {
+    if (slotDurationMinutes !== undefined && slotDurationMinutes <= 0) {
+      throw new BadRequestException('slotDurationMinutes must be positive');
+    }
   }
 
   /**
@@ -45,6 +87,9 @@ export class TimeSlotsService {
     doctorId: string,
     dto: CreateTimeSlotDto,
   ): Promise<TimeSlot> {
+    this.validateSlotDuration(dto.slotDurationMinutes);
+    this.validateTimeRange(dto.startTime, dto.endTime, dto.slotDurationMinutes);
+
     const incoming = {
       dayOfWeek: dto.dayOfWeek,
       startTime: dto.startTime,
@@ -76,19 +121,28 @@ export class TimeSlotsService {
         idsToDelete.push(s.id);
       }
 
+      // Pick the most granular duration (smallest) among all merged slots
+      const mergedDuration = this.pickMergeDuration(
+        dto.slotDurationMinutes ?? 30,
+        touching,
+      );
+
+      // Validate merged range fits the duration
+      this.validateTimeRange(mergedStart, mergedEnd, mergedDuration);
+
       // Delete the old overlapping slots
       await this.prisma.timeSlot.deleteMany({
         where: { id: { in: idsToDelete } },
       });
 
-      // Create the merged slot
+      // Create the merged slot with the most granular duration
       return this.prisma.timeSlot.create({
         data: {
           doctorId,
           dayOfWeek: dto.dayOfWeek,
           startTime: mergedStart,
           endTime: mergedEnd,
-          slotDurationMinutes: dto.slotDurationMinutes ?? 30,
+          slotDurationMinutes: mergedDuration,
           isActive: true,
         },
       });
@@ -124,16 +178,24 @@ export class TimeSlotsService {
     // Get the current slot before updating
     const existing = await this.prisma.timeSlot.findUnique({ where: { id } });
     if (!existing) {
-      return this.prisma.timeSlot.update({
-        where: { id },
-        data: dto,
-      });
+      throw new NotFoundException(`TimeSlot ${id} not found`);
     }
+
+    // Resolve final values (use existing if not updating)
+    const startTime = dto.startTime ?? existing.startTime;
+    const endTime = dto.endTime ?? existing.endTime;
+    const slotDurationMinutes = dto.slotDurationMinutes ?? existing.slotDurationMinutes;
+
+    this.validateSlotDuration(slotDurationMinutes);
+    this.validateTimeRange(startTime, endTime, slotDurationMinutes);
 
     // Update the slot with new values
     const updated = await this.prisma.timeSlot.update({
       where: { id },
-      data: dto,
+      data: {
+        ...dto,
+        slotDurationMinutes,
+      },
     });
 
     // Now check if this updated slot overlaps with any other active slots on the same day
@@ -168,6 +230,14 @@ export class TimeSlotsService {
         idsToDelete.push(s.id);
       }
 
+      // Pick the most granular duration (smallest) among all merged slots
+      const mergedDuration = this.pickMergeDuration(
+        slotDurationMinutes,
+        touching,
+      );
+
+      this.validateTimeRange(mergedStart, mergedEnd, mergedDuration);
+
       // Delete all old overlapping slots (including the updated one)
       await this.prisma.timeSlot.deleteMany({
         where: { id: { in: idsToDelete } },
@@ -180,7 +250,7 @@ export class TimeSlotsService {
           dayOfWeek: updated.dayOfWeek,
           startTime: mergedStart,
           endTime: mergedEnd,
-          slotDurationMinutes: updated.slotDurationMinutes,
+          slotDurationMinutes: mergedDuration,
           isActive: true,
         },
       });

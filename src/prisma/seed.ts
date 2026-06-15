@@ -196,7 +196,18 @@ async function main() {
   }
   console.log(`✅ Doctors seeded: ${doctorsData.length} total`);
 
-  // ── 6. Upsert timeslots (resolve doctorId from name) ─────────────────
+  // ── 6. Seed timeslots (resolve doctorId from name) ───────────────────
+  // First, clear ALL existing timeslots for doctors that are in the seed data
+  // so we don't conflict with merged slots from the dashboard
+  const seededDoctorIds = new Set<string>();
+  for (const slot of timeslotsData) {
+    const doctorId = doctorIdByName.get(slot.doctorName);
+    if (doctorId) seededDoctorIds.add(doctorId);
+  }
+  await prisma.timeSlot.deleteMany({
+    where: { doctorId: { in: Array.from(seededDoctorIds) } },
+  });
+
   for (const slot of timeslotsData) {
     const doctorId = doctorIdByName.get(slot.doctorName);
     if (!doctorId) {
@@ -204,17 +215,8 @@ async function main() {
       continue;
     }
 
-    const slotId = `${doctorId}_dow${slot.dayOfWeek}_${slot.startTime}`;
-    await prisma.timeSlot.upsert({
-      where: { id: slotId },
-      update: {
-        startTime: slot.startTime,
-        endTime: slot.endTime,
-        slotDurationMinutes: slot.slotDurationMinutes,
-        isActive: true,
-      },
-      create: {
-        id: slotId,
+    await prisma.timeSlot.create({
+      data: {
         doctorId,
         dayOfWeek: slot.dayOfWeek,
         startTime: slot.startTime,

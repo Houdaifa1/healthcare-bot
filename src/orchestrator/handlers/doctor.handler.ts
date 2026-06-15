@@ -117,8 +117,8 @@ export class DoctorHandler {
 
     await this.whatsappService.sendInteractiveList(
       phone,
-      message,
       headerDoctors,
+      message,
       headerDoctors,
       [
         {

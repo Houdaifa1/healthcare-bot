@@ -121,10 +121,72 @@ export class TimeSlotsService {
     id: string,
     dto: UpdateTimeSlotDto,
   ): Promise<TimeSlot> {
-    return this.prisma.timeSlot.update({
+    // Get the current slot before updating
+    const existing = await this.prisma.timeSlot.findUnique({ where: { id } });
+    if (!existing) {
+      return this.prisma.timeSlot.update({
+        where: { id },
+        data: dto,
+      });
+    }
+
+    // Update the slot with new values
+    const updated = await this.prisma.timeSlot.update({
       where: { id },
       data: dto,
     });
+
+    // Now check if this updated slot overlaps with any other active slots on the same day
+    // Skip the current slot itself
+    const otherSlots = await this.prisma.timeSlot.findMany({
+      where: {
+        doctorId: existing.doctorId,
+        dayOfWeek: updated.dayOfWeek,
+        isActive: true,
+        id: { not: id },
+      },
+      orderBy: { startTime: 'asc' },
+    });
+
+    const incoming = {
+      dayOfWeek: updated.dayOfWeek,
+      startTime: updated.startTime,
+      endTime: updated.endTime,
+    };
+
+    const touching = otherSlots.filter(s => this.slotsTouchOrOverlap(incoming, s));
+
+    if (touching.length > 0) {
+      // Merge all ranges together
+      let mergedStart = updated.startTime;
+      let mergedEnd = updated.endTime;
+      const idsToDelete: string[] = [id]; // Include current slot id
+
+      for (const s of touching) {
+        mergedStart = mergedStart < s.startTime ? mergedStart : s.startTime;
+        mergedEnd = mergedEnd > s.endTime ? mergedEnd : s.endTime;
+        idsToDelete.push(s.id);
+      }
+
+      // Delete all old overlapping slots (including the updated one)
+      await this.prisma.timeSlot.deleteMany({
+        where: { id: { in: idsToDelete } },
+      });
+
+      // Create the merged slot
+      return this.prisma.timeSlot.create({
+        data: {
+          doctorId: existing.doctorId,
+          dayOfWeek: updated.dayOfWeek,
+          startTime: mergedStart,
+          endTime: mergedEnd,
+          slotDurationMinutes: updated.slotDurationMinutes,
+          isActive: true,
+        },
+      });
+    }
+
+    return updated;
   }
 
   async remove(id: string): Promise<TimeSlot> {

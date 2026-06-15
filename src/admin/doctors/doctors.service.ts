@@ -78,6 +78,13 @@ export class DoctorsService {
 
     if (dto.isActive === true) {
       const currentSpecialtyId = dto.specialtyId ?? doctor.specialtyId;
+
+      if (!currentSpecialtyId) {
+        throw new BadRequestException(
+          'Cannot reactivate this doctor: no specialty assigned. Assign a specialty first.',
+        );
+      }
+
       const specialty = await this.prisma.specialty.findUnique({
         where: { id: currentSpecialtyId },
         select: { isActive: true },
@@ -115,6 +122,12 @@ export class DoctorsService {
 
     if (doctor.isActive) {
       throw new BadRequestException('Doctor is already active.');
+    }
+
+    if (!doctor.specialtyId) {
+      throw new BadRequestException(
+        'Cannot activate this doctor: no specialty assigned. Assign a specialty first.',
+      );
     }
 
     const specialty = await this.prisma.specialty.findUnique({

@@ -92,13 +92,212 @@ export class DoctorsService {
     return this.prisma.doctor.update({ where: { id: doctor.id }, data: dto });
   }
 
+  // ─── ACTIVATE (toggle isActive → true) ────────────────────────────────────
+
   /**
-   * Initiates deletion. Checks for future appointments first.
-   * - No future appointments → disconnects FK, deletes slots & doctor immediately
-   * - Has future appointments → returns list for admin to review
+   * Activates a doctor and re-links any appointments that were orphaned
+   * when this doctor was previously deleted/deactivated.
    *
-   * Always nulls out doctorId on linked appointments before deleting to
-   * avoid FK constraint violations regardless of schema migration state.
+   * After activating we restore doctorId on all appointments where:
+   *   - doctorId IS NULL (orphaned)
+   *   - doctorName matches this doctor's name
+   *   - same clinicId
+   *
+   * The status of those appointments is intentionally NOT changed here —
+   * they were CANCELLED when the doctor was deactivated. The admin can
+   * manually update individual appointment statuses from the Appointments page.
+   */
+  async activate(id: string, clinicId: string): Promise<Doctor> {
+    const doctor = await this.clinicGuard.validateDoctorBelongsToClinic(
+      id,
+      clinicId,
+    );
+
+    if (doctor.isActive) {
+      throw new BadRequestException('Doctor is already active.');
+    }
+
+    const specialty = await this.prisma.specialty.findUnique({
+      where: { id: doctor.specialtyId },
+      select: { isActive: true },
+    });
+    if (!specialty || !specialty.isActive) {
+      throw new BadRequestException(
+        'Cannot activate this doctor: the associated specialty is inactive. Assign an active specialty first.',
+      );
+    }
+
+    const [updatedDoctor] = await this.prisma.$transaction([
+      // 1. Activate the doctor
+      this.prisma.doctor.update({
+        where: { id: doctor.id },
+        data: { isActive: true },
+      }),
+      // 2. Re-link orphaned appointments by name match
+      //    (only where doctorId was nulled — hard-deleted doctors won't exist to call this,
+      //     but deactivated doctors still exist so doctorId was never nulled on deactivation)
+      this.prisma.appointment.updateMany({
+        where: {
+          clinicId,
+          doctorId: null,
+          doctorName: doctor.name,
+        },
+        data: { doctorId: doctor.id },
+      }),
+    ]);
+
+    return updatedDoctor;
+  }
+
+  // ─── DEACTIVATE (soft-delete) ───────────────────────────────────────────
+
+  /**
+   * Initiates deactivation. Checks for future PENDING/CONFIRMED appointments.
+   * - None found → deactivates immediately.
+   * - Found       → returns list for admin review (notify or not).
+   *
+   * NOTE: deactivation does NOT null doctorId on appointments. The doctor
+   * record still exists. Appointments keep their doctorId. The admin cannot
+   * change status on appointments whose doctor is inactive — enforced on
+   * the appointments service side.
+   */
+  async deactivate(id: string, clinicId: string): Promise<any> {
+    const doctor = await this.clinicGuard.validateDoctorBelongsToClinic(
+      id,
+      clinicId,
+    );
+
+    const now = new Date();
+
+    const futureAppointments = await this.prisma.appointment.findMany({
+      where: {
+        doctorId: doctor.id,
+        appointmentDate: { gte: now },
+        status: { in: ['PENDING', 'CONFIRMED'] },
+      },
+      orderBy: { appointmentDate: 'asc' },
+    });
+
+    if (futureAppointments.length === 0) {
+      await this.prisma.doctor.update({
+        where: { id: doctor.id },
+        data: { isActive: false },
+      });
+      return { deactivated: true, hadFutureAppointments: false };
+    }
+
+    return {
+      requiresConfirmation: true,
+      action: 'deactivate',
+      doctorId: doctor.id,
+      doctorName: doctor.name,
+      futureAppointments: futureAppointments.map((a) => ({
+        id: a.id,
+        patientName: a.patientName,
+        patientPhone: a.patientPhone,
+        appointmentDate: a.appointmentDate,
+        appointmentTime: a.appointmentTime,
+        status: a.status,
+      })),
+      futureAppointmentsCount: futureAppointments.length,
+    };
+  }
+
+  /**
+   * Confirms deactivation after admin review.
+   *
+   * Snapshots the exact future appointment IDs BEFORE cancelling so
+   * notifications go only to those patients — never to pre-existing
+   * cancelled appointments.
+   *
+   * doctorId is NOT nulled on appointments. The appointments table keeps
+   * the FK intact (doctor record still exists). Status-change on those
+   * appointments is blocked by the appointments service (doctor inactive).
+   */
+  async confirmDeactivate(
+    id: string,
+    clinicId: string,
+    notify: boolean,
+    customMessage?: string,
+  ): Promise<any> {
+    const doctor = await this.clinicGuard.validateDoctorBelongsToClinic(
+      id,
+      clinicId,
+    );
+
+    const now = new Date();
+
+    // Snapshot BEFORE touching anything
+    const appointmentsToCancel = await this.prisma.appointment.findMany({
+      where: {
+        doctorId: doctor.id,
+        appointmentDate: { gte: now },
+        status: { in: ['PENDING', 'CONFIRMED'] },
+      },
+      select: {
+        id: true,
+        patientName: true,
+        patientPhone: true,
+        appointmentDate: true,
+        appointmentTime: true,
+      },
+    });
+
+    // Cancel by exact IDs
+    if (appointmentsToCancel.length > 0) {
+      await this.prisma.appointment.updateMany({
+        where: { id: { in: appointmentsToCancel.map((a) => a.id) } },
+        data: { status: 'CANCELLED' as any },
+      });
+    }
+
+    // Deactivate
+    await this.prisma.doctor.update({
+      where: { id: doctor.id },
+      data: { isActive: false },
+    });
+
+    // Notify
+    let notifiedCount = 0;
+    const notificationErrors: string[] = [];
+
+    if (notify && appointmentsToCancel.length > 0) {
+      for (const apt of appointmentsToCancel) {
+        try {
+          const message = customMessage
+            ? customMessage
+                .replace(/\{patientName\}/g, apt.patientName)
+                .replace(/\{doctorName\}/g, doctor.name)
+                .replace(/\{appointmentDate\}/g, apt.appointmentDate.toISOString().split('T')[0])
+                .replace(/\{appointmentTime\}/g, apt.appointmentTime)
+            : `Cher patient, votre rendez-vous chez ${doctor.name} a été annulé. Veuillez nous contacter pour reprogrammer. Merci de votre compréhension.`;
+
+          await this.whatsapp.sendText(apt.patientPhone, message);
+          notifiedCount++;
+        } catch (err: any) {
+          this.logger.error(
+            `Failed to notify ${apt.patientName} (${apt.patientPhone}): ${err.message}`,
+          );
+          notificationErrors.push(apt.patientName);
+        }
+      }
+    }
+
+    return {
+      deactivated: true,
+      cancelledAppointments: appointmentsToCancel.length,
+      notified: notify,
+      notifiedCount,
+      notificationErrors: notificationErrors.length > 0 ? notificationErrors : undefined,
+    };
+  }
+
+  // ─── DELETE (hard-delete) ─────────────────────────────────────────────────
+
+  /**
+   * Initiates permanent deletion. Checks for future appointments first.
+   * - None → deletes immediately (nulls doctorId on all appointments, preserves doctorName).
+   * - Found → returns list for admin review.
    */
   async remove(id: string, clinicId: string): Promise<any> {
     const doctor = await this.clinicGuard.validateDoctorBelongsToClinic(
@@ -117,10 +316,9 @@ export class DoctorsService {
       orderBy: { appointmentDate: 'asc' },
     });
 
-    // No future appointments → safe to delete immediately
     if (futureAppointments.length === 0) {
       await this.prisma.$transaction(async (tx) => {
-        // Null out doctorId on all linked appointments to break FK
+        // Null FK, preserve name for history
         await tx.appointment.updateMany({
           where: { doctorId: doctor.id },
           data: { doctorId: null as any, doctorName: doctor.name },
@@ -128,12 +326,12 @@ export class DoctorsService {
         await tx.timeSlot.deleteMany({ where: { doctorId: doctor.id } });
         await tx.doctor.delete({ where: { id: doctor.id } });
       });
-
       return { deleted: true, hadFutureAppointments: false };
     }
 
     return {
       requiresConfirmation: true,
+      action: 'delete',
       doctorId: doctor.id,
       doctorName: doctor.name,
       futureAppointments: futureAppointments.map((a) => ({
@@ -149,11 +347,14 @@ export class DoctorsService {
   }
 
   /**
-   * Confirms deletion after admin review.
-   * 1. Nulls out doctorId on all linked appointments (breaks FK)
-   * 2. Cancels future appointments
-   * 3. Deletes slots & doctor atomically
-   * 4. Sends WhatsApp notifications if requested
+   * Confirms permanent deletion.
+   *
+   * Snapshots exact future appointment IDs BEFORE the transaction so
+   * notifications are sent only to those patients — not to pre-existing
+   * cancelled ones, and not matched by non-unique doctorName.
+   *
+   * After deletion doctorId is NULL on all appointments.
+   * The appointments service blocks status changes when doctorId is null.
    */
   async confirmDelete(
     id: string,
@@ -168,45 +369,47 @@ export class DoctorsService {
 
     const now = new Date();
 
-    // ── Atomic operation in transaction ────────────────────────────────────
+    // Snapshot BEFORE the transaction
+    const appointmentsToCancel = await this.prisma.appointment.findMany({
+      where: {
+        doctorId: doctor.id,
+        appointmentDate: { gte: now },
+        status: { in: ['PENDING', 'CONFIRMED'] },
+      },
+      select: {
+        id: true,
+        patientName: true,
+        patientPhone: true,
+        appointmentDate: true,
+        appointmentTime: true,
+      },
+    });
+
     await this.prisma.$transaction(async (tx) => {
-      // 1. Null out doctorId on ALL appointments to break FK constraint
+      // Null FK on all appointments (preserves history), save doctor name
       await tx.appointment.updateMany({
         where: { doctorId: doctor.id },
         data: { doctorId: null as any, doctorName: doctor.name },
       });
 
-      // 2. Cancel future PENDING/CONFIRMED appointments
-      const cancelled = await tx.appointment.updateMany({
-        where: {
-          doctorName: doctor.name,
-          appointmentDate: { gte: now },
-          status: { in: ['PENDING', 'CONFIRMED'] },
-        },
-        data: { status: 'CANCELLED' as any },
-      });
+      // Cancel the exact future ones by ID (doctorId is now null, use IDs)
+      if (appointmentsToCancel.length > 0) {
+        await tx.appointment.updateMany({
+          where: { id: { in: appointmentsToCancel.map((a) => a.id) } },
+          data: { status: 'CANCELLED' as any },
+        });
+      }
 
-      // 3. Delete time slots
       await tx.timeSlot.deleteMany({ where: { doctorId: doctor.id } });
-
-      // 4. Delete doctor (FK is already nulled out)
       await tx.doctor.delete({ where: { id: doctor.id } });
     });
 
-    // ── Send WhatsApp notifications after deletion succeeds ──────────
+    // Notify only the snapshotted patients
     let notifiedCount = 0;
     const notificationErrors: string[] = [];
 
-    if (notify) {
-      const cancelledAppointments = await this.prisma.appointment.findMany({
-        where: {
-          doctorName: doctor.name,
-          status: 'CANCELLED',
-          appointmentDate: { gte: now },
-        },
-      });
-
-      for (const apt of cancelledAppointments) {
+    if (notify && appointmentsToCancel.length > 0) {
+      for (const apt of appointmentsToCancel) {
         try {
           const message = customMessage
             ? customMessage
@@ -229,7 +432,7 @@ export class DoctorsService {
 
     return {
       deleted: true,
-      cancelledAppointments: true,
+      cancelledAppointments: appointmentsToCancel.length,
       notified: notify,
       notifiedCount,
       notificationErrors: notificationErrors.length > 0 ? notificationErrors : undefined,

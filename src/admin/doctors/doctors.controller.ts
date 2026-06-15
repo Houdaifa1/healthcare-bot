@@ -31,7 +31,6 @@ export class DoctorsController {
     return this.doctorsService.findAll(
       user.clinicId,
       query.specialtyId,
-      // Default: return ALL (active + inactive) so dashboard shows deactivated doctors
       query.isActive !== undefined ? query.isActive === 'true' : undefined,
     );
   }
@@ -45,15 +44,41 @@ export class DoctorsController {
     return this.doctorsService.update(id, user.clinicId, dto);
   }
 
+  // ─── Activate (toggle isActive → true) ─────────────────────────────────
+
+  @Patch(':id/activate')
+  activate(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.doctorsService.activate(id, user.clinicId);
+  }
+
+  // ─── Deactivate (soft-delete) ───────────────────────────────────────────
+
+  @Delete(':id/deactivate')
+  deactivate(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.doctorsService.deactivate(id, user.clinicId);
+  }
+
+  @Delete(':id/deactivate/confirm')
+  confirmDeactivate(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body() body: { notify: boolean; customMessage?: string },
+  ) {
+    return this.doctorsService.confirmDeactivate(
+      id,
+      user.clinicId,
+      body.notify ?? false,
+      body.customMessage,
+    );
+  }
+
+  // ─── Delete (hard-delete) ───────────────────────────────────────────────
+
   @Delete(':id')
   remove(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     return this.doctorsService.remove(id, user.clinicId);
   }
 
-  /**
-   * Confirm deletion with optional WhatsApp notifications.
-   * Body: { notify: boolean, customMessage?: string }
-   */
   @Delete(':id/confirm')
   confirmDelete(
     @CurrentUser() user: AuthUser,

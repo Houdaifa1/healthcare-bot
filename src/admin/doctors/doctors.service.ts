@@ -103,16 +103,22 @@ export class DoctorsService {
 
   /**
    * Activates a doctor and re-links any appointments that were orphaned
-   * when this doctor was previously deleted/deactivated.
+   * when this doctor was previously hard-deleted then recreated, OR when
+   * the doctor's specialty was deleted (which nulls both doctorId and specialtyId
+   * on appointments).
    *
-   * After activating we restore doctorId on all appointments where:
-   *   - doctorId IS NULL (orphaned)
+   * Re-links appointments where:
+   *   - doctorId IS NULL (orphaned by a previous hard-delete or specialty deletion)
    *   - doctorName matches this doctor's name
    *   - same clinicId
    *
-   * The status of those appointments is intentionally NOT changed here —
-   * they were CANCELLED when the doctor was deactivated. The admin can
-   * manually update individual appointment statuses from the Appointments page.
+   * Also restores specialtyId on those re-linked appointments if it was nulled
+   * (happens when specialty was deleted — specialtyId is null on the appointment
+   * but the doctor now has a valid active specialtyId again).
+   *
+   * Status of those appointments is intentionally NOT changed here — they were
+   * CANCELLED when the doctor/specialty was deactivated/deleted. The admin can
+   * manually update individual statuses from the Appointments page.
    */
   async activate(id: string, clinicId: string): Promise<Doctor> {
     const doctor = await this.clinicGuard.validateDoctorBelongsToClinic(
@@ -146,16 +152,27 @@ export class DoctorsService {
         where: { id: doctor.id },
         data: { isActive: true },
       }),
-      // 2. Re-link orphaned appointments by name match
-      //    (only where doctorId was nulled — hard-deleted doctors won't exist to call this,
-      //     but deactivated doctors still exist so doctorId was never nulled on deactivation)
+      // 2. Re-link orphaned appointments by name match and restore specialtyId.
+      //
+      //    Two scenarios land here:
+      //    a) Doctor was hard-deleted then recreated → doctorId is null, specialtyId
+      //       may or may not be null depending on whether specialty still exists.
+      //    b) Doctor's specialty was deleted → doctorId is null (specialty deletion
+      //       nulls it) AND specialtyId is null on the appointment.
+      //
+      //    In both cases we restore doctorId. We also restore specialtyId using the
+      //    doctor's current (valid, active) specialtyId so the appointment is fully
+      //    re-linked and no longer shows as orphaned on either FK.
       this.prisma.appointment.updateMany({
         where: {
           clinicId,
           doctorId: null,
           doctorName: doctor.name,
         },
-        data: { doctorId: doctor.id },
+        data: {
+          doctorId: doctor.id,
+          specialtyId: doctor.specialtyId, // restore if it was nulled by specialty deletion
+        },
       }),
     ]);
 

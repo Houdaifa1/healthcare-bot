@@ -10,7 +10,6 @@ import { Doctor } from '@prisma/client';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import { SpecialtyHandler } from './specialty.handler';
-import { IdleHandler } from './idle.handler';
 
 @Injectable()
 export class DoctorHandler {
@@ -21,7 +20,6 @@ export class DoctorHandler {
     private readonly botMessageService: BotMessageService,
     private readonly doctorService: DoctorService,
     private readonly specialtyHandler: SpecialtyHandler,
-    private readonly idleHandler: IdleHandler,
   ) {}
 
   async handle(phone: string, text: string, session: Session): Promise<void> {
@@ -42,7 +40,6 @@ export class DoctorHandler {
     const doctor = this.resolveDoctor(text, doctors);
 
     if (!doctor) {
-      // Could not match — re-show the doctor list
       await this.showDoctorList(phone, session, doctors);
       return;
     }
@@ -144,19 +141,16 @@ export class DoctorHandler {
   private resolveDoctor(text: string, doctors: Doctor[]): Doctor | null {
     const trimmed = text.trim();
 
-    // Prefixed ID from interactive list
     if (trimmed.startsWith('doctor_')) {
       const id = trimmed.replace('doctor_', '');
       return doctors.find((d) => d.id === id) ?? null;
     }
 
-    // Numbered choice
     const index = parseInt(trimmed, 10);
     if (!isNaN(index) && index >= 1 && index <= doctors.length) {
       return doctors[index - 1];
     }
 
-    // Name match (case-insensitive)
     const normalised = trimmed.toLowerCase();
     return doctors.find((d) => d.name.toLowerCase() === normalised) ?? null;
   }

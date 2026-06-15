@@ -164,7 +164,7 @@ export class AvailabilityService {
     a: { startTime: string; endTime: string },
     b: { startTime: string; endTime: string },
   ): boolean {
-    return a.startTime < b.endTime && a.endTime > b.startTime;
+    return a.startTime <= b.endTime && a.endTime >= b.startTime;
   }
 
   /**

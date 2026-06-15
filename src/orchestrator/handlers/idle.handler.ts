@@ -30,6 +30,23 @@ export class IdleHandler {
   async handle(phone: string, text: string, session: Session): Promise<void> {
     // IMPROVEMENT A: Direct button ID routing — no AI needed
     const lower = text.trim().toLowerCase();
+
+    // ── Re-detect language from strong signals ────────────────────────────
+    // If the user sent a clear language signal (e.g. "bonjour" while in EN mode),
+    // switch their language on the fly. This handles the case where a user
+    // selected English but then naturally types "bonjour" — we should switch to FR.
+    if (session.data.languageConfirmed) {
+      const reDetected = await this.languageDetectionService.detect(text, session.data.language);
+      if (reDetected && reDetected !== session.data.language) {
+        session.data.language = reDetected;
+        session.data.languageConfirmed = true;
+        await this.sessionsService.save(session);
+        // Show welcome menu in the new language
+        await this.showWelcomeMenu(phone, session);
+        return;
+      }
+    }
+
     if (lower === 'book_appointment') {
       if (session.data.patientName) {
         session.state = SessionState.BOOKING_SPECIALTY;

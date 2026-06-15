@@ -196,18 +196,11 @@ async function main() {
   }
   console.log(`✅ Doctors seeded: ${doctorsData.length} total`);
 
-  // ── 6. Seed timeslots (resolve doctorId from name) ───────────────────
-  // First, clear ALL existing timeslots for doctors that are in the seed data
-  // so we don't conflict with merged slots from the dashboard
-  const seededDoctorIds = new Set<string>();
-  for (const slot of timeslotsData) {
-    const doctorId = doctorIdByName.get(slot.doctorName);
-    if (doctorId) seededDoctorIds.add(doctorId);
-  }
-  await prisma.timeSlot.deleteMany({
-    where: { doctorId: { in: Array.from(seededDoctorIds) } },
-  });
-
+  // ── 6. Seed timeslots ONLY if doctor has NONE (preserve dashboard data) ──
+  // IMPORTANT: We NEVER delete or overwrite existing timeslots because
+  // the dashboard may have updated them. Only seed if the doctor has
+  // ZERO timeslots (i.e. first-time setup).
+  let seededCount = 0;
   for (const slot of timeslotsData) {
     const doctorId = doctorIdByName.get(slot.doctorName);
     if (!doctorId) {
@@ -215,6 +208,17 @@ async function main() {
       continue;
     }
 
+    // Check if this doctor already has any timeslots (from dashboard)
+    const existingCount = await prisma.timeSlot.count({
+      where: { doctorId },
+    });
+
+    if (existingCount > 0) {
+      // Doctor already has timeslots — preserve them (dashboard data wins)
+      continue;
+    }
+
+    // First time setup — seed from fixtures
     await prisma.timeSlot.create({
       data: {
         doctorId,
@@ -224,8 +228,9 @@ async function main() {
         slotDurationMinutes: slot.slotDurationMinutes,
       },
     });
+    seededCount++;
   }
-  console.log(`✅ Timeslots seeded: ${timeslotsData.length} total`);
+  console.log(`✅ Timeslots seeded: ${seededCount} new (existing data preserved for other doctors)`);
 
   // ── 7. Upsert FAQs (FR + EN) ─────────────────────────────────────────
   for (const faq of [...faqsFR, ...faqsEN]) {

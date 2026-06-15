@@ -21,7 +21,7 @@ export default () => ({
   },
 
   ai: {
-    apiKey: process.env.GEMINI_API_KEY,
+    apiKey: process.env.GROQ_API_KEY,
   },
 
   jwt: {

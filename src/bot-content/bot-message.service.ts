@@ -73,6 +73,28 @@ export class BotMessageService {
   }
 
   /**
+   * Safe version of get() — never throws.
+   * Handlers should use this for every BotMessage call to prevent crashes.
+   * If the key is missing from DB, it logs an error and returns the fallback text.
+   */
+  async getSafe(
+    clinicId: string,
+    key: MessageKey,
+    vars?: Record<string, string>,
+    language: Language = Language.FR,
+    fallbackText = 'Sorry, something went wrong. Please try again.',
+  ): Promise<string> {
+    try {
+      return await this.get(clinicId, key, vars, language);
+    } catch {
+      this.logger.error(
+        `getSafe: key "${key}" missing for clinic ${clinicId} — using hardcoded fallback`,
+      );
+      return fallbackText;
+    }
+  }
+
+  /**
    * Attempts to fetch a BotMessage from DB. Returns null if not found.
    */
   private async tryFetch(

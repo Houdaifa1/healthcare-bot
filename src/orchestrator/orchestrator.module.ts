@@ -28,7 +28,7 @@ import {
     HandoffModule,
     AppointmentsModule,
     AiModule,
-    PrismaModule, // needed by IdleHandler to fetch clinic name
+    PrismaModule, // needed by handlers to fetch clinic name
   ],
   providers: [
     OrchestratorService,

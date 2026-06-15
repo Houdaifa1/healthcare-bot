@@ -91,6 +91,29 @@ export class AiService {
   }
 
   /**
+   * Uses Gemini to semantically match a user's free-text question to the FAQ list.
+   * Returns the FAQ id string if a good match is found, null otherwise.
+   */
+  async matchFaq(
+    userMessage: string,
+    faqs: { id: string; question: string }[],
+    language: string,
+  ): Promise<string | null> {
+    if (!this.isEnabled || faqs.length === 0) return null;
+
+    try {
+      const list = faqs.map((f, i) => `${i + 1}. [${f.id}] ${f.question}`).join('\n');
+      const prompt = `The user asked: "${userMessage}"\n\nAvailable FAQs:\n${list}\n\nWhich FAQ id best answers the user's question? Reply with ONLY the FAQ id string (e.g. "clx123abc"). If none match well, reply: NONE`;
+      const result = await this.model.generateContent(prompt);
+      const response = result.response.text().trim();
+      if (response === 'NONE') return null;
+      return response;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Fast keyword fallback — handles the most common Moroccan French patterns
    * without burning Gemini quota. Returns UNKNOWN only when truly ambiguous.
    */
@@ -113,8 +136,7 @@ export class AiService {
       /^(oui|yes|yep|confirm|confirmer|d'accord|ok|okay|c'est bon|exact|correct|✅|sure)$/i.test(
         lower,
       ) ||
-      lower.includes('confirm_yes') ||
-      lower.includes('✅ confirmer')
+      lower.includes('confirm_yes')
     ) {
       return Intent.CONFIRM;
     }
@@ -123,10 +145,7 @@ export class AiService {
       /^(non|no|nope|cancel|annuler|quitter|stop|retour|menu|↩|exit)$/i.test(
         lower,
       ) ||
-      lower.includes('confirm_no') ||
-      lower.includes('❌ annuler') ||
-      lower.includes('menu principal') ||
-      lower.includes('↩️ menu')
+      lower.includes('confirm_no')
     ) {
       return Intent.CANCEL;
     }

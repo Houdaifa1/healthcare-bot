@@ -34,5 +34,8 @@
   { "key": "HEADER_SPECIALTIES", "language": "EN", "body": "Specialties" },
   { "key": "HEADER_DOCTORS",     "language": "EN", "body": "Doctors" },
   { "key": "HEADER_TIMES",       "language": "EN", "body": "Available Times" },
-  { "key": "HEADER_SELECT_TIME", "language": "EN", "body": "Select a time" }
+  { "key": "HEADER_SELECT_TIME", "language": "EN", "body": "Select a time" },
+  { "key": "NO_DOCTORS_FOR_SPECIALTY", "language": "EN", "body": "No doctors are currently available for this specialty." },
+  { "key": "NO_SPECIALTIES_AVAILABLE", "language": "EN", "body": "No specialties are available right now." },
+  { "key": "HANDOFF_WAITING",    "language": "EN", "body": "An agent will contact you shortly. Tap below to return to the menu." }
 ]

@@ -60,14 +60,17 @@ jobs:
             docker pull ghcr.io/${{ steps.repo.outputs.name }}:latest
 
             # ── Run migrations BEFORE swapping the container ──────────────
-            # Ephemeral container: exits and self-destructs after migrate
-            # If this fails, set -e stops here — old container stays alive
             docker run --rm \
               --network host \
               --env-file /root/.env.production \
               ghcr.io/${{ steps.repo.outputs.name }}:latest \
               sh -c "npx prisma migrate deploy"
             echo "✅ Migrations applied"
+
+            # ── Flush ONLY session keys (safe for production) ─────────────
+            echo "Flushing Redis session keys..."
+            redis-cli -h 127.0.0.1 PATTERN "session:*" UNLINK
+            echo "✅ Redis sessions flushed (other keys preserved)"
 
             # ── Swap container ────────────────────────────────────────────
             docker stop healthcare-bot || true

@@ -20,11 +20,8 @@ export class NameHandler {
 
     if (!name || name.length < 2) {
       // Name too short — ask again
-      const message = await this.botMessageService.get(
-        session.data.clinicId,
-        MessageKey.ASK_NAME,
-        {},
-        session.data.language,
+      const message = await this.botMessageService.getSafe(
+        session.data.clinicId, MessageKey.ASK_NAME, {}, session.data.language, 'What is your name?'
       );
       await this.whatsappService.sendText(phone, message);
       return;

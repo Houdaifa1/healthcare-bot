@@ -1,14 +1,19 @@
 import { Injectable } from '@nestjs/common';
 import { Language } from '@prisma/client';
+import { AiService } from '../ai/ai.service';
 
 @Injectable()
 export class LanguageDetectionService {
+  constructor(private readonly aiService: AiService) {}
+
   /**
    * Detects FR or EN from the first user message.
    *
    * Returns Language if confidently detected, null if truly ambiguous.
    * The caller (IdleHandler) will transition to LANGUAGE_SELECT when null
    * so the user can explicitly choose.
+   *
+   * Falls back to AI (Gemini) when keyword detection is ambiguous.
    */
   async detect(
     text: string,
@@ -30,10 +35,12 @@ export class LanguageDetectionService {
     if (isFrench && !isEnglish) return Language.FR;
     if (isEnglish && !isFrench) return Language.EN;
 
-    // Both detected or neither detected — return null so the caller
-    // (IdleHandler) can transition to LANGUAGE_SELECT.
-    // Previously this returned clinicDefaultLanguage, which meant the
-    // language selection flow was dead code that could never be reached.
+    // Both detected or neither detected — fall back to AI
+    const aiResult = await this.aiService.detectLanguage(text);
+    if (aiResult === 'FR') return Language.FR;
+    if (aiResult === 'EN') return Language.EN;
+
+    // AI also returned UNKNOWN — return null so the caller transitions to LANGUAGE_SELECT
     return null;
   }
 }

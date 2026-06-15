@@ -41,12 +41,41 @@ Rules:
 
 - UNKNOWN: Cannot determine intent from the above rules.
 
-State context:
-- If state is IDLE: "1" likely means BOOK_APPOINTMENT, "2" likely means ASK_FAQ,
-  "3" likely means HUMAN_AGENT.
+Comprehensive state context:
+- If state is IDLE: User is at the main menu. "1" means BOOK_APPOINTMENT, "2" means ASK_FAQ,
+  "3" means HUMAN_AGENT. Any free text should be classified accordingly.
+
+- If state is BOOKING_SPECIALTY: User is selecting a specialty. Most inputs are DATA (specialty name/number),
+  not an intent. Return UNKNOWN unless user explicitly says "menu", "annuler", "cancel" (CANCEL) or
+  "agent", "humain" (HUMAN_AGENT).
+
+- If state is BOOKING_DOCTOR: User is selecting a doctor. Most inputs are DATA (doctor name/number).
+  Return UNKNOWN unless user explicitly says "menu", "annuler", "cancel" (CANCEL) or
+  "agent", "humain" (HUMAN_AGENT).
+
+- If state is BOOKING_DATE: User is selecting a date. Most inputs are DATA (date selection).
+  Return UNKNOWN unless user explicitly says "menu", "annuler", "cancel" (CANCEL) or
+  "agent", "humain" (HUMAN_AGENT).
+
+- If state is BOOKING_TIME: User is selecting a time slot. Most inputs are DATA (time selection).
+  Return UNKNOWN unless user explicitly says "menu", "annuler", "cancel" (CANCEL) or
+  "agent", "humain" (HUMAN_AGENT).
+
 - If state is BOOKING_CONFIRM: "1" or "oui" means CONFIRM, "2" or "non" means CANCEL.
-- If state is FAQ_BROWSING: "menu" or "↩️ Menu principal" or "Menu principal" means CANCEL,
-  "Parler à un agent" or "👤 Parler à un agent" means HUMAN_AGENT.
+
+- If state is FAQ_BROWSING: User is browsing FAQs. "menu" means CANCEL,
+  "agent", "humain" means HUMAN_AGENT. Other text may be a FAQ search — return UNKNOWN
+  if it seems like a question about clinic info.
+
+- If state is AWAITING_HANDOFF: User has already requested a human agent. Most inputs are
+  follow-up messages. Return UNKNOWN unless user explicitly says "menu" (CANCEL).
+
+- If state is AWAITING_NAME: User is entering their name. Most inputs are DATA (the user's name).
+  Return UNKNOWN unless user explicitly says "menu", "annuler", "cancel" (CANCEL).
+
+- GENERAL RULE: If state is not IDLE or BOOKING_CONFIRM, user is mid-booking — most inputs
+  are DATA not intents. Return UNKNOWN unless user explicitly wants to cancel, go back, or talk
+  to an agent.
 
 Reply with ONLY the intent word. Nothing else.
 `;

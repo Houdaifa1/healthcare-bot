@@ -23,7 +23,8 @@ export class LanguageSelectHandler {
       session.data.languageConfirmed = true;
       session.state = SessionState.IDLE;
       await this.sessionsService.save(session);
-      await this.idleHandler.handle(phone, text, session);
+      // BUG 3: Call showWelcomeMenu directly instead of going through handle() again
+      await this.idleHandler.showWelcomeMenu(phone, session);
       return;
     }
 
@@ -32,19 +33,17 @@ export class LanguageSelectHandler {
       session.data.languageConfirmed = true;
       session.state = SessionState.IDLE;
       await this.sessionsService.save(session);
-      await this.idleHandler.handle(phone, text, session);
+      // BUG 3: Call showWelcomeMenu directly instead of going through handle() again
+      await this.idleHandler.showWelcomeMenu(phone, session);
       return;
     }
 
     // Ambiguous — ask again with DB-driven labels
-    const message = await this.botMessageService.get(
-      session.data.clinicId,
-      MessageKey.LANGUAGE_PROMPT,
-      {},
-      session.data.language,
+    const message = await this.botMessageService.getSafe(
+      session.data.clinicId, MessageKey.LANGUAGE_PROMPT, {}, session.data.language, 'Choose your language:'
     );
-    const btnFr = await this.botMessageService.get(session.data.clinicId, MessageKey.BUTTON_FRENCH, {}, session.data.language);
-    const btnEn = await this.botMessageService.get(session.data.clinicId, MessageKey.BUTTON_ENGLISH, {}, session.data.language);
+    const btnFr = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_FRENCH, {}, session.data.language, 'Français');
+    const btnEn = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_ENGLISH, {}, session.data.language, 'English');
     await this.whatsappService.sendButtons(phone, message, [
       { id: 'lang_fr', title: btnFr },
       { id: 'lang_en', title: btnEn },

@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { PrismaModule } from '../prisma/prisma.module';
+import { AiModule } from '../ai/ai.module';
 import { BotMessageService } from './bot-message.service';
 import { LanguageDetectionService } from './language-detection.service';
 import { SpecialtyService } from './specialty.service';
@@ -8,7 +9,7 @@ import { FAQService } from './faq.service';
 import { AvailabilityService } from './availability.service';
 
 @Module({
-  imports: [PrismaModule],
+  imports: [PrismaModule, AiModule],
   providers: [
     BotMessageService,
     LanguageDetectionService,

@@ -1,6 +1,7 @@
 import { Processor, WorkerHost, OnWorkerEvent } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
+import Redis from 'ioredis';
 import { OrchestratorService } from '../orchestrator/orchestrator.service';
 import { SessionsService } from '../sessions/sessions.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -18,6 +19,7 @@ export interface MessageJob {
 @Processor('messages')
 export class MessageProcessor extends WorkerHost {
   private readonly logger = new Logger(MessageProcessor.name);
+  private readonly redis: Redis;
 
   constructor(
     private readonly orchestratorService: OrchestratorService,
@@ -27,40 +29,50 @@ export class MessageProcessor extends WorkerHost {
     private readonly botMessageService: BotMessageService,
   ) {
     super();
+    // Create a dedicated Redis connection for dedup
+    const redisUrl = process.env.REDIS_URL ?? 'redis://localhost:6379';
+    const isUpstash = redisUrl.includes('upstash.io');
+    this.redis = new Redis(redisUrl, {
+      tls: isUpstash ? {} : undefined,
+      maxRetriesPerRequest: null,
+      enableReadyCheck: false,
+    });
   }
 
   async process(job: Job<MessageJob>): Promise<void> {
-    const { from, name, text } = job.data;
+    const { from, name, text, messageId } = job.data;
     this.logger.log(`Processing message from ${name} (+${from}): "${text}"`);
 
+    // ── Message deduplication (BUG 17) ─────────────────────────────────────
+    // Meta can deliver the same messageId twice on timeout.
+    // Check and set with 5-minute TTL.
+    if (messageId) {
+      const dedupKey = `processed:${messageId}`;
+      const isNew = await this.redis.set(dedupKey, '1', 'EX', 300, 'NX');
+      if (!isNew) {
+        this.logger.warn(`Duplicate messageId ${messageId} — skipping`);
+        return;
+      }
+    }
+
     // ── Load clinic ────────────────────────────────────────────────────────
-    // Single-clinic setup — id is always 'main' (set during seed).
-    // If you go multi-clinic, derive clinicId from the incoming phone number id.
     const clinic = await this.prisma.clinic.findUnique({
       where: { id: 'main' },
     });
 
     if (!clinic) {
       this.logger.error('Clinic "main" not found — run `npm run seed` first');
-      // Permanent failure — no point retrying until the DB is seeded
       return;
     }
 
     // ── Load or create session ─────────────────────────────────────────────
-    // `from` is a clean E.164 number — safe to use directly as the session key.
     const { session, isNew } = await this.sessionsService.getOrCreate(
       from,
       clinic.id,
       clinic.defaultLanguage,
+      clinic.timezone,
     );
 
-    // ── Session expiry notification ──────────────────────────────────────
-    // `isNew` is true on first-time visits OR when Redis TTL expires (30 min).
-    // Since we can't distinguish first visits from expired sessions,
-    // SESSION_EXPIRED notification is omitted here.
-    // The fresh session starts cleanly in IDLE state which is fine UX.
-    // If a more sophisticated expiry notification is needed later, store
-    // a separate "last phone number seen" set in Redis.
     // ── Route to orchestrator ──────────────────────────────────────────────
     try {
       await this.orchestratorService.handleMessage(from, text, session);

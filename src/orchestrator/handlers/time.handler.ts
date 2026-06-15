@@ -112,7 +112,7 @@ export class TimeHandler {
     }
   }
 
-  private async showTimeList(phone: string, session: Session, doctorId: string, date: string): Promise<void> {
+    private async showTimeList(phone: string, session: Session, doctorId: string, date: string): Promise<void> {
     const availableSlots = await this.availabilityService.getAvailableSlots(doctorId, date);
 
     if (availableSlots.length === 0) {
@@ -132,25 +132,45 @@ export class TimeHandler {
     const header = await this.botMessageService.getSafe(
       session.data.clinicId, MessageKey.HEADER_TIMES, {}, session.data.language, 'Available Times'
     );
+
     const selectLabel = await this.botMessageService.getSafe(
       session.data.clinicId, MessageKey.HEADER_SELECT_TIME, {}, session.data.language, 'Select a time'
     );
 
-    // WhatsApp allows max 10 rows per section and max 10 sections = 100 slots max.
-    // Split availableSlots into chunks of 10, each chunk becomes one section.
+    const pageLabel = await this.botMessageService.getSafe(
+      session.data.clinicId, 
+      MessageKey.HEADER_TIME_PAGE, 
+      {}, 
+      session.data.language, 
+      'Page' 
+    );
+
     const CHUNK_SIZE = 10;
-    const sections = [];
+    const sections: Array<{ title: string; rows: Array<{ id: string; title: string }> }> = [];
+
+    const totalPages = Math.ceil(availableSlots.length / CHUNK_SIZE);
+
     for (let i = 0; i < availableSlots.length; i += CHUNK_SIZE) {
       const chunk = availableSlots.slice(i, i + CHUNK_SIZE);
+      if (chunk.length === 0) continue;
+
+      const pageNum = Math.floor(i / CHUNK_SIZE) + 1;
       const from = chunk[0];
       const to = chunk[chunk.length - 1];
+
+      const sectionTitle = totalPages > 1 
+        ? `${pageLabel} ${pageNum}/${totalPages} — ${from} – ${to}`
+        : `${from} – ${to}`;
+
       sections.push({
-        title: `${from} – ${to}`, // e.g. "09:00 – 13:30"
-        rows: chunk.map((t) => ({ id: `time_${t}`, title: t })),
+        title: sectionTitle,
+        rows: chunk.map((t) => ({ 
+          id: `time_${t}`, 
+          title: t 
+        })),
       });
     }
 
-    // Cap at 10 sections (100 slots total — more than enough for any clinic)
     const safeSections = sections.slice(0, 10);
 
     await this.whatsappService.sendInteractiveList(

@@ -26,7 +26,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # ✅ FIX: force clean build so Prisma migrations are always included
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
@@ -42,49 +41,98 @@ jobs:
           username: root
           key: ${{ secrets.DROPLET_SSH_KEY }}
           script: |
-            set -e
+            set -euo pipefail
 
-            # ── Ensure Redis is installed and running ─────────────────────
+            IMAGE="ghcr.io/${{ steps.repo.outputs.name }}:latest"
+            ENV_FILE="/root/.env.production"
+
+            # ── Ensure Redis ──────────────────────────────────────────────
             if ! command -v redis-server &> /dev/null; then
-              echo "Installing Redis..."
-              apt-get update -qq
-              apt-get install -y redis-server
+              apt-get update -qq && apt-get install -y redis-server
               sed -i 's/^bind .*/bind 127.0.0.1/' /etc/redis/redis.conf
               systemctl enable redis-server
             fi
             systemctl start redis-server || true
-            redis-cli ping | grep -q PONG && echo "✅ Redis is up" || echo "❌ Redis failed to start"
+            redis-cli ping | grep -q PONG && echo "✅ Redis is up" || { echo "❌ Redis failed"; exit 1; }
 
             # ── Pull latest image ─────────────────────────────────────────
             echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-            docker pull ghcr.io/${{ steps.repo.outputs.name }}:latest
+            docker pull "$IMAGE"
+
+            # ── Check for stuck failed migrations and resolve them ────────
+            echo "▶ Checking for failed migrations..."
+            FAILED=$(docker run --rm \
+              --network host \
+              --env-file "$ENV_FILE" \
+              --entrypoint sh \
+              "$IMAGE" \
+              -c 'node -e "
+const { PrismaClient } = require(\"@prisma/client\");
+const p = new PrismaClient();
+p.\$queryRaw\`
+  SELECT migration_name FROM _prisma_migrations
+  WHERE finished_at IS NULL AND rolled_back_at IS NULL
+\`.then(rows => {
+  console.log(JSON.stringify(rows.map(r => r.migration_name)));
+  return p.\$disconnect();
+}).catch(() => { console.log(\"[]\"); process.exit(0); });
+"' 2>/dev/null || echo "[]")
+
+            if [ "$FAILED" != "[]" ] && [ -n "$FAILED" ]; then
+              echo "⚠️  Found stuck migrations: $FAILED — marking as rolled back..."
+              docker run --rm \
+                --network host \
+                --env-file "$ENV_FILE" \
+                --entrypoint sh \
+                "$IMAGE" \
+                -c 'node -e "
+const { PrismaClient } = require(\"@prisma/client\");
+const p = new PrismaClient();
+p.\$executeRaw\`
+  DELETE FROM _prisma_migrations
+  WHERE finished_at IS NULL AND rolled_back_at IS NULL
+\`.then(n => {
+  console.log(\"Cleared \" + n + \" stuck migration(s)\");
+  return p.\$disconnect();
+}).catch(e => { console.error(e); process.exit(1); });
+"'
+              echo "✅ Stuck migrations cleared"
+            else
+              echo "✅ No stuck migrations"
+            fi
 
             # ── Run migrations BEFORE swapping the container ──────────────
+            echo "▶ Running migrations..."
             docker run --rm \
               --network host \
-              --env-file /root/.env.production \
-              ghcr.io/${{ steps.repo.outputs.name }}:latest \
+              --env-file "$ENV_FILE" \
+              "$IMAGE" \
               sh -c "npx prisma migrate deploy"
             echo "✅ Migrations applied"
 
-            # ── Flush ONLY session keys (safe for production) ─────────────
-            echo "Flushing Redis session keys..."
-            redis-cli -h 127.0.0.1 PATTERN "session:*" UNLINK
-            echo "✅ Redis sessions flushed (other keys preserved)"
+            # ── Flush session keys ────────────────────────────────────────
+            SESSION_KEYS=$(redis-cli --scan --pattern "session:*" 2>/dev/null | wc -l)
+            if [ "$SESSION_KEYS" -gt "0" ]; then
+              redis-cli --scan --pattern "session:*" | xargs -r redis-cli UNLINK
+              echo "✅ Flushed $SESSION_KEYS Redis session key(s)"
+            else
+              echo "✅ No session keys to flush"
+            fi
 
             # ── Swap container ────────────────────────────────────────────
-            docker stop healthcare-bot || true
-            docker rm healthcare-bot || true
+            docker stop healthcare-bot 2>/dev/null || true
+            docker rm healthcare-bot 2>/dev/null || true
             docker run -d \
               --name healthcare-bot \
               --restart unless-stopped \
               --network host \
-              --env-file /root/.env.production \
-              ghcr.io/${{ steps.repo.outputs.name }}:latest
+              --env-file "$ENV_FILE" \
+              "$IMAGE"
 
             docker image prune -f
 
             # ── Verify ────────────────────────────────────────────────────
+            echo "▶ Waiting for container to start..."
             sleep 10
-            docker ps | grep healthcare-bot && echo "✅ Deployment successful" || echo "❌ Container not running"
+            docker ps | grep healthcare-bot && echo "✅ Deployment successful" || { echo "❌ Container not running"; docker logs healthcare-bot --tail 50; exit 1; }
             docker logs healthcare-bot --tail 20

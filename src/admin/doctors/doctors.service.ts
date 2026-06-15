@@ -1,4 +1,8 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { Doctor } from '@prisma/client';
 import { CreateDoctorDto } from './dto/create-doctor.dto';
@@ -10,26 +14,25 @@ export class DoctorsService {
   constructor(
     private prisma: PrismaService,
     private clinicGuard: ClinicGuardService,
-  ) { }
+  ) {}
 
-  async create(clinicId: string, dto: CreateDoctorDto) {
-    await this.clinicGuard.validateSpecialtyBelongsToClinic(dto.specialtyId, clinicId);
+  async create(clinicId: string, dto: CreateDoctorDto): Promise<Doctor> {
+    await this.clinicGuard.validateSpecialtyBelongsToClinic(
+      dto.specialtyId,
+      clinicId,
+    );
 
-    // Verify specialty is active
     const specialty = await this.prisma.specialty.findUnique({
       where: { id: dto.specialtyId },
       select: { isActive: true },
     });
     if (!specialty || !specialty.isActive) {
-      throw new BadRequestException('Cannot create doctor: the selected specialty is inactive or does not exist.');
+      throw new BadRequestException(
+        'Cannot create doctor: the selected specialty is inactive or does not exist.',
+      );
     }
 
-    return this.prisma.doctor.create({
-      data: {
-        ...dto,
-        clinicId,
-      },
-    });
+    return this.prisma.doctor.create({ data: { ...dto, clinicId } });
   }
 
   async findAll(
@@ -43,26 +46,33 @@ export class DoctorsService {
         ...(specialtyId && { specialtyId }),
         ...(isActive !== undefined && { isActive }),
       },
+      orderBy: { displayOrder: 'asc' },
     });
   }
 
-  async update(id: string, clinicId: string, dto: UpdateDoctorDto) {
-    const doctor = await this.clinicGuard.validateDoctorBelongsToClinic(id, clinicId);
+  async update(id: string, clinicId: string, dto: UpdateDoctorDto): Promise<Doctor> {
+    const doctor = await this.clinicGuard.validateDoctorBelongsToClinic(
+      id,
+      clinicId,
+    );
 
     if (dto.specialtyId) {
-      await this.clinicGuard.validateSpecialtyBelongsToClinic(dto.specialtyId, clinicId);
-
-      // Verify the new specialty is active
+      await this.clinicGuard.validateSpecialtyBelongsToClinic(
+        dto.specialtyId,
+        clinicId,
+      );
       const specialty = await this.prisma.specialty.findUnique({
         where: { id: dto.specialtyId },
         select: { isActive: true },
       });
       if (!specialty || !specialty.isActive) {
-        throw new BadRequestException('Cannot assign doctor to an inactive specialty.');
+        throw new BadRequestException(
+          'Cannot assign doctor to an inactive specialty.',
+        );
       }
     }
 
-    // If trying to reactivate, verify the specialty is active
+    // Reactivation guard: specialty must be active before reactivating doctor
     if (dto.isActive === true) {
       const currentSpecialtyId = dto.specialtyId ?? doctor.specialtyId;
       const specialty = await this.prisma.specialty.findUnique({
@@ -76,25 +86,40 @@ export class DoctorsService {
       }
     }
 
-    return this.prisma.doctor.update({
-      where: { id: doctor.id },
-      data: dto,
-    });
+    return this.prisma.doctor.update({ where: { id: doctor.id }, data: dto });
   }
 
-  async remove(id: string): Promise<Doctor> {
+  // Soft-delete — ownership checked
+  async remove(id: string, clinicId: string): Promise<Doctor> {
+    const doctor = await this.clinicGuard.validateDoctorBelongsToClinic(
+      id,
+      clinicId,
+    );
     return this.prisma.doctor.update({
-      where: { id },
+      where: { id: doctor.id },
       data: { isActive: false },
     });
   }
 
-  async hardRemove(id: string): Promise<Doctor> {
+  // Hard-delete — ownership checked, blocks if appointments exist
+  async hardRemove(id: string, clinicId: string): Promise<Doctor> {
+    const doctor = await this.clinicGuard.validateDoctorBelongsToClinic(
+      id,
+      clinicId,
+    );
+
+    const appointmentCount = await this.prisma.appointment.count({
+      where: { doctorId: doctor.id },
+    });
+    if (appointmentCount > 0) {
+      throw new BadRequestException(
+        `Cannot permanently delete this doctor: ${appointmentCount} appointment(s) are linked to them. Deactivate instead.`,
+      );
+    }
+
     return this.prisma.$transaction(async (tx) => {
-      // Delete associated records first to satisfy foreign key constraints
-      await tx.timeSlot.deleteMany({ where: { doctorId: id } });
-      await tx.appointment.deleteMany({ where: { doctorId: id } });
-      return tx.doctor.delete({ where: { id } });
+      await tx.timeSlot.deleteMany({ where: { doctorId: doctor.id } });
+      return tx.doctor.delete({ where: { id: doctor.id } });
     });
   }
 }

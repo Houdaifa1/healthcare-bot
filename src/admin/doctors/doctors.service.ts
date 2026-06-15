@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { Doctor } from '@prisma/client';
 import { CreateDoctorDto } from './dto/create-doctor.dto';
@@ -14,6 +14,15 @@ export class DoctorsService {
 
   async create(clinicId: string, dto: CreateDoctorDto) {
     await this.clinicGuard.validateSpecialtyBelongsToClinic(dto.specialtyId, clinicId);
+
+    // Verify specialty is active
+    const specialty = await this.prisma.specialty.findUnique({
+      where: { id: dto.specialtyId },
+      select: { isActive: true },
+    });
+    if (!specialty || !specialty.isActive) {
+      throw new BadRequestException('Cannot create doctor: the selected specialty is inactive or does not exist.');
+    }
 
     return this.prisma.doctor.create({
       data: {
@@ -38,17 +47,40 @@ export class DoctorsService {
   }
 
   async update(id: string, clinicId: string, dto: UpdateDoctorDto) {
-  const doctor = await this.clinicGuard.validateDoctorBelongsToClinic(id, clinicId);
+    const doctor = await this.clinicGuard.validateDoctorBelongsToClinic(id, clinicId);
 
-  if (dto.specialtyId) {
-    await this.clinicGuard.validateSpecialtyBelongsToClinic(dto.specialtyId, clinicId);
+    if (dto.specialtyId) {
+      await this.clinicGuard.validateSpecialtyBelongsToClinic(dto.specialtyId, clinicId);
+
+      // Verify the new specialty is active
+      const specialty = await this.prisma.specialty.findUnique({
+        where: { id: dto.specialtyId },
+        select: { isActive: true },
+      });
+      if (!specialty || !specialty.isActive) {
+        throw new BadRequestException('Cannot assign doctor to an inactive specialty.');
+      }
+    }
+
+    // If trying to reactivate, verify the specialty is active
+    if (dto.isActive === true) {
+      const currentSpecialtyId = dto.specialtyId ?? doctor.specialtyId;
+      const specialty = await this.prisma.specialty.findUnique({
+        where: { id: currentSpecialtyId },
+        select: { isActive: true },
+      });
+      if (!specialty || !specialty.isActive) {
+        throw new BadRequestException(
+          'Cannot reactivate this doctor: the associated specialty is inactive. Assign an active specialty first.',
+        );
+      }
+    }
+
+    return this.prisma.doctor.update({
+      where: { id: doctor.id },
+      data: dto,
+    });
   }
-
-  return this.prisma.doctor.update({
-    where: { id: doctor.id },
-    data: dto,
-  });
-}
 
   async remove(id: string): Promise<Doctor> {
     return this.prisma.doctor.update({

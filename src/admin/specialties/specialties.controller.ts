@@ -46,13 +46,18 @@ export class SpecialtiesController {
     return this.specialtiesService.update(id, updateSpecialtyDto);
   }
 
-  @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.specialtiesService.remove(id);
+  @Delete(':id/confirm')
+  confirmDelete(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body() body: { notify: boolean; customMessage?: string },
+  ) {
+    return this.specialtiesService.confirmDelete(
+      id,
+      user.clinicId,
+      body.notify ?? false,
+      body.customMessage,
+    );
   }
-
-  @Delete(':id/hard')
-  hardRemove(@Param('id') id: string) {
-    return this.specialtiesService.hardRemove(id);
-  }
+  
 }

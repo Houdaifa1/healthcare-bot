@@ -94,20 +94,21 @@ model Appointment {
   id               String            @id @default(cuid())
   clinicId         String
   doctorId         String?
-  specialtyId      String
+  specialtyId      String?           // ← was String, now String?
   patientName      String
   patientPhone     String
   appointmentDate  DateTime
   appointmentTime  String
   status           AppointmentStatus @default(PENDING)
   notes            String?
-  doctorName       String?           // Preserved when doctor is deleted
+  doctorName       String?
+  specialtyName    String?           // ← add this
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
 
   clinic           Clinic            @relation(fields: [clinicId], references: [id])
   doctor           Doctor?           @relation(fields: [doctorId], references: [id])
-  specialty        Specialty         @relation(fields: [specialtyId], references: [id])
+  specialty        Specialty?        @relation(fields: [specialtyId], references: [id])
 }
 
 // ─── FAQs ─────────────────────────────────────────────────────────────────────

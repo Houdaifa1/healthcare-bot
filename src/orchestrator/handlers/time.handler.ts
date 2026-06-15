@@ -22,6 +22,15 @@ export class TimeHandler {
   ) {}
 
   async handle(phone: string, text: string, session: Session): Promise<void> {
+    const trimmed = text.trim().toLowerCase();
+
+    // Allow returning to main menu from any booking step
+    if (trimmed === 'menu') {
+      session.state = SessionState.IDLE;
+      await this.sessionsService.save(session);
+      return;
+    }
+
     const doctorId = session.data.doctorId;
     const specialtyId = session.data.specialtyId;
     const selectedDate = session.data.selectedDate;

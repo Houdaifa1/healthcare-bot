@@ -23,6 +23,16 @@ export class DoctorHandler {
   ) {}
 
   async handle(phone: string, text: string, session: Session): Promise<void> {
+    const trimmed = text.trim().toLowerCase();
+
+    // Allow returning to main menu from any booking step
+    if (trimmed === 'menu') {
+      session.state = SessionState.IDLE;
+      await this.sessionsService.save(session);
+      await this.specialtyHandler.showWelcomeMenu(phone, session);
+      return;
+    }
+
     if (!session.data.specialtyId) {
       const msg = await this.botMessageService.getSafe(
         session.data.clinicId, MessageKey.ERROR_MISSING_SPECIALTY, {}, session.data.language, 'Missing specialty. Please start over.'

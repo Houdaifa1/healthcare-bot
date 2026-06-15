@@ -63,7 +63,7 @@ model Specialty {
 model Doctor {
   id           String     @id @default(cuid())
   clinicId     String
-  specialtyId  String
+  specialtyId  String?
   name         String
   bio          String?
   isActive     Boolean    @default(true)
@@ -71,7 +71,7 @@ model Doctor {
   createdAt    DateTime   @default(now())
 
   clinic       Clinic     @relation(fields: [clinicId], references: [id])
-  specialty    Specialty  @relation(fields: [specialtyId], references: [id])
+  specialty    Specialty? @relation(fields: [specialtyId], references: [id], onDelete: SetNull)
   timeSlots    TimeSlot[]
   appointments Appointment[]
 }

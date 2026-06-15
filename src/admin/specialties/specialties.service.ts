@@ -72,16 +72,20 @@ export class SpecialtiesService {
   }
 
   /**
-   * Hard-delete a specialty and deactivate all doctors using it.
-   * Doctors are NOT deleted — they are deactivated so they can be
-   * reassigned to another specialty later.
+   * Hard-delete a specialty permanently.
+   *
+   * Doctor.specialtyId has a hard FK to Specialty.id, so before the
+   * specialty row can be deleted, every doctor referencing it must be
+   * detached. We deactivate AND null out specialtyId on all doctors
+   * under this specialty (active or not) — they cannot be reactivated
+   * until the admin assigns them a new active specialty
+   * (enforced in doctors.service.ts).
    */
   async hardRemove(id: string): Promise<Specialty> {
     return this.prisma.$transaction(async (tx) => {
-      // Deactivate all doctors that reference this specialty first
       await tx.doctor.updateMany({
-        where: { specialtyId: id, isActive: true },
-        data: { isActive: false },
+        where: { specialtyId: id },
+        data: { isActive: false, specialtyId: null },
       });
 
       return tx.specialty.delete({ where: { id } });

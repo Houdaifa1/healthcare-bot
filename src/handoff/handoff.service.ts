@@ -51,7 +51,7 @@ export class HandoffService {
       const sessions: { phone: string; state: string; patientName?: string; lastMessage?: string; updatedAt: number }[] = [];
       for (const key of keys) {
         const phone = key.replace('session:', '');
-        const result = await this.sessionsService.getOrCreate(phone, '', 'FR' as any);
+        const result = await this.sessionsService.getOrCreate(phone, '', 'FR' as any, 'Africa/Casablanca');
         const session = result.session;
         if (session.state === SessionState.AWAITING_HANDOFF) {
           sessions.push({
@@ -70,9 +70,7 @@ export class HandoffService {
   }
 
   async resolveHandoff(phone: string): Promise<void> {
-    // Use the FULL phone (with @lid / @s.whatsapp.net suffix) to look up the session,
-    // because that's how the key is stored in Redis.
-    const result = await this.sessionsService.getOrCreate(phone, '', 'FR' as any);
+    const result = await this.sessionsService.getOrCreate(phone, '', 'FR' as any, 'Africa/Casablanca');
     const session = result.session;
     if (!session || session.state !== SessionState.AWAITING_HANDOFF) {
       this.logger.warn(

@@ -20,11 +20,8 @@ export class DateHandler {
   async handle(phone: string, text: string, session: Session): Promise<void> {
     const doctorId = session.data.doctorId;
     if (!doctorId) {
-      const msg = await this.botMessageService.get(
-        session.data.clinicId,
-        MessageKey.ERROR_MISSING_DOCTOR,
-        {},
-        session.data.language,
+      const msg = await this.botMessageService.getSafe(
+        session.data.clinicId, MessageKey.ERROR_MISSING_DOCTOR, {}, session.data.language, 'Missing doctor. Please start over.'
       );
       await this.whatsappService.sendText(phone, msg);
       await this.sessionsService.reset(phone);
@@ -40,6 +37,7 @@ export class DateHandler {
       return;
     }
 
+    // BUG 9: Only set state to BOOKING_TIME AFTER date is validated
     session.data.selectedDate = date;
     session.state = SessionState.BOOKING_TIME;
     await this.sessionsService.save(session);
@@ -50,11 +48,8 @@ export class DateHandler {
     );
 
     if (availableSlots.length === 0) {
-      const message = await this.botMessageService.get(
-        session.data.clinicId,
-        MessageKey.NO_SLOTS_AVAILABLE,
-        {},
-        session.data.language,
+      const message = await this.botMessageService.getSafe(
+        session.data.clinicId, MessageKey.NO_SLOTS_AVAILABLE, {}, session.data.language, 'No slots available.'
       );
       await this.whatsappService.sendText(phone, message);
       session.state = SessionState.BOOKING_DATE;
@@ -63,24 +58,15 @@ export class DateHandler {
       return;
     }
 
-    const message = await this.botMessageService.get(
-      session.data.clinicId,
-      MessageKey.SELECT_TIME,
-      {},
-      session.data.language,
+    const message = await this.botMessageService.getSafe(
+      session.data.clinicId, MessageKey.SELECT_TIME, {}, session.data.language, 'Please choose a time:'
     );
 
-    const headerTimes = await this.botMessageService.get(
-      session.data.clinicId,
-      MessageKey.HEADER_TIMES,
-      {},
-      session.data.language,
+    const headerTimes = await this.botMessageService.getSafe(
+      session.data.clinicId, MessageKey.HEADER_TIMES, {}, session.data.language, 'Available Times'
     );
-    const headerSelectTime = await this.botMessageService.get(
-      session.data.clinicId,
-      MessageKey.HEADER_SELECT_TIME,
-      {},
-      session.data.language,
+    const headerSelectTime = await this.botMessageService.getSafe(
+      session.data.clinicId, MessageKey.HEADER_SELECT_TIME, {}, session.data.language, 'Select a time'
     );
 
     await this.whatsappService.sendInteractiveList(
@@ -112,14 +98,13 @@ export class DateHandler {
     const availableDates = await this.availabilityService.getAvailableDates(
       doctorId,
       3,
+      new Date(),
+      session.data.timezone,
     );
 
     if (availableDates.length === 0) {
-      const message = await this.botMessageService.get(
-        session.data.clinicId,
-        MessageKey.NO_SLOTS_AVAILABLE,
-        {},
-        session.data.language,
+      const message = await this.botMessageService.getSafe(
+        session.data.clinicId, MessageKey.NO_SLOTS_AVAILABLE, {}, session.data.language, 'No slots available.'
       );
       await this.whatsappService.sendText(phone, message);
       session.state = SessionState.BOOKING_DOCTOR;
@@ -127,11 +112,8 @@ export class DateHandler {
       return;
     }
 
-    const message = await this.botMessageService.get(
-      session.data.clinicId,
-      MessageKey.SELECT_DATE,
-      {},
-      session.data.language,
+    const message = await this.botMessageService.getSafe(
+      session.data.clinicId, MessageKey.SELECT_DATE, {}, session.data.language, 'Please choose a date:'
     );
 
     await this.whatsappService.sendButtons(

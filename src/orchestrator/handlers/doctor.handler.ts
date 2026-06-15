@@ -9,6 +9,8 @@ import { DoctorService } from '../../bot-content/doctor.service';
 import { Doctor } from '@prisma/client';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
+import { SpecialtyHandler } from './specialty.handler';
+import { IdleHandler } from './idle.handler';
 
 @Injectable()
 export class DoctorHandler {
@@ -18,15 +20,14 @@ export class DoctorHandler {
     private readonly availabilityService: AvailabilityService,
     private readonly botMessageService: BotMessageService,
     private readonly doctorService: DoctorService,
+    private readonly specialtyHandler: SpecialtyHandler,
+    private readonly idleHandler: IdleHandler,
   ) {}
 
   async handle(phone: string, text: string, session: Session): Promise<void> {
     if (!session.data.specialtyId) {
-      const msg = await this.botMessageService.get(
-        session.data.clinicId,
-        MessageKey.ERROR_MISSING_SPECIALTY,
-        {},
-        session.data.language,
+      const msg = await this.botMessageService.getSafe(
+        session.data.clinicId, MessageKey.ERROR_MISSING_SPECIALTY, {}, session.data.language, 'Missing specialty. Please start over.'
       );
       await this.whatsappService.sendText(phone, msg);
       await this.sessionsService.reset(phone);
@@ -53,14 +54,13 @@ export class DoctorHandler {
     const availableDates = await this.availabilityService.getAvailableDates(
       doctor.id,
       3,
+      new Date(),
+      session.data.timezone,
     );
 
     if (availableDates.length === 0) {
-      const message = await this.botMessageService.get(
-        session.data.clinicId,
-        MessageKey.NO_SLOTS_AVAILABLE,
-        {},
-        session.data.language,
+      const message = await this.botMessageService.getSafe(
+        session.data.clinicId, MessageKey.NO_SLOTS_AVAILABLE, {}, session.data.language, 'No slots available.'
       );
       await this.whatsappService.sendText(phone, message);
       session.state = SessionState.BOOKING_DOCTOR;
@@ -69,11 +69,8 @@ export class DoctorHandler {
       return;
     }
 
-    const message = await this.botMessageService.get(
-      session.data.clinicId,
-      MessageKey.SELECT_DATE,
-      {},
-      session.data.language,
+    const message = await this.botMessageService.getSafe(
+      session.data.clinicId, MessageKey.SELECT_DATE, {}, session.data.language, 'Please choose a date:'
     );
 
     await this.whatsappService.sendButtons(
@@ -97,30 +94,28 @@ export class DoctorHandler {
     session: Session,
     doctors: Doctor[],
   ): Promise<void> {
+    // BUG 8: Empty doctors → specific message, escape to specialty list
     if (doctors.length === 0) {
-      const fallback = await this.botMessageService.get(
+      const message = await this.botMessageService.getSafe(
         session.data.clinicId,
-        MessageKey.FALLBACK,
+        MessageKey.NO_DOCTORS_FOR_SPECIALTY,
         {},
         session.data.language,
+        'No doctors are currently available for this specialty.',
       );
-      await this.whatsappService.sendText(phone, fallback);
+      await this.whatsappService.sendText(phone, message);
+      session.state = SessionState.BOOKING_SPECIALTY;
+      await this.sessionsService.save(session);
+      await this.specialtyHandler.showSpecialtyList(phone, session);
       return;
     }
 
-    // Re-fetch specialty label for the header
-    const message = await this.botMessageService.get(
-      session.data.clinicId,
-      MessageKey.SELECT_DOCTOR,
-      { specialty: '' },
-      session.data.language,
+    const message = await this.botMessageService.getSafe(
+      session.data.clinicId, MessageKey.SELECT_DOCTOR, { specialty: '' }, session.data.language, 'Here are the available doctors:'
     );
 
-    const headerDoctors = await this.botMessageService.get(
-      session.data.clinicId,
-      MessageKey.HEADER_DOCTORS,
-      {},
-      session.data.language,
+    const headerDoctors = await this.botMessageService.getSafe(
+      session.data.clinicId, MessageKey.HEADER_DOCTORS, {}, session.data.language, 'Doctors'
     );
 
     await this.whatsappService.sendInteractiveList(

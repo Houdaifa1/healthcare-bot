@@ -28,6 +28,41 @@ export class IdleHandler {
   ) {}
 
   async handle(phone: string, text: string, session: Session): Promise<void> {
+    // IMPROVEMENT A: Direct button ID routing — no AI needed
+    const lower = text.trim().toLowerCase();
+    if (lower === 'book_appointment') {
+      if (session.data.patientName) {
+        session.state = SessionState.BOOKING_SPECIALTY;
+        await this.sessionsService.save(session);
+        await this.specialtyHandler.showSpecialtyList(phone, session);
+      } else {
+        session.state = SessionState.AWAITING_NAME;
+        await this.sessionsService.save(session);
+        const message = await this.botMessageService.getSafe(
+          session.data.clinicId, MessageKey.ASK_NAME, {}, session.data.language, 'What is your name?'
+        );
+        await this.whatsappService.sendText(phone, message);
+      }
+      return;
+    }
+
+    if (lower === 'faq') {
+      session.state = SessionState.FAQ_BROWSING;
+      await this.sessionsService.save(session);
+      await this.faqHandler.showFaqPrompt(phone, session);
+      return;
+    }
+
+    if (lower === 'human_agent') {
+      await this.handoffHandler.handle(phone, text, session);
+      return;
+    }
+
+    if (lower === 'menu') {
+      await this.showWelcomeMenu(phone, session);
+      return;
+    }
+
     // ── Step 1: Detect language on first unconfirmed message ────────────────
     if (!session.data.languageConfirmed) {
       const detected = await this.languageDetectionService.detect(
@@ -38,14 +73,11 @@ export class IdleHandler {
       if (detected === null) {
         session.state = SessionState.LANGUAGE_SELECT;
         await this.sessionsService.save(session);
-        const message = await this.botMessageService.get(
-          session.data.clinicId,
-          MessageKey.LANGUAGE_PROMPT,
-          {},
-          session.data.language,
+        const message = await this.botMessageService.getSafe(
+          session.data.clinicId, MessageKey.LANGUAGE_PROMPT, {}, session.data.language, 'Choose your language:'
         );
-        const btnFr = await this.botMessageService.get(session.data.clinicId, MessageKey.BUTTON_FRENCH, {}, session.data.language);
-        const btnEn = await this.botMessageService.get(session.data.clinicId, MessageKey.BUTTON_ENGLISH, {}, session.data.language);
+        const btnFr = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_FRENCH, {}, session.data.language, 'Français');
+        const btnEn = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_ENGLISH, {}, session.data.language, 'English');
         await this.whatsappService.sendButtons(phone, message, [
           { id: 'lang_fr', title: btnFr },
           { id: 'lang_en', title: btnEn },
@@ -74,11 +106,8 @@ export class IdleHandler {
       } else {
         session.state = SessionState.AWAITING_NAME;
         await this.sessionsService.save(session);
-        const message = await this.botMessageService.get(
-          session.data.clinicId,
-          MessageKey.ASK_NAME,
-          {},
-          session.data.language,
+        const message = await this.botMessageService.getSafe(
+          session.data.clinicId, MessageKey.ASK_NAME, {}, session.data.language, 'What is your name?'
         );
         await this.whatsappService.sendText(phone, message);
       }
@@ -107,16 +136,17 @@ export class IdleHandler {
       select: { name: true },
     });
 
-    const message = await this.botMessageService.get(
+    const message = await this.botMessageService.getSafe(
       session.data.clinicId,
       MessageKey.WELCOME,
       { clinicName: clinic?.name ?? '' },
       session.data.language,
+      'Welcome! How can I help you?',
     );
 
-    const btnBook = await this.botMessageService.get(session.data.clinicId, MessageKey.BUTTON_BOOK_APP, {}, session.data.language);
-    const btnFaq = await this.botMessageService.get(session.data.clinicId, MessageKey.BUTTON_FAQ, {}, session.data.language);
-    const btnAgent = await this.botMessageService.get(session.data.clinicId, MessageKey.BUTTON_AGENT, {}, session.data.language);
+    const btnBook = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_BOOK_APP, {}, session.data.language, 'Book appointment');
+    const btnFaq = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_FAQ, {}, session.data.language, 'FAQ');
+    const btnAgent = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_AGENT, {}, session.data.language, 'Talk to agent');
     await this.whatsappService.sendButtons(phone, message, [
       { id: 'book_appointment', title: btnBook },
       { id: 'faq', title: btnFaq },

@@ -37,4 +37,10 @@ export class SpecialtyService {
       },
     });
   }
+
+  async findById(id: string, language: Language): Promise<Specialty | null> {
+    return this.prisma.specialty.findFirst({
+      where: { id, language, isActive: true },
+    });
+  }
 }

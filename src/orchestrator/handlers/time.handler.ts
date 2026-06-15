@@ -27,11 +27,8 @@ export class TimeHandler {
     const selectedDate = session.data.selectedDate;
 
     if (!doctorId || !specialtyId || !selectedDate) {
-      const msg = await this.botMessageService.get(
-        session.data.clinicId,
-        MessageKey.ERROR_MISSING_INFO,
-        {},
-        session.data.language,
+      const msg = await this.botMessageService.getSafe(
+        session.data.clinicId, MessageKey.ERROR_MISSING_INFO, {}, session.data.language, 'Missing information. Please start over.'
       );
       await this.whatsappService.sendText(phone, msg);
       await this.sessionsService.reset(phone);
@@ -51,42 +48,19 @@ export class TimeHandler {
 
     const doctor = await this.doctorService.findById(doctorId);
     if (!doctor) {
-      const msg = await this.botMessageService.get(
-        session.data.clinicId,
-        MessageKey.ERROR_DOCTOR_NOT_FOUND,
-        {},
-        session.data.language,
+      const msg = await this.botMessageService.getSafe(
+        session.data.clinicId, MessageKey.ERROR_DOCTOR_NOT_FOUND, {}, session.data.language, 'Doctor not found. Please start over.'
       );
       await this.whatsappService.sendText(phone, msg);
       await this.sessionsService.reset(phone);
       return;
     }
 
-    const specialties = await this.specialtyService.findActive(session.data.clinicId, session.data.language);
-    const matchedSpecialty = specialties.find((s) => s.id === specialtyId);
+    // BUG 11: Use findById instead of findActive + findBySlug (two queries)
+    const matchedSpecialty = await this.specialtyService.findById(specialtyId, session.data.language);
     if (!matchedSpecialty) {
-      const msg = await this.botMessageService.get(
-        session.data.clinicId,
-        MessageKey.ERROR_SPECIALTY_NOT_FOUND,
-        {},
-        session.data.language,
-      );
-      await this.whatsappService.sendText(phone, msg);
-      await this.sessionsService.reset(phone);
-      return;
-    }
-
-    const specialty = await this.specialtyService.findBySlug(
-      session.data.clinicId,
-      matchedSpecialty.slug,
-      session.data.language,
-    );
-    if (!specialty) {
-      const msg = await this.botMessageService.get(
-        session.data.clinicId,
-        MessageKey.ERROR_SPECIALTY_NOT_FOUND,
-        {},
-        session.data.language,
+      const msg = await this.botMessageService.getSafe(
+        session.data.clinicId, MessageKey.ERROR_SPECIALTY_NOT_FOUND, {}, session.data.language, 'Specialty not found. Please start over.'
       );
       await this.whatsappService.sendText(phone, msg);
       await this.sessionsService.reset(phone);
@@ -96,7 +70,7 @@ export class TimeHandler {
     // FIX: format ISO date as human-readable before passing to template
     const friendlyDate = this.formatDate(selectedDate, session.data.language);
 
-    const message = await this.botMessageService.get(
+    const message = await this.botMessageService.getSafe(
       session.data.clinicId,
       MessageKey.CONFIRM_BOOKING,
       {
@@ -104,22 +78,16 @@ export class TimeHandler {
         doctorName: doctor.name,
         date: friendlyDate,
         time,
-        specialty: specialty.label,
+        specialty: matchedSpecialty.label,
       },
       session.data.language,
     );
 
-    const btnConfirm = await this.botMessageService.get(
-      session.data.clinicId,
-      MessageKey.BUTTON_CONFIRM,
-      {},
-      session.data.language,
+    const btnConfirm = await this.botMessageService.getSafe(
+      session.data.clinicId, MessageKey.BUTTON_CONFIRM, {}, session.data.language, 'Confirm'
     );
-    const btnCancel = await this.botMessageService.get(
-      session.data.clinicId,
-      MessageKey.BUTTON_CANCEL,
-      {},
-      session.data.language,
+    const btnCancel = await this.botMessageService.getSafe(
+      session.data.clinicId, MessageKey.BUTTON_CANCEL, {}, session.data.language, 'Cancel'
     );
     await this.whatsappService.sendButtons(phone, message, [
       { id: 'confirm_yes', title: btnConfirm },
@@ -142,11 +110,8 @@ export class TimeHandler {
     const availableSlots = await this.availabilityService.getAvailableSlots(doctorId, date);
 
     if (availableSlots.length === 0) {
-      const message = await this.botMessageService.get(
-        session.data.clinicId,
-        MessageKey.NO_SLOTS_AVAILABLE,
-        {},
-        session.data.language,
+      const message = await this.botMessageService.getSafe(
+        session.data.clinicId, MessageKey.NO_SLOTS_AVAILABLE, {}, session.data.language, 'No slots available.'
       );
       await this.whatsappService.sendText(phone, message);
       session.state = SessionState.BOOKING_DATE;
@@ -154,15 +119,12 @@ export class TimeHandler {
       return;
     }
 
-    const message = await this.botMessageService.get(
-      session.data.clinicId,
-      MessageKey.SELECT_TIME,
-      {},
-      session.data.language,
+    const message = await this.botMessageService.getSafe(
+      session.data.clinicId, MessageKey.SELECT_TIME, {}, session.data.language, 'Please choose a time:'
     );
 
-    const header = await this.botMessageService.get(session.data.clinicId, MessageKey.HEADER_TIMES, {}, session.data.language);
-    const selectLabel = await this.botMessageService.get(session.data.clinicId, MessageKey.HEADER_SELECT_TIME, {}, session.data.language);
+    const header = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.HEADER_TIMES, {}, session.data.language, 'Available Times');
+    const selectLabel = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.HEADER_SELECT_TIME, {}, session.data.language, 'Select a time');
     await this.whatsappService.sendInteractiveList(
       phone,
       header,     // header text (e.g. "Créneaux disponibles")

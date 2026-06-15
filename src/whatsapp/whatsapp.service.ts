@@ -156,13 +156,21 @@ export class WhatsAppService {
       );
     }
 
-    const safeButtons = buttons.slice(0, 3).map((b) => ({
-      type:  'reply',
-      reply: {
-        id:    b.id.slice(0, 256),    // Meta limit: 256 chars
-        title: b.title.slice(0, 20),  // Meta limit: 20 chars
-      },
-    }));
+    const safeButtons = buttons.slice(0, 3).map((b) => {
+      // BUG 15: Log warning when button title is truncated
+      if (b.title.length > 20) {
+        this.logger.warn(
+          `Button "${b.id}" title "${b.title}" truncated. Fix value in DB.`,
+        );
+      }
+      return {
+        type:  'reply',
+        reply: {
+          id:    b.id.slice(0, 256),    // Meta limit: 256 chars
+          title: b.title.slice(0, 20),  // Meta limit: 20 chars
+        },
+      };
+    });
 
     await this.sendRaw({
       messaging_product: 'whatsapp',

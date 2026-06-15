@@ -18,8 +18,9 @@ export enum SessionState {
 
 export interface SessionData {
   clinicId: string;
-  language: Language; // detected on first message — FR or EN
-  languageConfirmed: boolean; // true once user has confirmed or chosen language
+  timezone: string;        // e.g. "Africa/Casablanca" — populated from clinic.timezone
+  language: Language;
+  languageConfirmed: boolean;
   patientName?: string;
   specialtyId?: string;
   doctorId?: string;
@@ -67,31 +68,32 @@ export class SessionsService {
     return `session:${phone}`;
   }
 
-  async getOrCreate(phone: string, clinicId: string, defaultLanguage: Language): Promise<SessionResult> {
+  async getOrCreate(phone: string, clinicId: string, defaultLanguage: Language, timezone: string): Promise<SessionResult> {
     const existing = await this.redis.get(this.key(phone));
 
     if (existing) {
       const session = JSON.parse(existing) as Session;
       // Basic migration if old structure exists
       if (!session.data) {
-        const fresh = this.createFreshSession(phone, clinicId, defaultLanguage);
+        const fresh = this.createFreshSession(phone, clinicId, defaultLanguage, timezone);
         await this.save(fresh);
         return { session: fresh, isNew: true };
       }
       return { session, isNew: false };
     }
 
-    const fresh = this.createFreshSession(phone, clinicId, defaultLanguage);
+    const fresh = this.createFreshSession(phone, clinicId, defaultLanguage, timezone);
     await this.save(fresh);
     return { session: fresh, isNew: true };
   }
 
-  private createFreshSession(phone: string, clinicId: string, defaultLanguage: Language): Session {
+  private createFreshSession(phone: string, clinicId: string, defaultLanguage: Language, timezone: string): Session {
     const fresh: Session = {
       phone,
       state: SessionState.IDLE,
       data: {
         clinicId,
+        timezone,
         language: defaultLanguage,
         languageConfirmed: false,
       },
@@ -114,7 +116,19 @@ export class SessionsService {
     const existing = await this.redis.get(this.key(phone));
     if (existing) {
       const parsed = JSON.parse(existing) as Session;
-      const fresh = this.createFreshSession(phone, parsed.data.clinicId, parsed.data.language);
+      // Preserve language, languageConfirmed, clinicId, timezone
+      // Reset only booking fields
+      const fresh: Session = {
+        phone,
+        state: SessionState.IDLE,
+        data: {
+          clinicId: parsed.data.clinicId,
+          timezone: parsed.data.timezone,
+          language: parsed.data.language,
+          languageConfirmed: parsed.data.languageConfirmed,
+        },
+        updatedAt: Date.now(),
+      };
       await this.save(fresh);
     }
   }

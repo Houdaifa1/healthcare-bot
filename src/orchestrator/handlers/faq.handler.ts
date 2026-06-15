@@ -31,9 +31,9 @@ export class FaqHandler {
     const faqs = await this.faqService.findActive(clinicId, lang);
 
     if (faqs.length === 0) {
-      const message = await this.botMessageService.get(clinicId, MessageKey.FAQ_NOT_FOUND, {}, lang);
-      const btnAgent = await this.botMessageService.get(clinicId, MessageKey.BUTTON_AGENT, {}, lang);
-      const btnMenu = await this.botMessageService.get(clinicId, MessageKey.BUTTON_MENU, {}, lang);
+      const message = await this.botMessageService.getSafe(clinicId, MessageKey.FAQ_NOT_FOUND, {}, lang, 'No FAQs available.');
+      const btnAgent = await this.botMessageService.getSafe(clinicId, MessageKey.BUTTON_AGENT, {}, lang, 'Talk to agent');
+      const btnMenu = await this.botMessageService.getSafe(clinicId, MessageKey.BUTTON_MENU, {}, lang, 'Menu');
       await this.whatsappService.sendButtons(phone, message, [
         { id: 'human_agent', title: btnAgent },
         { id: 'menu', title: btnMenu },
@@ -41,8 +41,8 @@ export class FaqHandler {
       return;
     }
 
-    const intro = await this.botMessageService.get(clinicId, MessageKey.FAQ_INTRO, {}, lang);
-    const prompt = await this.botMessageService.get(clinicId, MessageKey.FAQ_LIST_PROMPT, {}, lang);
+    const intro = await this.botMessageService.getSafe(clinicId, MessageKey.FAQ_INTRO, {}, lang, 'Here are the FAQs:');
+    const prompt = await this.botMessageService.getSafe(clinicId, MessageKey.FAQ_LIST_PROMPT, {}, lang, 'Type a number or your question:');
 
     // Send intro text first
     await this.whatsappService.sendText(phone, intro);
@@ -51,8 +51,8 @@ export class FaqHandler {
     const faqLines = faqs.map((f, i) => `${i + 1}. ${f.question}`).join('\n');
     const numberedList = `${faqLines}\n\n${prompt}`;
 
-    const btnMenu = await this.botMessageService.get(clinicId, MessageKey.BUTTON_MENU, {}, lang);
-    const btnAgent = await this.botMessageService.get(clinicId, MessageKey.BUTTON_AGENT, {}, lang);
+    const btnMenu = await this.botMessageService.getSafe(clinicId, MessageKey.BUTTON_MENU, {}, lang, 'Menu');
+    const btnAgent = await this.botMessageService.getSafe(clinicId, MessageKey.BUTTON_AGENT, {}, lang, 'Talk to agent');
     await this.whatsappService.sendButtons(phone, numberedList, [
       { id: 'menu', title: btnMenu },
       { id: 'human_agent', title: btnAgent },
@@ -67,8 +67,12 @@ export class FaqHandler {
     const clinicId = session.data.clinicId;
     const trimmed = text.trim().toLowerCase();
 
-    // ── Escape checks — user must never be trapped in FAQ state ───────────
-    if (trimmed === 'menu' || trimmed === '↩️ menu principal' || trimmed === 'main menu' || trimmed === '↩️ main menu') {
+    // BUG 5: Remove all display-string escape checks. Keep only button IDs.
+    if (trimmed === 'menu' || trimmed === 'human_agent' || trimmed === 'book_appointment') {
+      if (trimmed === 'human_agent') {
+        await this.goToHandoff(phone, session, text);
+        return;
+      }
       await this.goToMainMenu(phone, session);
       return;
     }
@@ -115,10 +119,27 @@ export class FaqHandler {
       return;
     }
 
+    // IMPROVEMENT B: Semantic AI matching before "not found"
+    const allFaqs = await this.faqService.findActive(clinicId, lang);
+    if (allFaqs.length > 0) {
+      const aiFaqId = await this.aiService.matchFaq(
+        text,
+        allFaqs.map((f) => ({ id: f.id, question: f.question })),
+        lang,
+      );
+      if (aiFaqId) {
+        const matchedFaq = allFaqs.find((f) => f.id === aiFaqId);
+        if (matchedFaq) {
+          await this.sendFaqAnswer(phone, session, matchedFaq.answer);
+          return;
+        }
+      }
+    }
+
     // ── No match found — show buttons with escape options ─────────────────
-    const notFound = await this.botMessageService.get(clinicId, MessageKey.FAQ_NOT_FOUND, {}, lang);
-    const btnAgent = await this.botMessageService.get(clinicId, MessageKey.BUTTON_AGENT, {}, lang);
-    const btnMenu = await this.botMessageService.get(clinicId, MessageKey.BUTTON_MENU, {}, lang);
+    const notFound = await this.botMessageService.getSafe(clinicId, MessageKey.FAQ_NOT_FOUND, {}, lang, 'I could not find an answer.');
+    const btnAgent = await this.botMessageService.getSafe(clinicId, MessageKey.BUTTON_AGENT, {}, lang, 'Talk to agent');
+    const btnMenu = await this.botMessageService.getSafe(clinicId, MessageKey.BUTTON_MENU, {}, lang, 'Menu');
     await this.whatsappService.sendButtons(phone, notFound, [
       { id: 'human_agent', title: btnAgent },
       { id: 'menu', title: btnMenu },
@@ -131,9 +152,9 @@ export class FaqHandler {
     // Show follow-up with DB-driven button labels
     const lang = session.data.language;
     const clinicId = session.data.clinicId;
-    const followUp = await this.botMessageService.get(clinicId, MessageKey.FAQ_FOLLOW_UP, {}, lang);
-    const btnAgent = await this.botMessageService.get(clinicId, MessageKey.BUTTON_AGENT, {}, lang);
-    const btnMenu = await this.botMessageService.get(clinicId, MessageKey.BUTTON_MENU, {}, lang);
+    const followUp = await this.botMessageService.getSafe(clinicId, MessageKey.FAQ_FOLLOW_UP, {}, lang, 'Anything else?');
+    const btnAgent = await this.botMessageService.getSafe(clinicId, MessageKey.BUTTON_AGENT, {}, lang, 'Talk to agent');
+    const btnMenu = await this.botMessageService.getSafe(clinicId, MessageKey.BUTTON_MENU, {}, lang, 'Menu');
     await this.whatsappService.sendButtons(phone, followUp, [
       { id: 'human_agent', title: btnAgent },
       { id: 'menu', title: btnMenu },
@@ -153,10 +174,10 @@ export class FaqHandler {
       select: { name: true },
     });
 
-    const message = await this.botMessageService.get(clinicId, MessageKey.WELCOME, { clinicName: clinic?.name ?? '' }, lang);
-    const btnBook = await this.botMessageService.get(clinicId, MessageKey.BUTTON_BOOK_APP, {}, lang);
-    const btnFaq = await this.botMessageService.get(clinicId, MessageKey.BUTTON_FAQ, {}, lang);
-    const btnAgent = await this.botMessageService.get(clinicId, MessageKey.BUTTON_AGENT, {}, lang);
+    const message = await this.botMessageService.getSafe(clinicId, MessageKey.WELCOME, { clinicName: clinic?.name ?? '' }, lang, 'Welcome!');
+    const btnBook = await this.botMessageService.getSafe(clinicId, MessageKey.BUTTON_BOOK_APP, {}, lang, 'Book appointment');
+    const btnFaq = await this.botMessageService.getSafe(clinicId, MessageKey.BUTTON_FAQ, {}, lang, 'FAQ');
+    const btnAgent = await this.botMessageService.getSafe(clinicId, MessageKey.BUTTON_AGENT, {}, lang, 'Talk to agent');
     await this.whatsappService.sendButtons(phone, message, [
       { id: 'book_appointment', title: btnBook },
       { id: 'faq', title: btnFaq },
@@ -167,7 +188,7 @@ export class FaqHandler {
   private async goToHandoff(phone: string, session: Session, text: string): Promise<void> {
     session.state = SessionState.AWAITING_HANDOFF;
     await this.sessionsService.save(session);
-    const message = await this.botMessageService.get(session.data.clinicId, MessageKey.HANDOFF_TRIGGERED, {}, session.data.language);
+    const message = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.HANDOFF_TRIGGERED, {}, session.data.language, 'Connecting you with an agent.');
     await this.whatsappService.sendText(phone, message);
   }
 }

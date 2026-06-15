@@ -56,11 +56,8 @@ export class ConfirmHandler {
       !session.data.selectedDate ||
       !session.data.selectedTime
     ) {
-      const msg = await this.botMessageService.get(
-        session.data.clinicId,
-        MessageKey.ERROR_MISSING_INFO,
-        {},
-        session.data.language,
+      const msg = await this.botMessageService.getSafe(
+        session.data.clinicId, MessageKey.ERROR_MISSING_INFO, {}, session.data.language, 'Missing information. Please start over.'
       );
       await this.whatsappService.sendText(phone, msg);
       await this.sessionsService.reset(phone);
@@ -81,11 +78,8 @@ export class ConfirmHandler {
 
     const doctor = await this.doctorService.findById(session.data.doctorId);
     if (!doctor) {
-      const msg = await this.botMessageService.get(
-        session.data.clinicId,
-        MessageKey.ERROR_DOCTOR_NOT_FOUND,
-        {},
-        session.data.language,
+      const msg = await this.botMessageService.getSafe(
+        session.data.clinicId, MessageKey.ERROR_DOCTOR_NOT_FOUND, {}, session.data.language, 'Doctor not found. Please start over.'
       );
       await this.whatsappService.sendText(phone, msg);
       await this.sessionsService.reset(phone);
@@ -95,7 +89,7 @@ export class ConfirmHandler {
     // FIX: format date as human-readable
     const friendlyDate = this.formatDate(session.data.selectedDate, session.data.language);
 
-    const message = await this.botMessageService.get(
+    const message = await this.botMessageService.getSafe(
       session.data.clinicId,
       MessageKey.BOOKING_SUCCESS,
       {
@@ -110,11 +104,8 @@ export class ConfirmHandler {
   }
 
   private async processCancellation(phone: string, session: Session): Promise<void> {
-    const message = await this.botMessageService.get(
-      session.data.clinicId,
-      MessageKey.BOOKING_CANCELLED,
-      {},
-      session.data.language,
+    const message = await this.botMessageService.getSafe(
+      session.data.clinicId, MessageKey.BOOKING_CANCELLED, {}, session.data.language, 'Appointment cancelled.'
     );
     await this.whatsappService.sendText(phone, message);
     await this.sessionsService.reset(phone);
@@ -135,7 +126,7 @@ export class ConfirmHandler {
     // FIX: format date as human-readable
     const friendlyDate = this.formatDate(session.data.selectedDate, session.data.language);
 
-    const message = await this.botMessageService.get(
+    const message = await this.botMessageService.getSafe(
       session.data.clinicId,
       MessageKey.CONFIRM_BOOKING,
       {
@@ -148,8 +139,8 @@ export class ConfirmHandler {
       session.data.language,
     );
 
-    const btnConfirm = await this.botMessageService.get(session.data.clinicId, MessageKey.BUTTON_CONFIRM, {}, session.data.language);
-    const btnCancel = await this.botMessageService.get(session.data.clinicId, MessageKey.BUTTON_CANCEL, {}, session.data.language);
+    const btnConfirm = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_CONFIRM, {}, session.data.language, 'Confirm');
+    const btnCancel = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_CANCEL, {}, session.data.language, 'Cancel');
     await this.whatsappService.sendButtons(phone, message, [
       { id: 'confirm_yes', title: btnConfirm },
       { id: 'confirm_no', title: btnCancel },

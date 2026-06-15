@@ -7,6 +7,7 @@ import { DoctorService } from '../../bot-content/doctor.service';
 import { BotMessageService } from '../../bot-content/bot-message.service';
 import { MessageKey } from '@prisma/client';
 import { Specialty } from '@prisma/client';
+import { IdleHandler } from './idle.handler';
 
 @Injectable()
 export class SpecialtyHandler {
@@ -16,6 +17,7 @@ export class SpecialtyHandler {
     private readonly specialtyService: SpecialtyService,
     private readonly doctorService: DoctorService,
     private readonly botMessageService: BotMessageService,
+    private readonly idleHandler: IdleHandler,
   ) {}
 
   /**
@@ -29,26 +31,29 @@ export class SpecialtyHandler {
     );
 
     if (specialties.length === 0) {
-      const fallback = await this.botMessageService.get(
+      const message = await this.botMessageService.getSafe(
         session.data.clinicId,
-        MessageKey.FALLBACK,
+        MessageKey.NO_SPECIALTIES_AVAILABLE,
         {},
         session.data.language,
+        'No specialties are available right now.',
       );
-      await this.whatsappService.sendText(phone, fallback);
+      await this.whatsappService.sendText(phone, message);
       session.state = SessionState.IDLE;
       await this.sessionsService.save(session);
+      await this.idleHandler.showWelcomeMenu(phone, session);
       return;
     }
 
-    const message = await this.botMessageService.get(
+    const message = await this.botMessageService.getSafe(
       session.data.clinicId,
       MessageKey.SELECT_SPECIALTY,
       {},
       session.data.language,
+      'Please choose your specialty:',
     );
 
-    const header = await this.botMessageService.get(session.data.clinicId, MessageKey.HEADER_SPECIALTIES, {}, session.data.language);
+    const header = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.HEADER_SPECIALTIES, {}, session.data.language, 'Specialties');
     await this.whatsappService.sendInteractiveList(
       phone,
       header,     // header text (e.g. "Spécialités" / "Specialties")
@@ -77,15 +82,17 @@ export class SpecialtyHandler {
     );
 
     if (specialties.length === 0) {
-      const fallback = await this.botMessageService.get(
+      const message = await this.botMessageService.getSafe(
         session.data.clinicId,
-        MessageKey.FALLBACK,
+        MessageKey.NO_SPECIALTIES_AVAILABLE,
         {},
         session.data.language,
+        'No specialties are available right now.',
       );
-      await this.whatsappService.sendText(phone, fallback);
+      await this.whatsappService.sendText(phone, message);
       session.state = SessionState.IDLE;
       await this.sessionsService.save(session);
+      await this.idleHandler.showWelcomeMenu(phone, session);
       return;
     }
 
@@ -100,38 +107,42 @@ export class SpecialtyHandler {
     session.data.specialtyId = specialty.id;
     session.state = SessionState.BOOKING_DOCTOR;
     await this.sessionsService.save(session);
-
+  
     const doctors = await this.doctorService.findBySpecialty(
       session.data.clinicId,
       specialty.id,
     );
 
+    // BUG 7: No doctors for specialty → send specific message, go to IDLE, show menu
     if (doctors.length === 0) {
-      const fallback = await this.botMessageService.get(
+      const message = await this.botMessageService.getSafe(
         session.data.clinicId,
-        MessageKey.FALLBACK,
+        MessageKey.NO_DOCTORS_FOR_SPECIALTY,
         {},
         session.data.language,
+        'No doctors are currently available for this specialty.',
       );
-      await this.whatsappService.sendText(phone, fallback);
-      session.state = SessionState.BOOKING_SPECIALTY;
+      await this.whatsappService.sendText(phone, message);
+      session.state = SessionState.IDLE;
       await this.sessionsService.save(session);
-      await this.showSpecialtyList(phone, session);
+      await this.idleHandler.showWelcomeMenu(phone, session);
       return;
     }
 
-    const message = await this.botMessageService.get(
+    const message = await this.botMessageService.getSafe(
       session.data.clinicId,
       MessageKey.SELECT_DOCTOR,
       { specialty: specialty.label },
       session.data.language,
+      'Here are the available doctors:',
     );
 
-    const headerDoctors = await this.botMessageService.get(
+    const headerDoctors = await this.botMessageService.getSafe(
       session.data.clinicId,
       MessageKey.HEADER_DOCTORS,
       {},
       session.data.language,
+      'Doctors',
     );
 
     await this.whatsappService.sendInteractiveList(

@@ -34,5 +34,8 @@
   { "key": "HEADER_SPECIALTIES", "language": "FR", "body": "Spécialités" },
   { "key": "HEADER_DOCTORS",     "language": "FR", "body": "Médecins" },
   { "key": "HEADER_TIMES",       "language": "FR", "body": "Créneaux disponibles" },
-  { "key": "HEADER_SELECT_TIME", "language": "FR", "body": "Choisissez un créneau" }
+  { "key": "HEADER_SELECT_TIME", "language": "FR", "body": "Choisissez un créneau" },
+  { "key": "NO_DOCTORS_FOR_SPECIALTY", "language": "FR", "body": "Aucun médecin n'est disponible pour cette spécialité en ce moment." },
+  { "key": "NO_SPECIALTIES_AVAILABLE", "language": "FR", "body": "Aucune spécialité n'est disponible pour le moment." },
+  { "key": "HANDOFF_WAITING",    "language": "FR", "body": "Un agent va vous contacter. Tapez sur le bouton pour revenir au menu." }
 ]

@@ -24,7 +24,6 @@ export class TimeHandler {
   async handle(phone: string, text: string, session: Session): Promise<void> {
     const trimmed = text.trim().toLowerCase();
 
-    // Allow returning to main menu from any booking step
     if (trimmed === 'menu') {
       session.state = SessionState.IDLE;
       await this.sessionsService.save(session);
@@ -65,7 +64,6 @@ export class TimeHandler {
       return;
     }
 
-    // BUG 11: Use findById instead of findActive + findBySlug (two queries)
     const matchedSpecialty = await this.specialtyService.findById(specialtyId, session.data.language);
     if (!matchedSpecialty) {
       const msg = await this.botMessageService.getSafe(
@@ -76,7 +74,6 @@ export class TimeHandler {
       return;
     }
 
-    // FIX: format ISO date as human-readable before passing to template
     const friendlyDate = this.formatDate(selectedDate, session.data.language);
 
     const message = await this.botMessageService.getSafe(
@@ -132,19 +129,36 @@ export class TimeHandler {
       session.data.clinicId, MessageKey.SELECT_TIME, {}, session.data.language, 'Please choose a time:'
     );
 
-    const header = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.HEADER_TIMES, {}, session.data.language, 'Available Times');
-    const selectLabel = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.HEADER_SELECT_TIME, {}, session.data.language, 'Select a time');
+    const header = await this.botMessageService.getSafe(
+      session.data.clinicId, MessageKey.HEADER_TIMES, {}, session.data.language, 'Available Times'
+    );
+    const selectLabel = await this.botMessageService.getSafe(
+      session.data.clinicId, MessageKey.HEADER_SELECT_TIME, {}, session.data.language, 'Select a time'
+    );
+
+    // WhatsApp allows max 10 rows per section and max 10 sections = 100 slots max.
+    // Split availableSlots into chunks of 10, each chunk becomes one section.
+    const CHUNK_SIZE = 10;
+    const sections = [];
+    for (let i = 0; i < availableSlots.length; i += CHUNK_SIZE) {
+      const chunk = availableSlots.slice(i, i + CHUNK_SIZE);
+      const from = chunk[0];
+      const to = chunk[chunk.length - 1];
+      sections.push({
+        title: `${from} – ${to}`, // e.g. "09:00 – 13:30"
+        rows: chunk.map((t) => ({ id: `time_${t}`, title: t })),
+      });
+    }
+
+    // Cap at 10 sections (100 slots total — more than enough for any clinic)
+    const safeSections = sections.slice(0, 10);
+
     await this.whatsappService.sendInteractiveList(
       phone,
-      header,     // header text (e.g. "Créneaux disponibles")
-      message,    // body text (e.g. "Choisissez un créneau horaire :")
-      selectLabel, // button label (e.g. "Choisissez un créneau")
-      [
-        {
-          title: '',
-          rows: availableSlots.map((t) => ({ id: `time_${t}`, title: t })),
-        },
-      ],
+      header,
+      message,
+      selectLabel,
+      safeSections,
     );
   }
 

@@ -15,6 +15,7 @@ export class AppointmentsService {
 
   const doctor = await this.prisma.doctor.findFirst({
     where: { id: doctorId, clinicId },
+    select: { id: true, name: true, specialtyId: true },
   });
 
   if (!doctor) {
@@ -56,6 +57,7 @@ export class AppointmentsService {
       ...dto,
       clinicId,
       appointmentDate: date,
+      doctorName: doctor.name, // Preserve doctor name for records
     },
   });
 }

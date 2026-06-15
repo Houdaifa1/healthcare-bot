@@ -50,8 +50,21 @@ export class DoctorsController {
     return this.doctorsService.remove(id, user.clinicId);
   }
 
-  @Delete(':id/hard')
-  hardRemove(@CurrentUser() user: AuthUser, @Param('id') id: string) {
-    return this.doctorsService.hardRemove(id, user.clinicId);
+  /**
+   * Confirm deletion with optional WhatsApp notifications.
+   * Body: { notify: boolean, customMessage?: string }
+   */
+  @Delete(':id/confirm')
+  confirmDelete(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body() body: { notify: boolean; customMessage?: string },
+  ) {
+    return this.doctorsService.confirmDelete(
+      id,
+      user.clinicId,
+      body.notify ?? false,
+      body.customMessage,
+    );
   }
 }

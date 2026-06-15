@@ -23,33 +23,35 @@ export class DoctorsController {
 
   @Post()
   create(@CurrentUser() user: AuthUser, @Body() dto: CreateDoctorDto) {
-  return this.doctorsService.create(user.clinicId, dto);
-}
+    return this.doctorsService.create(user.clinicId, dto);
+  }
 
   @Get()
   findAll(@CurrentUser() user: AuthUser, @Query() query: any) {
-  return this.doctorsService.findAll(
-    user.clinicId,
-    query.specialtyId,
-    query.isActive ? query.isActive === 'true' : undefined,
-  );
-}
-@Patch(':id')
-update(
-  @CurrentUser() user: AuthUser,
-  @Param('id') id: string,
-  @Body() dto: UpdateDoctorDto,
-) {
-  return this.doctorsService.update(id, user.clinicId, dto);
-}
+    return this.doctorsService.findAll(
+      user.clinicId,
+      query.specialtyId,
+      // Default: return ALL (active + inactive) so dashboard shows deactivated doctors
+      query.isActive !== undefined ? query.isActive === 'true' : undefined,
+    );
+  }
+
+  @Patch(':id')
+  update(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body() dto: UpdateDoctorDto,
+  ) {
+    return this.doctorsService.update(id, user.clinicId, dto);
+  }
 
   @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.doctorsService.remove(id);
+  remove(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.doctorsService.remove(id, user.clinicId);
   }
 
   @Delete(':id/hard')
-  hardRemove(@Param('id') id: string) {
-    return this.doctorsService.hardRemove(id);
+  hardRemove(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.doctorsService.hardRemove(id, user.clinicId);
   }
 }

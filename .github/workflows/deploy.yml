@@ -56,53 +56,35 @@ jobs:
             redis-cli ping | grep -q PONG && echo "✅ Redis is up" || { echo "❌ Redis failed"; exit 1; }
 
             # ── Pull latest image ─────────────────────────────────────────
-            echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
             docker pull "$IMAGE"
 
-            # ── Check for stuck failed migrations and resolve them ────────
-            echo "▶ Checking for failed migrations..."
-            FAILED=$(docker run --rm \
+            # ── Resolve any stuck/failed migrations via Prisma CLI ────────
+            # This reads _prisma_migrations and marks failed ones as rolled-back
+            # so migrate deploy can re-apply them cleanly.
+            echo "▶ Resolving any stuck migrations..."
+            docker run --rm \
               --network host \
               --env-file "$ENV_FILE" \
-              --entrypoint sh \
               "$IMAGE" \
-              -c 'node -e "
-const { PrismaClient } = require(\"@prisma/client\");
-const p = new PrismaClient();
-p.\$queryRaw\`
-  SELECT migration_name FROM _prisma_migrations
-  WHERE finished_at IS NULL AND rolled_back_at IS NULL
-\`.then(rows => {
-  console.log(JSON.stringify(rows.map(r => r.migration_name)));
-  return p.\$disconnect();
-}).catch(() => { console.log(\"[]\"); process.exit(0); });
-"' 2>/dev/null || echo "[]")
-
-            if [ "$FAILED" != "[]" ] && [ -n "$FAILED" ]; then
-              echo "⚠️  Found stuck migrations: $FAILED — marking as rolled back..."
-              docker run --rm \
-                --network host \
-                --env-file "$ENV_FILE" \
-                --entrypoint sh \
-                "$IMAGE" \
-                -c 'node -e "
-const { PrismaClient } = require(\"@prisma/client\");
-const p = new PrismaClient();
-p.\$executeRaw\`
-  DELETE FROM _prisma_migrations
-  WHERE finished_at IS NULL AND rolled_back_at IS NULL
-\`.then(n => {
-  console.log(\"Cleared \" + n + \" stuck migration(s)\");
-  return p.\$disconnect();
-}).catch(e => { console.error(e); process.exit(1); });
-"'
-              echo "✅ Stuck migrations cleared"
-            else
-              echo "✅ No stuck migrations"
-            fi
+              sh -c "
+                set -e
+                # Get names of failed migrations (finished_at IS NULL means failed/stuck)
+                FAILED=\$(npx prisma migrate status 2>&1 | grep 'Following migration' -A 999 | grep '^\s*[0-9]' | awk '{print \$1}' || true)
+                if [ -n \"\$FAILED\" ]; then
+                  echo \"Found stuck migrations: \$FAILED\"
+                  for m in \$FAILED; do
+                    echo \"Marking \$m as rolled back...\"
+                    npx prisma migrate resolve --rolled-back \"\$m\" || true
+                  done
+                  echo '✅ Stuck migrations resolved'
+                else
+                  echo '✅ No stuck migrations'
+                fi
+              "
 
             # ── Run migrations BEFORE swapping the container ──────────────
-            echo "▶ Running migrations..."
+            echo "▶ Running prisma migrate deploy..."
             docker run --rm \
               --network host \
               --env-file "$ENV_FILE" \
@@ -111,7 +93,7 @@ p.\$executeRaw\`
             echo "✅ Migrations applied"
 
             # ── Flush session keys ────────────────────────────────────────
-            SESSION_KEYS=$(redis-cli --scan --pattern "session:*" 2>/dev/null | wc -l)
+            SESSION_KEYS=$(redis-cli --scan --pattern "session:*" 2>/dev/null | wc -l || echo "0")
             if [ "$SESSION_KEYS" -gt "0" ]; then
               redis-cli --scan --pattern "session:*" | xargs -r redis-cli UNLINK
               echo "✅ Flushed $SESSION_KEYS Redis session key(s)"
@@ -134,5 +116,11 @@ p.\$executeRaw\`
             # ── Verify ────────────────────────────────────────────────────
             echo "▶ Waiting for container to start..."
             sleep 10
-            docker ps | grep healthcare-bot && echo "✅ Deployment successful" || { echo "❌ Container not running"; docker logs healthcare-bot --tail 50; exit 1; }
+            if docker ps | grep -q healthcare-bot; then
+              echo "✅ Deployment successful"
+            else
+              echo "❌ Container not running"
+              docker logs healthcare-bot --tail 50
+              exit 1
+            fi
             docker logs healthcare-bot --tail 20

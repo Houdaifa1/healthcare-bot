@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { Session, SessionState } from '../../sessions/sessions.service';
 import { WhatsAppService } from '../../whatsapp/whatsapp.service';
 import { SessionsService } from '../../sessions/sessions.service';
@@ -10,8 +10,19 @@ import { AvailabilityService } from '../../bot-content/availability.service';
 import { format, parseISO } from 'date-fns';
 import { fr } from 'date-fns/locale';
 
+// Meta interactive list hard limits
+const META_MAX_SECTIONS      = 10;
+const META_MAX_ROWS_PER_SECTION = 10;
+// 10 sections × 10 rows = 100 slots max displayable in one list message
+const META_MAX_DISPLAYABLE_SLOTS = META_MAX_SECTIONS * META_MAX_ROWS_PER_SECTION;
+// Section title limit is 24 chars — keep generated titles well under this
+// Worst case: "P10/10: 09:00-17:30" = 19 chars ✅
+const SECTION_TITLE_MAX = 24;
+
 @Injectable()
 export class TimeHandler {
+  private readonly logger = new Logger(TimeHandler.name);
+
   constructor(
     private readonly whatsappService: WhatsAppService,
     private readonly sessionsService: SessionsService,
@@ -30,13 +41,11 @@ export class TimeHandler {
       return;
     }
 
-    const doctorId = session.data.doctorId;
-    const specialtyId = session.data.specialtyId;
-    const selectedDate = session.data.selectedDate;
+    const { doctorId, specialtyId, selectedDate, clinicId, language } = session.data;
 
     if (!doctorId || !specialtyId || !selectedDate) {
       const msg = await this.botMessageService.getSafe(
-        session.data.clinicId, MessageKey.ERROR_MISSING_INFO, {}, session.data.language, 'Missing information. Please start over.'
+        clinicId, MessageKey.ERROR_MISSING_INFO, {}, language, 'Missing information. Please start over.',
       );
       await this.whatsappService.sendText(phone, msg);
       await this.sessionsService.reset(phone);
@@ -57,49 +66,189 @@ export class TimeHandler {
     const doctor = await this.doctorService.findById(doctorId);
     if (!doctor) {
       const msg = await this.botMessageService.getSafe(
-        session.data.clinicId, MessageKey.ERROR_DOCTOR_NOT_FOUND, {}, session.data.language, 'Doctor not found. Please start over.'
+        clinicId, MessageKey.ERROR_DOCTOR_NOT_FOUND, {}, language, 'Doctor not found. Please start over.',
       );
       await this.whatsappService.sendText(phone, msg);
       await this.sessionsService.reset(phone);
       return;
     }
 
-    const matchedSpecialty = await this.specialtyService.findById(specialtyId, session.data.language);
+    const matchedSpecialty = await this.specialtyService.findById(specialtyId, language);
     if (!matchedSpecialty) {
       const msg = await this.botMessageService.getSafe(
-        session.data.clinicId, MessageKey.ERROR_SPECIALTY_NOT_FOUND, {}, session.data.language, 'Specialty not found. Please start over.'
+        clinicId, MessageKey.ERROR_SPECIALTY_NOT_FOUND, {}, language, 'Specialty not found. Please start over.',
       );
       await this.whatsappService.sendText(phone, msg);
       await this.sessionsService.reset(phone);
       return;
     }
 
-    const friendlyDate = this.formatDate(selectedDate, session.data.language);
+    const friendlyDate = this.formatDate(selectedDate, language);
+    const specialtyLabels = matchedSpecialty.labels as Record<string, string>;
 
     const message = await this.botMessageService.getSafe(
-      session.data.clinicId,
+      clinicId,
       MessageKey.CONFIRM_BOOKING,
       {
         patientName: session.data.patientName ?? '',
-        doctorName: doctor.name,
-        date: friendlyDate,
+        doctorName:  doctor.name,
+        date:        friendlyDate,
         time,
-        specialty: (matchedSpecialty.labels as Record<string, string>)?.[session.data.language] ?? (matchedSpecialty.labels as Record<string, string>)?.['FR'] ?? matchedSpecialty.slug,
+        specialty:   specialtyLabels?.[language] ?? specialtyLabels?.['FR'] ?? matchedSpecialty.slug,
       },
-      session.data.language,
+      language,
     );
 
-    const btnConfirm = await this.botMessageService.getSafe(
-      session.data.clinicId, MessageKey.BUTTON_CONFIRM, {}, session.data.language, 'Confirm'
-    );
-    const btnCancel = await this.botMessageService.getSafe(
-      session.data.clinicId, MessageKey.BUTTON_CANCEL, {}, session.data.language, 'Cancel'
-    );
+    const [btnConfirm, btnCancel] = await Promise.all([
+      this.botMessageService.getSafe(clinicId, MessageKey.BUTTON_CONFIRM, {}, language, 'Confirm'),
+      this.botMessageService.getSafe(clinicId, MessageKey.BUTTON_CANCEL,  {}, language, 'Cancel'),
+    ]);
+
     await this.whatsappService.sendButtons(phone, message, [
       { id: 'confirm_yes', title: btnConfirm },
-      { id: 'confirm_no', title: btnCancel },
+      { id: 'confirm_no',  title: btnCancel  },
     ]);
   }
+
+  // ─── Time list display ────────────────────────────────────────────────────
+
+  private async showTimeList(
+    phone:    string,
+    session:  Session,
+    doctorId: string,
+    date:     string,
+  ): Promise<void> {
+    const { clinicId, language } = session.data;
+
+    const allSlots = await this.availabilityService.getAvailableSlots(doctorId, date);
+
+    this.logger.log(
+      `[TimeHandler] slots for doctor=${doctorId} date=${date}: ${allSlots.length}` +
+      (allSlots.length > 0 ? ` [${allSlots[0]} – ${allSlots[allSlots.length - 1]}]` : ''),
+    );
+
+    if (allSlots.length === 0) {
+      const message = await this.botMessageService.getSafe(
+        clinicId, MessageKey.NO_SLOTS_AVAILABLE, {}, language, 'No slots available.',
+      );
+      await this.whatsappService.sendText(phone, message);
+      session.state = SessionState.BOOKING_DATE;
+      await this.sessionsService.save(session);
+      return;
+    }
+
+    if (allSlots.length > META_MAX_DISPLAYABLE_SLOTS) {
+      this.logger.warn(
+        `[TimeHandler] ${allSlots.length} slots exceeds Meta cap (${META_MAX_DISPLAYABLE_SLOTS}). ` +
+        `Only first ${META_MAX_DISPLAYABLE_SLOTS} will be shown for doctor=${doctorId} date=${date}.`,
+      );
+    }
+
+    const displaySlots = allSlots.slice(0, META_MAX_DISPLAYABLE_SLOTS);
+
+    const [message, header, selectLabel] = await Promise.all([
+      this.botMessageService.getSafe(clinicId, MessageKey.SELECT_TIME,        {}, language, 'Please choose a time:'),
+      this.botMessageService.getSafe(clinicId, MessageKey.HEADER_TIMES,       {}, language, 'Available Times'),
+      this.botMessageService.getSafe(clinicId, MessageKey.HEADER_SELECT_TIME, {}, language, 'Select a time'),
+    ]);
+
+    const totalPages = Math.ceil(displaySlots.length / META_MAX_ROWS_PER_SECTION);
+    const sections: Array<{ title: string; rows: Array<{ id: string; title: string }> }> = [];
+
+    for (let i = 0; i < displaySlots.length; i += META_MAX_ROWS_PER_SECTION) {
+      const chunk = displaySlots.slice(i, i + META_MAX_ROWS_PER_SECTION);
+      if (chunk.length === 0) continue;
+
+      const pageNum = Math.floor(i / META_MAX_ROWS_PER_SECTION) + 1;
+      const from    = chunk[0];
+      const to      = chunk[chunk.length - 1];
+
+      // ── FIX: compact title format stays well under Meta's 24-char section title limit.
+      // The previous format "Page N/N — HH:mm – HH:mm" hit exactly 24 chars for
+      // page 1 of 2, causing sendInteractiveList to silently truncate the title mid-time
+      // ("Page 1/2 — 09:00 – 13:") which corrupted the section. Meta dropped it, making
+      // the list appear to end at 13:30 even when slots through 17:30 existed.
+      // Worst case now: "P10/10: 09:00-17:30" = 19 chars — safely under the limit.
+      const sectionTitle = totalPages > 1
+        ? `P${pageNum}/${totalPages}: ${from}-${to}`  // e.g. "P1/2: 09:00-13:30" (18 chars)
+        : `${from} - ${to}`;                           // e.g. "09:00 - 17:30"     (13 chars)
+
+      // Defensive assertion — catch this at runtime if slot times ever change format
+      if (sectionTitle.length > SECTION_TITLE_MAX) {
+        this.logger.error(
+          `[TimeHandler] Section title "${sectionTitle}" (${sectionTitle.length} chars) exceeds ` +
+          `Meta's ${SECTION_TITLE_MAX}-char limit. Slots may be hidden from patients.`,
+        );
+      }
+
+      sections.push({
+        title: sectionTitle,
+        rows:  chunk.map((t) => ({ id: `time_${t}`, title: t })),
+      });
+    }
+
+    await this.whatsappService.sendInteractiveList(
+      phone,
+      header,
+      message,
+      selectLabel,
+      sections,
+    );
+  }
+
+  // ─── Time resolution ──────────────────────────────────────────────────────
+
+  /**
+   * Resolves user input to a confirmed available slot string ("HH:mm").
+   *
+   * Accepts:
+   *   1. "time_HH:mm"  — list-reply id from showTimeList (primary path)
+   *   2. "HH:mm" / "H:mm" — manually typed time
+   *   3. "N" (integer) — 1-based index into the slot list
+   *
+   * Returns null if the input doesn't match any available slot → caller re-shows the list.
+   */
+  private async resolveTime(text: string, doctorId: string, date: string): Promise<string | null> {
+    const trimmed = text.trim();
+
+    // ── Path 1: list-reply id (e.g. "time_09:30") ────────────────────────
+    if (trimmed.startsWith('time_')) {
+      const candidate = trimmed.slice('time_'.length);
+      if (!/^\d{2}:\d{2}$/.test(candidate)) return null;
+
+      // Verify against live slots — reject stale ids if slot was just booked
+      const slots = await this.availabilityService.getAvailableSlots(doctorId, date);
+      if (!slots.includes(candidate)) {
+        this.logger.warn(
+          `[TimeHandler] Stale list-reply "time_${candidate}" not in current slots ` +
+          `for doctor=${doctorId} date=${date}`,
+        );
+        return null;
+      }
+      return candidate;
+    }
+
+    // ── Path 2: manually typed time ───────────────────────────────────────
+    if (/^\d{1,2}:\d{2}$/.test(trimmed)) {
+      const padded = trimmed.length === 4 ? `0${trimmed}` : trimmed;
+      const slots = await this.availabilityService.getAvailableSlots(doctorId, date);
+      if (slots.includes(padded)) return padded;
+      // Defensive: also check unpadded form in case DB returns non-zero-padded strings
+      if (slots.includes(trimmed)) return trimmed;
+      return null;
+    }
+
+    // ── Path 3: 1-based numeric index ─────────────────────────────────────
+    const index = parseInt(trimmed, 10);
+    if (!isNaN(index) && index >= 1) {
+      const slots = await this.availabilityService.getAvailableSlots(doctorId, date);
+      if (index <= slots.length) return slots[index - 1];
+    }
+
+    return null;
+  }
+
+  // ─── Formatting ───────────────────────────────────────────────────────────
 
   private formatDate(isoDate: string, language: string): string {
     try {
@@ -110,99 +259,5 @@ export class TimeHandler {
     } catch {
       return isoDate;
     }
-  }
-
-    private async showTimeList(phone: string, session: Session, doctorId: string, date: string): Promise<void> {
-    const availableSlots = await this.availabilityService.getAvailableSlots(doctorId, date);
-
-    if (availableSlots.length === 0) {
-      const message = await this.botMessageService.getSafe(
-        session.data.clinicId, MessageKey.NO_SLOTS_AVAILABLE, {}, session.data.language, 'No slots available.'
-      );
-      await this.whatsappService.sendText(phone, message);
-      session.state = SessionState.BOOKING_DATE;
-      await this.sessionsService.save(session);
-      return;
-    }
-
-    const message = await this.botMessageService.getSafe(
-      session.data.clinicId, MessageKey.SELECT_TIME, {}, session.data.language, 'Please choose a time:'
-    );
-
-    const header = await this.botMessageService.getSafe(
-      session.data.clinicId, MessageKey.HEADER_TIMES, {}, session.data.language, 'Available Times'
-    );
-
-    const selectLabel = await this.botMessageService.getSafe(
-      session.data.clinicId, MessageKey.HEADER_SELECT_TIME, {}, session.data.language, 'Select a time'
-    );
-
-    const pageLabel = await this.botMessageService.getSafe(
-      session.data.clinicId, 
-      MessageKey.HEADER_TIME_PAGE, 
-      {}, 
-      session.data.language, 
-      'Page' 
-    );
-
-    const CHUNK_SIZE = 10;
-    const sections: Array<{ title: string; rows: Array<{ id: string; title: string }> }> = [];
-
-    const totalPages = Math.ceil(availableSlots.length / CHUNK_SIZE);
-
-    for (let i = 0; i < availableSlots.length; i += CHUNK_SIZE) {
-      const chunk = availableSlots.slice(i, i + CHUNK_SIZE);
-      if (chunk.length === 0) continue;
-
-      const pageNum = Math.floor(i / CHUNK_SIZE) + 1;
-      const from = chunk[0];
-      const to = chunk[chunk.length - 1];
-
-      const sectionTitle = totalPages > 1 
-        ? `${pageLabel} ${pageNum}/${totalPages} — ${from} – ${to}`
-        : `${from} – ${to}`;
-
-      sections.push({
-        title: sectionTitle,
-        rows: chunk.map((t) => ({ 
-          id: `time_${t}`, 
-          title: t 
-        })),
-      });
-    }
-
-    const safeSections = sections.slice(0, 10);
-
-    await this.whatsappService.sendInteractiveList(
-      phone,
-      header,
-      message,
-      selectLabel,
-      safeSections,
-    );
-  }
-
-  private async resolveTime(text: string, doctorId: string, date: string): Promise<string | null> {
-    const trimmed = text.trim();
-
-    if (trimmed.startsWith('time_')) {
-      const candidate = trimmed.replace('time_', '');
-      if (/^\d{2}:\d{2}$/.test(candidate)) return candidate;
-      return null;
-    }
-
-    if (/^\d{1,2}:\d{2}$/.test(trimmed)) {
-      const padded = trimmed.padStart(5, '0');
-      const slots = await this.availabilityService.getAvailableSlots(doctorId, date);
-      return slots.includes(padded) ? padded : null;
-    }
-
-    const index = parseInt(trimmed, 10);
-    if (!isNaN(index) && index >= 1) {
-      const slots = await this.availabilityService.getAvailableSlots(doctorId, date);
-      if (index <= slots.length) return slots[index - 1];
-    }
-
-    return null;
   }
 }

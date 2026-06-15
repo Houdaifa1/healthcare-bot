@@ -141,28 +141,24 @@ async function main() {
   // ── 4. Create specialties only if missing ─────────────────────────────
   createdCount = 0;
   for (const spec of specialtiesData) {
-    for (const [lang, label] of Object.entries(spec.labels)) {
-      const exists = await prisma.specialty.findUnique({
-        where: {
-          clinicId_slug_language: {
-            clinicId: clinic.id,
-            slug: spec.slug,
-            language: lang as any,
-          },
+    const exists = await prisma.specialty.findUnique({
+      where: {
+        clinicId_slug: {
+          clinicId: clinic.id,
+          slug: spec.slug,
+        },
+      },
+    });
+    if (!exists) {
+      await prisma.specialty.create({
+        data: {
+          clinicId: clinic.id,
+          slug: spec.slug,
+          labels: spec.labels,
+          displayOrder: spec.displayOrder,
         },
       });
-      if (!exists) {
-        await prisma.specialty.create({
-          data: {
-            clinicId: clinic.id,
-            slug: spec.slug,
-            language: lang as any,
-            label,
-            displayOrder: spec.displayOrder,
-          },
-        });
-        createdCount++;
-      }
+      createdCount++;
     }
   }
   console.log(`✅ Specialties seeded: ${createdCount} new (existing specialties preserved)`);

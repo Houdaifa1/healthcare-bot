@@ -62,10 +62,14 @@ export class SpecialtyHandler {
       [
         {
           title: '',
-          rows: specialties.map((s) => ({
-            id: `specialty_${s.slug}`,
-            title: s.label,
-          })),
+          rows: specialties.map((s) => {
+            const labels = s.labels as Record<string, string> | null;
+            const label = labels?.[session.data.language] ?? labels?.['FR'] ?? s.slug;
+            return {
+              id: `specialty_${s.slug}`,
+              title: label,
+            };
+          }),
         },
       ],
     );
@@ -136,10 +140,13 @@ export class SpecialtyHandler {
       return;
     }
 
+    const labels = specialty.labels as Record<string, string> | null;
+    const specialtyLabel = labels?.[session.data.language] ?? labels?.['FR'] ?? specialty.slug;
+
     const message = await this.botMessageService.getSafe(
       session.data.clinicId,
       MessageKey.SELECT_DOCTOR,
-      { specialty: specialty.label },
+      { specialty: specialtyLabel },
       session.data.language,
       'Here are the available doctors:',
     );
@@ -217,10 +224,15 @@ export class SpecialtyHandler {
       return specialties[index - 1];
     }
 
-    // Label match (case-insensitive, accent-tolerant)
+    // Label match (case-insensitive, accent-tolerant) — checks both FR and EN labels
     const normalised = trimmed.toLowerCase();
-    return (
-      specialties.find((s) => s.label.toLowerCase() === normalised) ?? null
-    );
+    return specialties.find((s) => {
+      const labels = s.labels as Record<string, string> | null;
+      if (!labels) return false;
+      for (const label of Object.values(labels)) {
+        if (label?.toLowerCase() === normalised) return true;
+      }
+      return false;
+    }) ?? null;
   }
 }

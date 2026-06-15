@@ -87,7 +87,7 @@ export class TimeHandler {
         doctorName: doctor.name,
         date: friendlyDate,
         time,
-        specialty: matchedSpecialty.label,
+        specialty: (matchedSpecialty.labels as Record<string, string>)?.[session.data.language] ?? (matchedSpecialty.labels as Record<string, string>)?.['FR'] ?? matchedSpecialty.slug,
       },
       session.data.language,
     );

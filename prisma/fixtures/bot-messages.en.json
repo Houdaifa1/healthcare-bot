@@ -39,5 +39,6 @@
   { "key": "NO_SPECIALTIES_AVAILABLE", "language": "EN", "body": "No specialties are available right now." },
   { "key": "HANDOFF_WAITING",    "language": "EN", "body": "An agent will contact you shortly. Tap below to return to the menu." },
   { "key": "BUTTON_FAQ_LIST",    "language": "EN", "body": "❓ More questions" },
-  { "key": "HEADER_SELECT_FAQ",  "language": "EN", "body": "View questions" }
+  { "key": "HEADER_SELECT_FAQ",  "language": "EN", "body": "View questions" },
+  { "key": "HEADER_TIME_PAGE",   "language": "FR", "body": "Page" }
 ]

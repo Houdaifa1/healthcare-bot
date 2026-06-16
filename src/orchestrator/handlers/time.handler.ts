@@ -10,11 +10,12 @@ import { AvailabilityService } from '../../bot-content/availability.service';
 import { format, parseISO } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import { PrismaService } from '../../prisma/prisma.service';
+import { AiService, Intent } from '../../ai/ai.service';
 
-const META_MAX_SECTIONS           = 10;
-const META_MAX_ROWS_PER_SECTION   = 10;
-const META_MAX_DISPLAYABLE_SLOTS  = META_MAX_SECTIONS * META_MAX_ROWS_PER_SECTION;
-const SECTION_TITLE_MAX           = 24;
+const META_MAX_SECTIONS = 10;
+const META_MAX_ROWS_PER_SECTION = 10;
+const META_MAX_DISPLAYABLE_SLOTS = META_MAX_SECTIONS * META_MAX_ROWS_PER_SECTION;
+const SECTION_TITLE_MAX = 24;
 
 @Injectable()
 export class TimeHandler {
@@ -28,7 +29,8 @@ export class TimeHandler {
     private readonly specialtyService: SpecialtyService,
     private readonly availabilityService: AvailabilityService,
     private readonly prisma: PrismaService,
-  ) {}
+    private readonly aiService: AiService,
+  ) { }
 
   async handle(phone: string, text: string, session: Session): Promise<void> {
     const trimmed = text.trim().toLowerCase();
@@ -54,6 +56,26 @@ export class TimeHandler {
     const time = await this.resolveTime(text, doctorId, selectedDate);
 
     if (!time) {
+      const intent = await this.aiService.detectIntent(text, session.state, session.data.language);
+
+      if (intent === Intent.CANCEL || intent === Intent.GREETING) {
+        session.state = SessionState.IDLE;
+        session.data.languageConfirmed = false;
+        await this.sessionsService.save(session);
+        await this.showWelcomeMenu(phone, session);
+        return;
+      }
+
+      if (intent === Intent.HUMAN_AGENT) {
+        session.state = SessionState.AWAITING_HANDOFF;
+        await this.sessionsService.save(session);
+        const message = await this.botMessageService.getSafe(
+          clinicId, MessageKey.HANDOFF_TRIGGERED, {}, language, 'Connecting you with our team.'
+        );
+        await this.whatsappService.sendText(phone, message);
+        return;
+      }
+
       await this.showTimeList(phone, session, doctorId, selectedDate);
       return;
     }
@@ -90,32 +112,32 @@ export class TimeHandler {
       MessageKey.CONFIRM_BOOKING,
       {
         patientName: session.data.patientName ?? '',
-        doctorName:  doctor.name,
-        date:        friendlyDate,
+        doctorName: doctor.name,
+        date: friendlyDate,
         time,
-        specialty:   specialtyLabels?.[language] ?? specialtyLabels?.['FR'] ?? matchedSpecialty.slug,
+        specialty: specialtyLabels?.[language] ?? specialtyLabels?.['FR'] ?? matchedSpecialty.slug,
       },
       language,
     );
 
     const [btnConfirm, btnCancel] = await Promise.all([
       this.botMessageService.getSafe(clinicId, MessageKey.BUTTON_CONFIRM, {}, language, 'Confirm'),
-      this.botMessageService.getSafe(clinicId, MessageKey.BUTTON_CANCEL,  {}, language, 'Cancel'),
+      this.botMessageService.getSafe(clinicId, MessageKey.BUTTON_CANCEL, {}, language, 'Cancel'),
     ]);
 
     await this.whatsappService.sendButtons(phone, message, [
       { id: 'confirm_yes', title: btnConfirm },
-      { id: 'confirm_no',  title: btnCancel  },
+      { id: 'confirm_no', title: btnCancel },
     ]);
   }
 
   // ─── Time list display ────────────────────────────────────────────────────
 
   private async showTimeList(
-    phone:    string,
-    session:  Session,
+    phone: string,
+    session: Session,
     doctorId: string,
-    date:     string,
+    date: string,
   ): Promise<void> {
     const { clinicId, language } = session.data;
 
@@ -146,8 +168,8 @@ export class TimeHandler {
     const displaySlots = allSlots.slice(0, META_MAX_DISPLAYABLE_SLOTS);
 
     const [message, header, selectLabel] = await Promise.all([
-      this.botMessageService.getSafe(clinicId, MessageKey.SELECT_TIME,        {}, language, 'Please choose a time:'),
-      this.botMessageService.getSafe(clinicId, MessageKey.HEADER_TIMES,       {}, language, 'Available Times'),
+      this.botMessageService.getSafe(clinicId, MessageKey.SELECT_TIME, {}, language, 'Please choose a time:'),
+      this.botMessageService.getSafe(clinicId, MessageKey.HEADER_TIMES, {}, language, 'Available Times'),
       this.botMessageService.getSafe(clinicId, MessageKey.HEADER_SELECT_TIME, {}, language, 'Select a time'),
     ]);
 
@@ -159,8 +181,8 @@ export class TimeHandler {
       if (chunk.length === 0) continue;
 
       const pageNum = Math.floor(i / META_MAX_ROWS_PER_SECTION) + 1;
-      const from    = chunk[0];
-      const to      = chunk[chunk.length - 1];
+      const from = chunk[0];
+      const to = chunk[chunk.length - 1];
 
       const sectionTitle = totalPages > 1
         ? `P${pageNum}/${totalPages}: ${from}-${to}`
@@ -175,7 +197,7 @@ export class TimeHandler {
 
       sections.push({
         title: sectionTitle,
-        rows:  chunk.map((t) => ({ id: `time_${t}`, title: t })),
+        rows: chunk.map((t) => ({ id: `time_${t}`, title: t })),
       });
     }
 

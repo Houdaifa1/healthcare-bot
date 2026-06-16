@@ -112,12 +112,11 @@ export class SessionsService {
     );
   }
 
+  // AFTER
   async reset(phone: string): Promise<void> {
     const existing = await this.redis.get(this.key(phone));
     if (existing) {
       const parsed = JSON.parse(existing) as Session;
-      // Preserve language, languageConfirmed, clinicId, timezone
-      // Reset only booking fields
       const fresh: Session = {
         phone,
         state: SessionState.IDLE,
@@ -125,7 +124,8 @@ export class SessionsService {
           clinicId: parsed.data.clinicId,
           timezone: parsed.data.timezone,
           language: parsed.data.language,
-          languageConfirmed: parsed.data.languageConfirmed,
+          languageConfirmed: false, // re-detect language on next message
+          // patientName intentionally NOT carried over — always re-ask name
         },
         updatedAt: Date.now(),
       };

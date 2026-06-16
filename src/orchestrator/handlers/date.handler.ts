@@ -8,6 +8,8 @@ import { MessageKey } from '@prisma/client';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import { PrismaService } from '../../prisma/prisma.service';
+import { AiService, Intent } from '../../ai/ai.service';
+
 
 @Injectable()
 export class DateHandler {
@@ -17,7 +19,8 @@ export class DateHandler {
     private readonly availabilityService: AvailabilityService,
     private readonly botMessageService: BotMessageService,
     private readonly prisma: PrismaService,
-  ) {}
+    private readonly aiService: AiService,
+  ) { }
 
   async handle(phone: string, text: string, session: Session): Promise<void> {
     const trimmed = text.trim().toLowerCase();
@@ -42,6 +45,26 @@ export class DateHandler {
     const date = await this.resolveDate(text, doctorId);
 
     if (!date) {
+      const intent = await this.aiService.detectIntent(text, session.state, session.data.language);
+
+      if (intent === Intent.CANCEL || intent === Intent.GREETING) {
+        session.state = SessionState.IDLE;
+        session.data.languageConfirmed = false;
+        await this.sessionsService.save(session);
+        await this.showWelcomeMenu(phone, session);
+        return;
+      }
+
+      if (intent === Intent.HUMAN_AGENT) {
+        session.state = SessionState.AWAITING_HANDOFF;
+        await this.sessionsService.save(session);
+        const message = await this.botMessageService.getSafe(
+          session.data.clinicId, MessageKey.HANDOFF_TRIGGERED, {}, session.data.language, 'Connecting you with our team.'
+        );
+        await this.whatsappService.sendText(phone, message);
+        return;
+      }
+
       await this.showDateList(phone, session, doctorId);
       return;
     }

@@ -9,15 +9,12 @@ import { SpecialtyService } from '../../bot-content/specialty.service';
 import { AvailabilityService } from '../../bot-content/availability.service';
 import { format, parseISO } from 'date-fns';
 import { fr } from 'date-fns/locale';
+import { PrismaService } from '../../prisma/prisma.service';
 
-// Meta interactive list hard limits
-const META_MAX_SECTIONS      = 10;
-const META_MAX_ROWS_PER_SECTION = 10;
-// 10 sections × 10 rows = 100 slots max displayable in one list message
-const META_MAX_DISPLAYABLE_SLOTS = META_MAX_SECTIONS * META_MAX_ROWS_PER_SECTION;
-// Section title limit is 24 chars — keep generated titles well under this
-// Worst case: "P10/10: 09:00-17:30" = 19 chars ✅
-const SECTION_TITLE_MAX = 24;
+const META_MAX_SECTIONS           = 10;
+const META_MAX_ROWS_PER_SECTION   = 10;
+const META_MAX_DISPLAYABLE_SLOTS  = META_MAX_SECTIONS * META_MAX_ROWS_PER_SECTION;
+const SECTION_TITLE_MAX           = 24;
 
 @Injectable()
 export class TimeHandler {
@@ -30,6 +27,7 @@ export class TimeHandler {
     private readonly doctorService: DoctorService,
     private readonly specialtyService: SpecialtyService,
     private readonly availabilityService: AvailabilityService,
+    private readonly prisma: PrismaService,
   ) {}
 
   async handle(phone: string, text: string, session: Session): Promise<void> {
@@ -38,6 +36,7 @@ export class TimeHandler {
     if (trimmed === 'menu') {
       session.state = SessionState.IDLE;
       await this.sessionsService.save(session);
+      await this.showWelcomeMenu(phone, session);
       return;
     }
 
@@ -163,21 +162,14 @@ export class TimeHandler {
       const from    = chunk[0];
       const to      = chunk[chunk.length - 1];
 
-      // ── FIX: compact title format stays well under Meta's 24-char section title limit.
-      // The previous format "Page N/N — HH:mm – HH:mm" hit exactly 24 chars for
-      // page 1 of 2, causing sendInteractiveList to silently truncate the title mid-time
-      // ("Page 1/2 — 09:00 – 13:") which corrupted the section. Meta dropped it, making
-      // the list appear to end at 13:30 even when slots through 17:30 existed.
-      // Worst case now: "P10/10: 09:00-17:30" = 19 chars — safely under the limit.
       const sectionTitle = totalPages > 1
-        ? `P${pageNum}/${totalPages}: ${from}-${to}`  // e.g. "P1/2: 09:00-13:30" (18 chars)
-        : `${from} - ${to}`;                           // e.g. "09:00 - 17:30"     (13 chars)
+        ? `P${pageNum}/${totalPages}: ${from}-${to}`
+        : `${from} - ${to}`;
 
-      // Defensive assertion — catch this at runtime if slot times ever change format
       if (sectionTitle.length > SECTION_TITLE_MAX) {
         this.logger.error(
           `[TimeHandler] Section title "${sectionTitle}" (${sectionTitle.length} chars) exceeds ` +
-          `Meta's ${SECTION_TITLE_MAX}-char limit. Slots may be hidden from patients.`,
+          `Meta's ${SECTION_TITLE_MAX}-char limit.`,
         );
       }
 
@@ -198,25 +190,12 @@ export class TimeHandler {
 
   // ─── Time resolution ──────────────────────────────────────────────────────
 
-  /**
-   * Resolves user input to a confirmed available slot string ("HH:mm").
-   *
-   * Accepts:
-   *   1. "time_HH:mm"  — list-reply id from showTimeList (primary path)
-   *   2. "HH:mm" / "H:mm" — manually typed time
-   *   3. "N" (integer) — 1-based index into the slot list
-   *
-   * Returns null if the input doesn't match any available slot → caller re-shows the list.
-   */
   private async resolveTime(text: string, doctorId: string, date: string): Promise<string | null> {
     const trimmed = text.trim();
 
-    // ── Path 1: list-reply id (e.g. "time_09:30") ────────────────────────
     if (trimmed.startsWith('time_')) {
       const candidate = trimmed.slice('time_'.length);
       if (!/^\d{2}:\d{2}$/.test(candidate)) return null;
-
-      // Verify against live slots — reject stale ids if slot was just booked
       const slots = await this.availabilityService.getAvailableSlots(doctorId, date);
       if (!slots.includes(candidate)) {
         this.logger.warn(
@@ -228,17 +207,14 @@ export class TimeHandler {
       return candidate;
     }
 
-    // ── Path 2: manually typed time ───────────────────────────────────────
     if (/^\d{1,2}:\d{2}$/.test(trimmed)) {
       const padded = trimmed.length === 4 ? `0${trimmed}` : trimmed;
       const slots = await this.availabilityService.getAvailableSlots(doctorId, date);
       if (slots.includes(padded)) return padded;
-      // Defensive: also check unpadded form in case DB returns non-zero-padded strings
       if (slots.includes(trimmed)) return trimmed;
       return null;
     }
 
-    // ── Path 3: 1-based numeric index ─────────────────────────────────────
     const index = parseInt(trimmed, 10);
     if (!isNaN(index) && index >= 1) {
       const slots = await this.availabilityService.getAvailableSlots(doctorId, date);
@@ -259,5 +235,29 @@ export class TimeHandler {
     } catch {
       return isoDate;
     }
+  }
+
+  private async showWelcomeMenu(phone: string, session: Session): Promise<void> {
+    const clinic = await this.prisma.clinic.findUnique({
+      where: { id: session.data.clinicId },
+      select: { name: true },
+    });
+
+    const message = await this.botMessageService.getSafe(
+      session.data.clinicId,
+      MessageKey.WELCOME,
+      { clinicName: clinic?.name ?? '' },
+      session.data.language,
+      'Welcome! How can I help you?',
+    );
+
+    const btnBook = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_BOOK_APP, {}, session.data.language, 'Book appointment');
+    const btnFaq = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_FAQ, {}, session.data.language, 'FAQ');
+    const btnAgent = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_AGENT, {}, session.data.language, 'Talk to agent');
+    await this.whatsappService.sendButtons(phone, message, [
+      { id: 'book_appointment', title: btnBook },
+      { id: 'faq', title: btnFaq },
+      { id: 'human_agent', title: btnAgent },
+    ]);
   }
 }

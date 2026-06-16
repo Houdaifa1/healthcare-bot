@@ -12,6 +12,28 @@ import { FaqHandler } from './faq.handler';
 import { HandoffHandler } from './handoff.handler';
 import { PrismaService } from '../../prisma/prisma.service';
 
+// All button IDs used in the bot — these must NEVER be passed to language detection
+// because they are English strings that would flip the session language.
+const BUTTON_IDS = new Set([
+  'book_appointment',
+  'faq',
+  'human_agent',
+  'menu',
+  'lang_fr',
+  'lang_en',
+  'confirm_yes',
+  'confirm_no',
+  'faq_list',
+]);
+
+const BUTTON_ID_PREFIXES = ['specialty_', 'doctor_', 'date_', 'time_', 'faq_'];
+
+function isButtonId(text: string): boolean {
+  const lower = text.trim().toLowerCase();
+  if (BUTTON_IDS.has(lower)) return true;
+  return BUTTON_ID_PREFIXES.some((prefix) => lower.startsWith(prefix));
+}
+
 @Injectable()
 export class IdleHandler {
   constructor(
@@ -28,25 +50,11 @@ export class IdleHandler {
   ) {}
 
   async handle(phone: string, text: string, session: Session): Promise<void> {
-    // IMPROVEMENT A: Direct button ID routing — no AI needed
     const lower = text.trim().toLowerCase();
 
-    // ── Re-detect language from strong signals ────────────────────────────
-    // If the user sent a clear language signal (e.g. "bonjour" while in EN mode),
-    // switch their language on the fly. This handles the case where a user
-    // selected English but then naturally types "bonjour" — we should switch to FR.
-    if (session.data.languageConfirmed) {
-      const reDetected = await this.languageDetectionService.detect(text, session.data.language);
-      if (reDetected && reDetected !== session.data.language) {
-        session.data.language = reDetected;
-        session.data.languageConfirmed = true;
-        await this.sessionsService.save(session);
-        // Show welcome menu in the new language
-        await this.showWelcomeMenu(phone, session);
-        return;
-      }
-    }
-
+    // ── Direct button ID routing — no AI, no language detection ──────────
+    // These must be checked first before anything else. Button IDs are English
+    // strings and must never be passed to language or intent detection.
     if (lower === 'book_appointment') {
       if (session.data.patientName) {
         session.state = SessionState.BOOKING_SPECIALTY;
@@ -80,7 +88,9 @@ export class IdleHandler {
       return;
     }
 
-    // ── Step 1: Detect language on first unconfirmed message ────────────────
+    // ── Step 1: Detect language on first unconfirmed message ──────────────
+    // Only run language detection on real free-text from the user,
+    // never on button IDs (already handled above).
     if (!session.data.languageConfirmed) {
       const detected = await this.languageDetectionService.detect(
         text,
@@ -107,14 +117,14 @@ export class IdleHandler {
       await this.sessionsService.save(session);
     }
 
-    // ── Step 2: Detect intent ───────────────────────────────────────────────
+    // ── Step 2: Detect intent via keyword fallback then AI ────────────────
     const intent = await this.aiService.detectIntent(
       text,
       session.state,
       session.data.language,
     );
 
-    // ── Step 3: Route by intent ─────────────────────────────────────────────
+    // ── Step 3: Route by intent ───────────────────────────────────────────
     if (intent === Intent.BOOK_APPOINTMENT) {
       if (session.data.patientName) {
         session.state = SessionState.BOOKING_SPECIALTY;

@@ -27,18 +27,18 @@
   { "key": "BUTTON_CANCEL",      "language": "FR", "body": "❌ Annuler" },
   { "key": "BUTTON_BOOK_APP",    "language": "FR", "body": "📅 Prendre RDV" },
   { "key": "BUTTON_FAQ",         "language": "FR", "body": "❓ FAQ" },
-  { "key": "BUTTON_AGENT",       "language": "FR", "body": "👤 Parler à un agent" },
-  { "key": "BUTTON_MENU",        "language": "FR", "body": "↩️ Menu principal" },
+  { "key": "BUTTON_AGENT",       "language": "FR", "body": "👤 Agent" },
+  { "key": "BUTTON_MENU",        "language": "FR", "body": "↩️ Menu" },
   { "key": "BUTTON_FRENCH",      "language": "FR", "body": "🇫🇷 Français" },
   { "key": "BUTTON_ENGLISH",     "language": "FR", "body": "🇬🇧 English" },
   { "key": "HEADER_SPECIALTIES", "language": "FR", "body": "Spécialités" },
   { "key": "HEADER_DOCTORS",     "language": "FR", "body": "Médecins" },
   { "key": "HEADER_TIMES",       "language": "FR", "body": "Créneaux disponibles" },
-  { "key": "HEADER_SELECT_TIME", "language": "FR", "body": "Choisissez un créneau" },
+  { "key": "HEADER_SELECT_TIME", "language": "FR", "body": "Choisir un créneau" },
   { "key": "NO_DOCTORS_FOR_SPECIALTY", "language": "FR", "body": "Aucun médecin n'est disponible pour cette spécialité en ce moment." },
   { "key": "NO_SPECIALTIES_AVAILABLE", "language": "FR", "body": "Aucune spécialité n'est disponible pour le moment." },
   { "key": "HANDOFF_WAITING",    "language": "FR", "body": "Un agent va vous contacter. Tapez sur le bouton pour revenir au menu." },
   { "key": "BUTTON_FAQ_LIST",    "language": "FR", "body": "❓ Autres questions" },
   { "key": "HEADER_SELECT_FAQ",  "language": "FR", "body": "Voir les questions" },
-  { "key": "HEADER_TIME_PAGE",   "language": "EN", "body": "Page" }
+  { "key": "HEADER_TIME_PAGE",   "language": "FR", "body": "Page" }
 ]

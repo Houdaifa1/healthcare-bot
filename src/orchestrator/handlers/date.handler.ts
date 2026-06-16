@@ -7,6 +7,7 @@ import { BotMessageService } from '../../bot-content/bot-message.service';
 import { MessageKey } from '@prisma/client';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
+import { PrismaService } from '../../prisma/prisma.service';
 
 @Injectable()
 export class DateHandler {
@@ -15,15 +16,16 @@ export class DateHandler {
     private readonly sessionsService: SessionsService,
     private readonly availabilityService: AvailabilityService,
     private readonly botMessageService: BotMessageService,
+    private readonly prisma: PrismaService,
   ) {}
 
   async handle(phone: string, text: string, session: Session): Promise<void> {
     const trimmed = text.trim().toLowerCase();
 
-    // Allow returning to main menu from any booking step
     if (trimmed === 'menu') {
       session.state = SessionState.IDLE;
       await this.sessionsService.save(session);
+      await this.showWelcomeMenu(phone, session);
       return;
     }
 
@@ -37,16 +39,13 @@ export class DateHandler {
       return;
     }
 
-    // ── Resolve the selected date ──────────────────────────────────────────
     const date = await this.resolveDate(text, doctorId);
 
     if (!date) {
-      // Input is not a valid date selection — re-show available dates
       await this.showDateList(phone, session, doctorId);
       return;
     }
 
-    // BUG 9: Only set state to BOOKING_TIME AFTER date is validated
     session.data.selectedDate = date;
     session.state = SessionState.BOOKING_TIME;
     await this.sessionsService.save(session);
@@ -95,10 +94,6 @@ export class DateHandler {
     );
   }
 
-  /**
-   * Shows the available date buttons for a given doctor.
-   * Reusable for both initial display and re-display on bad input.
-   */
   async showDateList(
     phone: string,
     session: Session,
@@ -141,29 +136,20 @@ export class DateHandler {
     );
   }
 
-  /**
-   * Resolves user input to an ISO date string ("YYYY-MM-DD").
-   * Accepts:
-   * 1. "date_<YYYY-MM-DD>" prefix (from button selection)
-   * 2. Numbered choice ("1", "2", "3") mapped to the available dates
-   */
   private async resolveDate(
     text: string,
     doctorId: string,
   ): Promise<string | null> {
     const trimmed = text.trim();
 
-    // Prefixed date from button
     if (trimmed.startsWith('date_')) {
       const candidate = trimmed.replace('date_', '');
-      // Validate it's a real ISO date
       if (/^\d{4}-\d{2}-\d{2}$/.test(candidate)) {
         return candidate;
       }
       return null;
     }
 
-    // Numbered choice — fetch dates to map index to value
     const index = parseInt(trimmed, 10);
     if (!isNaN(index) && index >= 1) {
       const availableDates = await this.availabilityService.getAvailableDates(
@@ -176,5 +162,29 @@ export class DateHandler {
     }
 
     return null;
+  }
+
+  private async showWelcomeMenu(phone: string, session: Session): Promise<void> {
+    const clinic = await this.prisma.clinic.findUnique({
+      where: { id: session.data.clinicId },
+      select: { name: true },
+    });
+
+    const message = await this.botMessageService.getSafe(
+      session.data.clinicId,
+      MessageKey.WELCOME,
+      { clinicName: clinic?.name ?? '' },
+      session.data.language,
+      'Welcome! How can I help you?',
+    );
+
+    const btnBook = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_BOOK_APP, {}, session.data.language, 'Book appointment');
+    const btnFaq = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_FAQ, {}, session.data.language, 'FAQ');
+    const btnAgent = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_AGENT, {}, session.data.language, 'Talk to agent');
+    await this.whatsappService.sendButtons(phone, message, [
+      { id: 'book_appointment', title: btnBook },
+      { id: 'faq', title: btnFaq },
+      { id: 'human_agent', title: btnAgent },
+    ]);
   }
 }

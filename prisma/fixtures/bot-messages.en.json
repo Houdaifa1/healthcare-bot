@@ -22,13 +22,13 @@
   { "key": "ERROR_DOCTOR_NOT_FOUND", "language": "EN", "body": "Doctor not found. Please start over." },
   { "key": "ERROR_SPECIALTY_NOT_FOUND", "language": "EN", "body": "Specialty not found. Please start over." },
   { "key": "ERROR_MISSING_SPECIALTY", "language": "EN", "body": "Missing specialty. Please start over." },
-  { "key": "ERROR_MISSING_DOCTOR", "language": "EN", "body": "Missing doctor information. Please start over." },
+  { "key": "ERROR_MISSING_DOCTOR", "language": "EN", "body": "Missing doctor. Please start over." },
   { "key": "BUTTON_CONFIRM",     "language": "EN", "body": "✅ Confirm" },
   { "key": "BUTTON_CANCEL",      "language": "EN", "body": "❌ Cancel" },
   { "key": "BUTTON_BOOK_APP",    "language": "EN", "body": "📅 Book appointment" },
   { "key": "BUTTON_FAQ",         "language": "EN", "body": "❓ FAQ" },
-  { "key": "BUTTON_AGENT",       "language": "EN", "body": "👤 Talk to an agent" },
-  { "key": "BUTTON_MENU",        "language": "EN", "body": "↩️ Main menu" },
+  { "key": "BUTTON_AGENT",       "language": "EN", "body": "👤 Agent" },
+  { "key": "BUTTON_MENU",        "language": "EN", "body": "↩️ Menu" },
   { "key": "BUTTON_FRENCH",      "language": "EN", "body": "🇫🇷 Français" },
   { "key": "BUTTON_ENGLISH",     "language": "EN", "body": "🇬🇧 English" },
   { "key": "HEADER_SPECIALTIES", "language": "EN", "body": "Specialties" },
@@ -40,5 +40,5 @@
   { "key": "HANDOFF_WAITING",    "language": "EN", "body": "An agent will contact you shortly. Tap below to return to the menu." },
   { "key": "BUTTON_FAQ_LIST",    "language": "EN", "body": "❓ More questions" },
   { "key": "HEADER_SELECT_FAQ",  "language": "EN", "body": "View questions" },
-  { "key": "HEADER_TIME_PAGE",   "language": "FR", "body": "Page" }
+  { "key": "HEADER_TIME_PAGE",   "language": "EN", "body": "Page" }
 ]

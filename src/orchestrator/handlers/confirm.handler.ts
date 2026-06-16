@@ -22,6 +22,23 @@ export class ConfirmHandler {
   ) {}
 
   async handle(phone: string, text: string, session: Session): Promise<void> {
+    const trimmed = text.trim().toLowerCase();
+
+    // ── Check button IDs first — no AI needed for explicit button taps ────
+    // confirm_yes / confirm_no are the button IDs sent by Meta when user taps
+    // the confirm/cancel buttons. Always resolve these without AI to avoid
+    // misclassification or infinite reshowConfirmation loops.
+    if (trimmed === 'confirm_yes') {
+      await this.processConfirmation(phone, session);
+      return;
+    }
+
+    if (trimmed === 'confirm_no') {
+      await this.processCancellation(phone, session);
+      return;
+    }
+
+    // ── Free-text: use AI intent detection ────────────────────────────────
     const intent = await this.aiService.detectIntent(
       text,
       session.state,
@@ -86,7 +103,6 @@ export class ConfirmHandler {
       return;
     }
 
-    // FIX: format date as human-readable
     const friendlyDate = this.formatDate(session.data.selectedDate, session.data.language);
 
     const message = await this.botMessageService.getSafe(
@@ -123,7 +139,6 @@ export class ConfirmHandler {
       return;
     }
 
-    // FIX: format date as human-readable
     const friendlyDate = this.formatDate(session.data.selectedDate, session.data.language);
 
     const message = await this.botMessageService.getSafe(

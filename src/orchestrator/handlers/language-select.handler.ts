@@ -16,29 +16,44 @@ export class LanguageSelectHandler {
   ) {}
 
   async handle(phone: string, text: string, session: Session): Promise<void> {
-    const normalizedText = text.toLowerCase();
+    const trimmed = text.trim().toLowerCase();
 
-    if (normalizedText.includes('fr') || normalizedText.includes('lang_fr')) {
+    // ── Exact match only — NEVER use includes() here.
+    // includes('fr') would match "confirmer", "offrir", etc.
+    // includes('en') would match "rendez-vous", "prendre", "bien", etc.
+    // Button IDs are 'lang_fr' and 'lang_en' — match those plus the display labels.
+    const isFR =
+      trimmed === 'lang_fr' ||
+      trimmed === '🇫🇷 français' ||
+      trimmed === 'français' ||
+      trimmed === 'francais' ||
+      trimmed === 'fr';
+
+    const isEN =
+      trimmed === 'lang_en' ||
+      trimmed === '🇬🇧 english' ||
+      trimmed === 'english' ||
+      trimmed === 'en';
+
+    if (isFR) {
       session.data.language = Language.FR;
       session.data.languageConfirmed = true;
       session.state = SessionState.IDLE;
       await this.sessionsService.save(session);
-      // BUG 3: Call showWelcomeMenu directly instead of going through handle() again
       await this.idleHandler.showWelcomeMenu(phone, session);
       return;
     }
 
-    if (normalizedText.includes('en') || normalizedText.includes('lang_en')) {
+    if (isEN) {
       session.data.language = Language.EN;
       session.data.languageConfirmed = true;
       session.state = SessionState.IDLE;
       await this.sessionsService.save(session);
-      // BUG 3: Call showWelcomeMenu directly instead of going through handle() again
       await this.idleHandler.showWelcomeMenu(phone, session);
       return;
     }
 
-    // Ambiguous — ask again with DB-driven labels
+    // Ambiguous — ask again
     const message = await this.botMessageService.getSafe(
       session.data.clinicId, MessageKey.LANGUAGE_PROMPT, {}, session.data.language, 'Choose your language:'
     );

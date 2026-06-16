@@ -5,6 +5,7 @@ import { SessionsService } from '../../sessions/sessions.service';
 import { BotMessageService } from '../../bot-content/bot-message.service';
 import { MessageKey } from '@prisma/client';
 import { ConfigService } from '@nestjs/config';
+import { PrismaService } from '../../prisma/prisma.service';
 
 @Injectable()
 export class HandoffHandler {
@@ -13,12 +14,21 @@ export class HandoffHandler {
     private readonly sessionsService: SessionsService,
     private readonly botMessageService: BotMessageService,
     private readonly configService: ConfigService,
-  ) {}
+    private readonly prisma: PrismaService,
+  ) { }
 
   async handle(phone: string, text: string, session: Session): Promise<void> {
-    // BUG 10: Handle follow-up messages when already in AWAITING_HANDOFF
     if (session.state === SessionState.AWAITING_HANDOFF) {
-      // Follow-up: offer escape to menu
+      // User tapped Menu button — escape handoff, reset to IDLE
+      if (text.trim().toLowerCase() === 'menu') {
+        session.state = SessionState.IDLE;
+        session.data.languageConfirmed = false;
+        await this.sessionsService.save(session);
+        await this.showWelcomeMenu(phone, session);
+        return;
+      }
+
+      // Any other follow-up message — remind them and show menu button
       const message = await this.botMessageService.getSafe(
         session.data.clinicId,
         MessageKey.HANDOFF_WAITING,
@@ -64,4 +74,28 @@ export class HandoffHandler {
       await this.whatsappService.sendText(bossJid, alert);
     }
   }
+
+  private async showWelcomeMenu(phone: string, session: Session): Promise<void> {
+  const clinic = await this.prisma.clinic.findUnique({
+    where: { id: session.data.clinicId },
+    select: { name: true },
+  });
+
+  const message = await this.botMessageService.getSafe(
+    session.data.clinicId,
+    MessageKey.WELCOME,
+    { clinicName: clinic?.name ?? '' },
+    session.data.language,
+    'Welcome! How can I help you?',
+  );
+
+  const btnBook = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_BOOK_APP, {}, session.data.language, 'Book appointment');
+  const btnFaq = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_FAQ, {}, session.data.language, 'FAQ');
+  const btnAgent = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_AGENT, {}, session.data.language, 'Talk to agent');
+  await this.whatsappService.sendButtons(phone, message, [
+    { id: 'book_appointment', title: btnBook },
+    { id: 'faq', title: btnFaq },
+    { id: 'human_agent', title: btnAgent },
+  ]);
+}
 }

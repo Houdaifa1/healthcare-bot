@@ -59,17 +59,14 @@ jobs:
             echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
             docker pull "$IMAGE"
 
-            # ── Resolve any stuck/failed migrations via Prisma CLI ────────
-            # This reads _prisma_migrations and marks failed ones as rolled-back
-            # so migrate deploy can re-apply them cleanly.
-            echo "▶ Resolving any stuck migrations..."
+            # ── Resolve any stuck/failed migrations ───────────────────────
+            echo "▶ Checking for stuck migrations..."
             docker run --rm \
               --network host \
               --env-file "$ENV_FILE" \
               "$IMAGE" \
               sh -c "
                 set -e
-                # Get names of failed migrations (finished_at IS NULL means failed/stuck)
                 FAILED=\$(npx prisma migrate status 2>&1 | grep 'Following migration' -A 999 | grep '^\s*[0-9]' | awk '{print \$1}' || true)
                 if [ -n \"\$FAILED\" ]; then
                   echo \"Found stuck migrations: \$FAILED\"
@@ -79,11 +76,11 @@ jobs:
                   done
                   echo '✅ Stuck migrations resolved'
                 else
-                  echo '✅ No stuck migrations'
+                  echo '✅ No stuck migrations found'
                 fi
               "
 
-            # ── Run migrations BEFORE swapping the container ──────────────
+            # ── Run migrations ────────────────────────────────────────────
             echo "▶ Running prisma migrate deploy..."
             docker run --rm \
               --network host \
@@ -92,18 +89,28 @@ jobs:
               sh -c "npx prisma migrate deploy"
             echo "✅ Migrations applied"
 
-            # ── Flush session keys ────────────────────────────────────────
-            SESSION_KEYS=$(redis-cli --scan --pattern "session:*" 2>/dev/null | wc -l || echo "0")
-            if [ "$SESSION_KEYS" -gt "0" ]; then
-              redis-cli --scan --pattern "session:*" | xargs -r redis-cli UNLINK
-              echo "✅ Flushed $SESSION_KEYS Redis session key(s)"
-            else
-              echo "✅ No session keys to flush"
-            fi
+            # ── Seed database ─────────────────────────────────────────────
+            # Only inserts missing records — never overwrites existing data.
+            # New bot message keys added to fixtures are picked up automatically.
+            # Doctors, specialties, FAQs, timeslots are NOT seeded — admin owns them.
+            echo "▶ Running database seed..."
+            docker run --rm \
+              --network host \
+              --env-file "$ENV_FILE" \
+              "$IMAGE" \
+              sh -c "node dist/src/prisma/seed.js"
+            echo "✅ Seed complete"
+
+            # ── Session versioning ────────────────────────────────────────
+            # No flush needed. Stale sessions are reset individually on the
+            # user's next message via SESSION_VERSION check in SessionsService.
+            # Bump SESSION_VERSION in sessions.service.ts only when session
+            # structure changes incompatibly.
+            echo "✅ Session versioning active — no flush needed"
 
             # ── Swap container ────────────────────────────────────────────
             docker stop healthcare-bot 2>/dev/null || true
-            docker rm healthcare-bot 2>/dev/null || true
+            docker rm   healthcare-bot 2>/dev/null || true
             docker run -d \
               --name healthcare-bot \
               --restart unless-stopped \
@@ -114,12 +121,12 @@ jobs:
             docker image prune -f
 
             # ── Verify ────────────────────────────────────────────────────
-            echo "▶ Waiting for container to start..."
+            echo "▶ Waiting for container to become healthy..."
             sleep 10
             if docker ps | grep -q healthcare-bot; then
               echo "✅ Deployment successful"
             else
-              echo "❌ Container not running"
+              echo "❌ Container not running — last 50 log lines:"
               docker logs healthcare-bot --tail 50
               exit 1
             fi

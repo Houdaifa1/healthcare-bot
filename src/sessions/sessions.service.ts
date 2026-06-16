@@ -5,7 +5,7 @@ import { Language } from '@prisma/client';
 
 export enum SessionState {
   IDLE = 'IDLE',
-  LANGUAGE_SELECT = 'LANGUAGE_SELECT', // shown if detection is ambiguous
+  LANGUAGE_SELECT = 'LANGUAGE_SELECT',
   AWAITING_NAME = 'AWAITING_NAME',
   BOOKING_SPECIALTY = 'BOOKING_SPECIALTY',
   BOOKING_DOCTOR = 'BOOKING_DOCTOR',
@@ -18,7 +18,7 @@ export enum SessionState {
 
 export interface SessionData {
   clinicId: string;
-  timezone: string;        // e.g. "Africa/Casablanca" — populated from clinic.timezone
+  timezone: string;
   language: Language;
   languageConfirmed: boolean;
   patientName?: string;
@@ -33,12 +33,20 @@ export interface Session {
   state: SessionState;
   data: SessionData;
   updatedAt: number; // unix ms
+  version: number;   // bumped when session structure changes incompatibly
 }
 
 export interface SessionResult {
   session: Session;
-  isNew: boolean; // true if session was just created (previous one expired or first visit)
+  isNew: boolean;
 }
+
+// Bump this ONLY when SessionData/SessionState structure changes in a
+// breaking way (e.g. adding a required field, renaming a field).
+// On mismatch, the user's session is reset gracefully on their next message
+// instead of crashing or behaving unexpectedly.
+// DO NOT bump for every deploy — only for breaking session shape changes.
+export const SESSION_VERSION = 1;
 
 @Injectable()
 export class SessionsService {
@@ -64,21 +72,42 @@ export class SessionsService {
       this.logger.error('Redis error in SessionsService', err.message),
     );
   }
+
   private key(phone: string): string {
     return `session:${phone}`;
   }
 
-  async getOrCreate(phone: string, clinicId: string, defaultLanguage: Language, timezone: string): Promise<SessionResult> {
+  async getOrCreate(
+    phone: string,
+    clinicId: string,
+    defaultLanguage: Language,
+    timezone: string,
+  ): Promise<SessionResult> {
     const existing = await this.redis.get(this.key(phone));
 
     if (existing) {
       const session = JSON.parse(existing) as Session;
-      // Basic migration if old structure exists
+
+      // ── Structural migration: no data field (very old sessions) ──────
       if (!session.data) {
+        this.logger.warn(`Session ${phone} has no data field — resetting`);
         const fresh = this.createFreshSession(phone, clinicId, defaultLanguage, timezone);
         await this.save(fresh);
         return { session: fresh, isNew: true };
       }
+
+      // ── Version mismatch: session shape changed incompatibly ──────────
+      // Reset this user's session gracefully. No global flush needed.
+      if (!session.version || session.version !== SESSION_VERSION) {
+        this.logger.warn(
+          `Session version mismatch for ${phone} ` +
+          `(got ${session.version ?? 'none'}, expected ${SESSION_VERSION}) — resetting`,
+        );
+        const fresh = this.createFreshSession(phone, clinicId, defaultLanguage, timezone);
+        await this.save(fresh);
+        return { session: fresh, isNew: true };
+      }
+
       return { session, isNew: false };
     }
 
@@ -87,10 +116,16 @@ export class SessionsService {
     return { session: fresh, isNew: true };
   }
 
-  private createFreshSession(phone: string, clinicId: string, defaultLanguage: Language, timezone: string): Session {
-    const fresh: Session = {
+  private createFreshSession(
+    phone: string,
+    clinicId: string,
+    defaultLanguage: Language,
+    timezone: string,
+  ): Session {
+    return {
       phone,
       state: SessionState.IDLE,
+      version: SESSION_VERSION,
       data: {
         clinicId,
         timezone,
@@ -99,8 +134,6 @@ export class SessionsService {
       },
       updatedAt: Date.now(),
     };
-
-    return fresh;
   }
 
   async save(session: Session): Promise<void> {
@@ -112,7 +145,6 @@ export class SessionsService {
     );
   }
 
-  // AFTER
   async reset(phone: string): Promise<void> {
     const existing = await this.redis.get(this.key(phone));
     if (existing) {
@@ -120,6 +152,7 @@ export class SessionsService {
       const fresh: Session = {
         phone,
         state: SessionState.IDLE,
+        version: SESSION_VERSION,
         data: {
           clinicId: parsed.data.clinicId,
           timezone: parsed.data.timezone,

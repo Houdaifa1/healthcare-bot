@@ -86,10 +86,12 @@ export class SpecialtyHandler {
 
     // Allow returning to main menu from any booking step
     if (trimmed === 'menu') {
+      session.state = SessionState.IDLE;
+      session.data.languageConfirmed = false;
+      await this.sessionsService.save(session);
       await this.showWelcomeMenu(phone, session);
       return;
     }
-
     const specialties = await this.specialtyService.findActive(
       session.data.clinicId,
       session.data.language,

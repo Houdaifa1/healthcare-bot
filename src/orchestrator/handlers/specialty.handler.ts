@@ -8,6 +8,7 @@ import { BotMessageService } from '../../bot-content/bot-message.service';
 import { MessageKey } from '@prisma/client';
 import { Specialty } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { AiService, Intent } from '../../ai/ai.service';
 
 @Injectable()
 export class SpecialtyHandler {
@@ -18,7 +19,8 @@ export class SpecialtyHandler {
     private readonly doctorService: DoctorService,
     private readonly botMessageService: BotMessageService,
     private readonly prisma: PrismaService,
-  ) {}
+    private readonly aiService: AiService,
+  ) { }
 
   /**
    * Called by IdleHandler / NameHandler when we want to SHOW the specialty list.
@@ -111,6 +113,29 @@ export class SpecialtyHandler {
     const specialty = this.resolveSpecialty(text, specialties);
 
     if (!specialty) {
+      // Run intent detection — user might want to cancel, go to menu, or talk to agent
+      const intent = await this.aiService.detectIntent(text, session.state, session.data.language);
+
+      if (intent === Intent.CANCEL || intent === Intent.GREETING) {
+        session.state = SessionState.IDLE;
+        session.data.languageConfirmed = false;
+        await this.sessionsService.save(session);
+        await this.showWelcomeMenu(phone, session);
+        return;
+      }
+
+      if (intent === Intent.HUMAN_AGENT) {
+        session.state = SessionState.AWAITING_HANDOFF;
+        await this.sessionsService.save(session);
+        // delegate to handoff flow inline
+        const message = await this.botMessageService.getSafe(
+          session.data.clinicId, MessageKey.HANDOFF_TRIGGERED, {}, session.data.language, 'Connecting you with our team.'
+        );
+        await this.whatsappService.sendText(phone, message);
+        return;
+      }
+
+      // UNKNOWN or anything else — reshow the specialty list
       await this.showSpecialtyList(phone, session);
       return;
     }
@@ -118,7 +143,7 @@ export class SpecialtyHandler {
     session.data.specialtyId = specialty.id;
     session.state = SessionState.BOOKING_DOCTOR;
     await this.sessionsService.save(session);
-  
+
     const doctors = await this.doctorService.findBySpecialty(
       session.data.clinicId,
       specialty.id,

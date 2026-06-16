@@ -17,7 +17,7 @@ export class FaqHandler {
     private readonly botMessageService: BotMessageService,
     private readonly aiService: AiService,
     private readonly prisma: PrismaService,
-  ) {}
+  ) { }
 
   /**
    * Called by IdleHandler when the user picks FAQ from the main menu.
@@ -179,6 +179,7 @@ export class FaqHandler {
 
   private async goToMainMenu(phone: string, session: Session): Promise<void> {
     session.state = SessionState.IDLE;
+    session.data.languageConfirmed = false; // re-detect language on next message
     await this.sessionsService.save(session);
 
     const lang = session.data.language;

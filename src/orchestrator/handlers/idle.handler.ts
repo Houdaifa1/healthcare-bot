@@ -47,7 +47,7 @@ export class IdleHandler {
     private readonly faqHandler: FaqHandler,
     private readonly handoffHandler: HandoffHandler,
     private readonly prisma: PrismaService,
-  ) {}
+  ) { }
 
   async handle(phone: string, text: string, session: Session): Promise<void> {
     const lower = text.trim().toLowerCase();
@@ -84,6 +84,9 @@ export class IdleHandler {
     }
 
     if (lower === 'menu') {
+      session.state = SessionState.IDLE;
+      session.data.languageConfirmed = false; // re-detect language on next free-text
+      await this.sessionsService.save(session);
       await this.showWelcomeMenu(phone, session);
       return;
     }

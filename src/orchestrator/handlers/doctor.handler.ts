@@ -30,6 +30,7 @@ export class DoctorHandler {
     // Allow returning to main menu from any booking step
     if (trimmed === 'menu') {
       session.state = SessionState.IDLE;
+      session.data.languageConfirmed = false;
       await this.sessionsService.save(session);
       await this.specialtyHandler.showWelcomeMenu(phone, session);
       return;

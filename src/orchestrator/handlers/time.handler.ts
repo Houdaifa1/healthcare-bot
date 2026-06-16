@@ -37,6 +37,7 @@ export class TimeHandler {
 
     if (trimmed === 'menu') {
       session.state = SessionState.IDLE;
+      session.data.languageConfirmed = false;
       await this.sessionsService.save(session);
       await this.showWelcomeMenu(phone, session);
       return;

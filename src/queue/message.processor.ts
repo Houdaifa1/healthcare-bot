@@ -1,15 +1,12 @@
 import { Processor, WorkerHost, OnWorkerEvent } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
-import Redis from 'ioredis';
 import { OrchestratorService } from '../orchestrator/orchestrator.service';
 import { SessionsService } from '../sessions/sessions.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { WhatsAppService } from '../whatsapp/whatsapp.service';
-import { BotMessageService } from '../bot-content/bot-message.service';
 
 export interface MessageJob {
-  from:      string; // E.164 phone number without '+', e.g. "212644645877"
+  from:      string; // E.164 without '+', e.g. "212644645877"
   name:      string; // WhatsApp display name
   text:      string; // Extracted message text or button/list ID
   messageId: string;
@@ -19,61 +16,62 @@ export interface MessageJob {
 @Processor('messages')
 export class MessageProcessor extends WorkerHost {
   private readonly logger = new Logger(MessageProcessor.name);
-  private readonly redis: Redis;
 
   constructor(
     private readonly orchestratorService: OrchestratorService,
-    private readonly sessionsService: SessionsService,
-    private readonly prisma: PrismaService,
-    private readonly whatsappService: WhatsAppService,
-    private readonly botMessageService: BotMessageService,
+    private readonly sessionsService:     SessionsService,
+    private readonly prisma:             PrismaService,
   ) {
     super();
-    // Create a dedicated Redis connection for dedup
-    const redisUrl = process.env.REDIS_URL ?? 'redis://localhost:6379';
-    const isUpstash = redisUrl.includes('upstash.io');
-    this.redis = new Redis(redisUrl, {
-      tls: isUpstash ? {} : undefined,
-      maxRetriesPerRequest: null,
-      enableReadyCheck: false,
-    });
+    // No Redis instantiation here — SessionsService owns the shared connection.
   }
 
   async process(job: Job<MessageJob>): Promise<void> {
     const { from, name, text, messageId } = job.data;
     this.logger.log(`Processing message from ${name} (+${from}): "${text}"`);
 
-    // ── Message deduplication (BUG 17) ─────────────────────────────────────
-    // Meta can deliver the same messageId twice on timeout.
-    // Check and set with 5-minute TTL.
+    // ── 1. Message deduplication ───────────────────────────────────────────
+    // Delegated to SessionsService.markMessageProcessed() which uses the
+    // shared Redis connection and a 5-min TTL NX SET.
     if (messageId) {
-      const dedupKey = `processed:${messageId}`;
-      const isNew = await this.redis.set(dedupKey, '1', 'EX', 300, 'NX');
+      const isNew = await this.sessionsService.markMessageProcessed(messageId);
       if (!isNew) {
         this.logger.warn(`Duplicate messageId ${messageId} — skipping`);
         return;
       }
     }
 
-    // ── Load clinic ────────────────────────────────────────────────────────
-    const clinic = await this.prisma.clinic.findUnique({
-      where: { id: 'main' },
-    });
-
+    // ── 2. Load clinic dynamically ─────────────────────────────────────────
+    // Never hardcode the clinic ID — take the first (and only) active clinic
+    // from the DB. This lets the seed value change without a code change.
+    const clinic = await this.prisma.clinic.findFirst();
     if (!clinic) {
-      this.logger.error('Clinic "main" not found — run `npm run seed` first');
+      this.logger.error('No clinic record found — run `npm run seed` first');
       return;
     }
 
-    // ── Load or create session ─────────────────────────────────────────────
-    const { session, isNew } = await this.sessionsService.getOrCreate(
+    // ── 3. Campaign routing ────────────────────────────────────────────────
+    // If this phone has an active AI campaign conversation, route there
+    // instead of the reactive orchestrator.
+    // CampaignConversationService will be injected here once built.
+    const hasCampaign = await this.sessionsService.hasActiveCampaignSession(from);
+    if (hasCampaign) {
+      this.logger.log(`Phone ${from} has active campaign session — routing to CampaignConversationService`);
+      // TODO: inject CampaignConversationService and call:
+      //   await this.campaignConversationService.handleReply(from, text);
+      // This TODO is intentional — placeholder until the campaign module is built.
+      return;
+    }
+
+    // ── 4. Load or create reactive session ────────────────────────────────
+    const { session } = await this.sessionsService.getOrCreate(
       from,
       clinic.id,
       clinic.defaultLanguage,
       clinic.timezone,
     );
 
-    // ── Route to orchestrator ──────────────────────────────────────────────
+    // ── 5. Route to reactive orchestrator ─────────────────────────────────
     try {
       await this.orchestratorService.handleMessage(from, text, session);
     } catch (error: any) {
@@ -84,7 +82,7 @@ export class MessageProcessor extends WorkerHost {
         error?.response?.statusCode ??
         0;
 
-      // Meta API transient errors (5xx) or our own send timeout — retry
+      // Meta API transient errors (5xx) or send timeout — let BullMQ retry
       if (
         message.includes('not connected after') ||
         message.includes('Meta API error 5') ||
@@ -97,7 +95,7 @@ export class MessageProcessor extends WorkerHost {
         throw error;
       }
 
-      // 4xx (except 428) are caller mistakes — do not retry
+      // 4xx (except 428) are permanent caller errors — do not retry
       if (statusCode >= 400 && statusCode < 500) {
         this.logger.error(
           `Permanent failure for ${from} (HTTP ${statusCode}): ${message}`,
@@ -105,23 +103,23 @@ export class MessageProcessor extends WorkerHost {
         return;
       }
 
-      // Unknown errors — rethrow for retry
+      // Unknown errors — rethrow for BullMQ retry
       throw error;
     }
   }
 
   @OnWorkerEvent('ready')
-  onReady() {
+  onReady(): void {
     this.logger.log('Message worker ready');
   }
 
   @OnWorkerEvent('error')
-  onError(error: Error) {
+  onError(error: Error): void {
     this.logger.error('Worker error:', error.message);
   }
 
   @OnWorkerEvent('failed')
-  onFailed(job: Job, error: Error) {
+  onFailed(job: Job, error: Error): void {
     this.logger.error(`Job ${job.id} failed after all retries: ${error.message}`);
   }
 }

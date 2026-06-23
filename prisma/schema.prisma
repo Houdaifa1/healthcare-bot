@@ -6,25 +6,34 @@ datasource db {
   provider = "postgresql"
 }
 
-// ─── Clinic Configuration ───────────────────────────────────────────────────
+// ─── Clinic Configuration ────────────────────────────────────────────────────
 model Clinic {
-  id              String       @id @default(cuid())
-  name            String
-  phone           String
-  address         String?
-  timezone        String       @default("Africa/Casablanca")
-  defaultLanguage Language     @default(FR)
-  supportedLangs  Language[]   @default([FR, EN])
-  isActive        Boolean      @default(true)
-  createdAt       DateTime     @default(now())
-  updatedAt       DateTime     @updatedAt
+  id                     String       @id @default(cuid())
+  name                   String
+  phone                  String
+  address                String?
+  timezone               String       @default("Africa/Casablanca")
+  defaultLanguage        Language     @default(FR)
+  supportedLangs         Language[]   @default([FR, EN])
+  isActive               Boolean      @default(true)
 
-  specialties     Specialty[]
-  doctors         Doctor[]
-  botMessages     BotMessage[]
-  faqs            FAQ[]
-  appointments    Appointment[]
-  adminUsers      AdminUser[]
+  // ── Campaign / follow-up settings ──
+  notificationPhone      String?      // WhatsApp number that receives staff alerts
+  campaignDelayHours     Int          @default(24)   // hours after visit before opening message
+  reminderCount          Int          @default(1)    // how many no-reply reminders to send
+  reminderIntervalHours  Int          @default(48)   // hours between reminders
+  aiMaxTurns             Int          @default(20)   // max conversation turns before auto-close
+
+  createdAt              DateTime     @default(now())
+  updatedAt              DateTime     @updatedAt
+
+  specialties            Specialty[]
+  doctors                Doctor[]
+  botMessages            BotMessage[]
+  faqs                   FAQ[]
+  appointments           Appointment[]
+  adminUsers             AdminUser[]
+  campaigns              Campaign[]
 }
 
 // ─── Bot Message Templates ───────────────────────────────────────────────────
@@ -35,24 +44,21 @@ model BotMessage {
   body      String
   language  Language   @default(FR)
   updatedAt DateTime   @updatedAt
-
   clinic    Clinic     @relation(fields: [clinicId], references: [id])
 
   @@unique([clinicId, key, language])
 }
 
 // ─── Specialties ─────────────────────────────────────────────────────────────
-// SINGLE row per specialty. Labels stored as JSON: { "FR": "général", "EN": "general" }
 model Specialty {
-  id           String    @id @default(cuid())
+  id           String        @id @default(cuid())
   clinicId     String
-  labels       Json      // { "FR": "Médecine Générale", "EN": "General Medicine" }
+  labels       Json
   slug         String
-  isActive     Boolean   @default(true)
-  displayOrder Int       @default(0)
-  createdAt    DateTime  @default(now())
-
-  clinic       Clinic    @relation(fields: [clinicId], references: [id])
+  isActive     Boolean       @default(true)
+  displayOrder Int           @default(0)
+  createdAt    DateTime      @default(now())
+  clinic       Clinic        @relation(fields: [clinicId], references: [id])
   doctors      Doctor[]
   appointments Appointment[]
 
@@ -61,54 +67,53 @@ model Specialty {
 
 // ─── Doctors ─────────────────────────────────────────────────────────────────
 model Doctor {
-  id           String     @id @default(cuid())
+  id           String        @id @default(cuid())
   clinicId     String
   specialtyId  String?
   name         String
   bio          String?
-  isActive     Boolean    @default(true)
-  displayOrder Int        @default(0)
-  createdAt    DateTime   @default(now())
-
-  clinic       Clinic     @relation(fields: [clinicId], references: [id])
-  specialty    Specialty? @relation(fields: [specialtyId], references: [id], onDelete: SetNull)
+  isActive     Boolean       @default(true)
+  displayOrder Int           @default(0)
+  createdAt    DateTime      @default(now())
+  clinic       Clinic        @relation(fields: [clinicId], references: [id])
+  specialty    Specialty?    @relation(fields: [specialtyId], references: [id], onDelete: SetNull)
   timeSlots    TimeSlot[]
   appointments Appointment[]
 }
 
 // ─── Availability ─────────────────────────────────────────────────────────────
 model TimeSlot {
-  id                  String   @id @default(cuid())
+  id                  String  @id @default(cuid())
   doctorId            String
   dayOfWeek           Int
   startTime           String
   endTime             String
-  slotDurationMinutes Int      @default(30)
-  isActive            Boolean  @default(true)
-
-  doctor              Doctor   @relation(fields: [doctorId], references: [id])
+  slotDurationMinutes Int     @default(30)
+  isActive            Boolean @default(true)
+  doctor              Doctor  @relation(fields: [doctorId], references: [id])
 }
 
 // ─── Appointments ─────────────────────────────────────────────────────────────
 model Appointment {
-  id               String            @id @default(cuid())
-  clinicId         String
-  doctorId         String?
-  specialtyId      String?           // ← was String, now String?
-  patientName      String
-  patientPhone     String
-  appointmentDate  DateTime
-  appointmentTime  String
-  status           AppointmentStatus @default(PENDING)
-  notes            String?
-  doctorName       String?
-  specialtyName    String?           // ← add this
-  createdAt        DateTime          @default(now())
-  updatedAt        DateTime          @updatedAt
+  id              String            @id @default(cuid())
+  clinicId        String
+  doctorId        String?
+  specialtyId     String?
+  patientName     String
+  patientPhone    String
+  appointmentDate DateTime
+  appointmentTime String
+  status          AppointmentStatus @default(PENDING)
+  notes           String?
+  doctorName      String?
+  specialtyName   String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  clinic          Clinic            @relation(fields: [clinicId], references: [id])
+  doctor          Doctor?           @relation(fields: [doctorId], references: [id])
+  specialty       Specialty?        @relation(fields: [specialtyId], references: [id])
 
-  clinic           Clinic            @relation(fields: [clinicId], references: [id])
-  doctor           Doctor?           @relation(fields: [doctorId], references: [id])
-  specialty        Specialty?        @relation(fields: [specialtyId], references: [id])
+  bookingRequest  BookingRequest?
 }
 
 // ─── FAQs ─────────────────────────────────────────────────────────────────────
@@ -121,20 +126,18 @@ model FAQ {
   isActive     Boolean  @default(true)
   displayOrder Int      @default(0)
   language     Language @default(FR)
-
   clinic       Clinic   @relation(fields: [clinicId], references: [id])
 }
 
 // ─── Admin Users ──────────────────────────────────────────────────────────────
 model AdminUser {
-  id           String    @id @default(cuid())
+  id           String     @id @default(cuid())
   clinicId     String?
-  email        String    @unique
+  email        String     @unique
   passwordHash String
-  role         AdminRole @default(CLINIC_ADMIN)
-  createdAt    DateTime  @default(now())
-
-  clinic       Clinic?   @relation(fields: [clinicId], references: [id])
+  role         AdminRole  @default(CLINIC_ADMIN)
+  createdAt    DateTime   @default(now())
+  clinic       Clinic?    @relation(fields: [clinicId], references: [id])
   auditLogs    AuditLog[]
 }
 
@@ -147,8 +150,132 @@ model AuditLog {
   entityId    String?
   payload     Json?
   createdAt   DateTime  @default(now())
-
   admin       AdminUser @relation(fields: [adminUserId], references: [id])
+}
+
+// ─── Campaign ─────────────────────────────────────────────────────────────────
+model Campaign {
+  id                String           @id @default(cuid())
+  clinicId          String
+  name              String
+  status            CampaignStatus   @default(DRAFT)
+
+  // filters used to pull patients from ClinOps
+  filterDateFrom    DateTime?
+  filterDateTo      DateTime?
+  filterDoctor      String?
+  filterMotif       String?
+
+  // override clinic defaults per campaign if needed
+  notificationPhone String?
+  delayHours        Int?
+  reminderCount     Int?
+  reminderIntervalHours Int?
+  aiMaxTurns        Int?
+
+  // stats — denormalized for fast dashboard queries
+  targetedCount     Int              @default(0)
+  contactedCount    Int              @default(0)
+  repliedCount      Int              @default(0)
+  complainedCount   Int              @default(0)
+  completedCount    Int              @default(0)
+  noResponseCount   Int              @default(0)
+
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+  launchedAt        DateTime?
+  completedAt       DateTime?
+
+  clinic            Clinic           @relation(fields: [clinicId], references: [id])
+  patients          CampaignPatient[]
+}
+
+model CampaignPatient {
+  id               String                @id @default(cuid())
+  campaignId       String
+  clinicId         String
+
+  // ── Patient identifiers — exact ClinOps field names ──────────────────
+  clinopsPatientId Int?                  // ClinOps patient_id
+  patientName      String                // ClinOps: "patient" — full name "Hind BEN"
+  cin              String?               // ClinOps: "cin"
+  sexe             String?               // ClinOps: "sexe" — "M" or "F"
+  ageYears         Int?                  // ClinOps: "age_years"
+  ville            String?               // ClinOps: "ville"
+  pays             String?               // ClinOps: "pays"
+  phone            String                // ClinOps: "numeroTelephonePrincipale" — normalized +212XXXXXXXXX
+  phoneSecondaire  String?               // ClinOps: "numeroTelephoneSecondaire"
+  soldeImpaye      String?               // ClinOps: "solde_impaye" — kept as string matching API
+
+  // ── Visit data — frozen at import time ───────────────────────────────
+  visitDate        DateTime              // ClinOps: "date_derniere_admission"
+  prestation       String                // ClinOps: "prestation" — act/visit reason
+  medecinTraitant  String                // ClinOps: "medecin_traitant"
+
+  // ── Full snapshot — raw ClinOps response frozen at import ────────────
+  patientSnapshot  Json                  // full searchPatientsInfos + getPatientHistory data
+
+  // ── Conversation state ───────────────────────────────────────────────
+  status           CampaignPatientStatus @default(PENDING)
+  language         Language?
+  turnCount        Int                   @default(0)
+  remindersSent    Int                   @default(0)
+  messages         Json                  @default("[]")
+  outcome          ConversationOutcome?
+
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  contactedAt      DateTime?
+  repliedAt        DateTime?
+  completedAt      DateTime?
+
+  campaign         Campaign              @relation(fields: [campaignId], references: [id])
+  complaints       Complaint[]
+  bookingRequests  BookingRequest[]
+}
+
+// ─── Complaint ────────────────────────────────────────────────────────────────
+model Complaint {
+  id                 String            @id @default(cuid())
+  campaignPatientId  String
+  clinicId           String
+
+  type               ComplaintType
+  severity           ComplaintSeverity
+  triggeringMessage  String            // exact patient message that triggered detection
+  summary            String            // AI-generated summary
+  status             ComplaintStatus   @default(NEW)
+  staffNote          String?
+
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+  reviewedAt         DateTime?
+  resolvedAt         DateTime?
+
+  campaignPatient    CampaignPatient   @relation(fields: [campaignPatientId], references: [id])
+}
+
+// ─── Booking Request ──────────────────────────────────────────────────────────
+model BookingRequest {
+  id                 String               @id @default(cuid())
+  campaignPatientId  String
+  clinicId           String
+  appointmentId      String?              @unique // set when staff confirms
+
+  preferredSpecialty String?
+  preferredDoctor    String?
+  preferredDateRange String?              // free text: "semaine prochaine", "lundi matin"
+  reason             String?
+  rawPatientRequest  String               // exact patient message
+
+  status             BookingRequestStatus @default(PENDING)
+
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+  confirmedAt        DateTime?
+
+  campaignPatient    CampaignPatient      @relation(fields: [campaignPatientId], references: [id])
+  appointment        Appointment?         @relation(fields: [appointmentId], references: [id])
 }
 
 // ─── Enums ────────────────────────────────────────────────────────────────────
@@ -171,6 +298,57 @@ enum AdminRole {
   CLINIC_ADMIN
 }
 
+enum CampaignStatus {
+  DRAFT
+  RUNNING
+  PAUSED
+  COMPLETED
+  STOPPED
+}
+
+enum CampaignPatientStatus {
+  PENDING       // not yet contacted
+  CONTACTED     // opening message sent, no reply yet
+  REPLIED       // patient replied at least once
+  COMPLETED     // conversation closed naturally
+  OPTED_OUT     // patient asked to stop
+  NO_RESPONSE   // never replied after all reminders
+}
+
+enum ConversationOutcome {
+  COMPLETED
+  COMPLAINED
+  REBOOKED
+  HANDED_OFF
+  URGENT
+  OPTED_OUT
+  NO_RESPONSE
+}
+
+enum ComplaintType {
+  COMPLAINT       // service complaint
+  MEDICAL_CONCERN // health concern
+  URGENT          // emergency
+}
+
+enum ComplaintSeverity {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum ComplaintStatus {
+  NEW
+  REVIEWED
+  RESOLVED
+}
+
+enum BookingRequestStatus {
+  PENDING
+  CONFIRMED
+  REJECTED
+}
+
 enum MessageKey {
   WELCOME
   LANGUAGE_PROMPT
@@ -188,6 +366,7 @@ enum MessageKey {
   FAQ_LIST_PROMPT
   FALLBACK
   HANDOFF_TRIGGERED
+  HANDOFF_RESOLVED
   SESSION_EXPIRED
   NO_SLOTS_AVAILABLE
   OUTSIDE_HOURS
@@ -208,12 +387,16 @@ enum MessageKey {
   HEADER_DOCTORS
   HEADER_TIMES
   HEADER_SELECT_TIME
-
-  // NEW — empty-state messages
   NO_DOCTORS_FOR_SPECIALTY
   NO_SPECIALTIES_AVAILABLE
   HANDOFF_WAITING
   BUTTON_FAQ_LIST
   HEADER_SELECT_FAQ
   HEADER_TIME_PAGE
+  // ── Campaign follow-up ──
+  CAMPAIGN_OPENING_MESSAGE   // the outbound template message sent to patients
+  CAMPAIGN_REMINDER_MESSAGE  // the reminder if patient never replied
+  CAMPAIGN_URGENT_MESSAGE    // message sent to patient in emergency case
+  CAMPAIGN_HANDOFF_MESSAGE   // message sent when handing off to human
+  CAMPAIGN_REBOOK_CONFIRM    // confirmation sent when booking request is confirmed by staff
 }

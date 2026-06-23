@@ -30,10 +30,11 @@ export class HandoffService {
     );
     await this.whatsappService.sendText(session.phone, handoffMessage);
 
-    // Alert the admin via WhatsApp
     const bossPhone = this.configService.get<string>('whatsapp.bossPhone');
     if (bossPhone) {
-      const alertMessage = `🔔 Handoff Alert\nPatient: ${session.data.patientName || 'Unknown'}\nPhone: ${session.phone}\nTime: ${new Date().toISOString()}`;
+      const alertMessage =
+        `🔔 Handoff Alert\nPatient: ${session.data.patientName ?? 'Unknown'}\n` +
+        `Phone: ${session.phone}\nTime: ${new Date().toISOString()}`;
       await this.whatsappService.sendText(bossPhone, alertMessage);
       this.logger.log(`Handoff alert sent to ${bossPhone}`);
     }
@@ -41,40 +42,82 @@ export class HandoffService {
 
   async handleHandoffMessage(session: Session, message: string): Promise<void> {
     this.logger.log(
-      `Handoff message from user ${session.phone}: ${message}. Awaiting agent response.`,
+      `Handoff message from user ${session.phone}: "${message}". Awaiting agent response.`,
     );
   }
 
-  async getHandoffSessions(): Promise<{ phone: string; state: string; patientName?: string; lastMessage?: string; updatedAt: number }[]> {
+  /**
+   * Returns all reactive sessions currently in AWAITING_HANDOFF state.
+   *
+   * Uses raw Redis GET via getClient() — never calls getOrCreate(), which
+   * would create phantom sessions with empty clinicId for non-existent phones.
+   */
+  async getHandoffSessions(): Promise<
+    { phone: string; state: string; patientName?: string; updatedAt: number }[]
+  > {
+    const redis = this.sessionsService.getClient();
+
+    let keys: string[];
     try {
-      const keys = await this.sessionsService.scanKeys();
-      const sessions: { phone: string; state: string; patientName?: string; lastMessage?: string; updatedAt: number }[] = [];
-      for (const key of keys) {
-        const phone = key.replace('session:', '');
-        const result = await this.sessionsService.getOrCreate(phone, '', 'FR' as any, 'Africa/Casablanca');
-        const session = result.session;
-        if (session.state === SessionState.AWAITING_HANDOFF) {
-          sessions.push({
-            phone,
-            state: session.state,
-            patientName: session.data.patientName,
-            updatedAt: session.updatedAt,
-          });
-        }
-      }
-      return sessions;
+      keys = await this.sessionsService.scanKeys();
     } catch (error) {
-      this.logger.error('Failed to scan handoff sessions', error);
+      this.logger.error('Failed to scan session keys', error);
       return [];
     }
+
+    const results: { phone: string; state: string; patientName?: string; updatedAt: number }[] = [];
+
+    for (const key of keys) {
+      try {
+        const raw = await redis.get(key);
+        if (!raw) continue;
+
+        const session = JSON.parse(raw) as Session;
+        if (session.state !== SessionState.AWAITING_HANDOFF) continue;
+
+        // Derive phone from key — key format is "session:<phone>"
+        const phone = key.replace(/^session:/, '');
+
+        results.push({
+          phone,
+          state:       session.state,
+          patientName: session.data?.patientName,
+          updatedAt:   session.updatedAt,
+        });
+      } catch (err) {
+        this.logger.warn(`Failed to read session key "${key}"`, err);
+      }
+    }
+
+    return results;
   }
 
+  /**
+   * Resolves a handoff session back to IDLE and notifies the patient.
+   *
+   * Uses raw Redis GET via getClient() — never calls getOrCreate() so we
+   * cannot accidentally create or corrupt an existing session.
+   */
   async resolveHandoff(phone: string): Promise<void> {
-    const result = await this.sessionsService.getOrCreate(phone, '', 'FR' as any, 'Africa/Casablanca');
-    const session = result.session;
-    if (!session || session.state !== SessionState.AWAITING_HANDOFF) {
+    const redis = this.sessionsService.getClient();
+    const key   = `session:${phone}`;
+
+    let session: Session;
+    try {
+      const raw = await redis.get(key);
+      if (!raw) {
+        this.logger.warn(`resolveHandoff: no session found for ${phone}`);
+        return;
+      }
+      session = JSON.parse(raw) as Session;
+    } catch (err) {
+      this.logger.error(`resolveHandoff: failed to read session for ${phone}`, err);
+      return;
+    }
+
+    if (session.state !== SessionState.AWAITING_HANDOFF) {
       this.logger.warn(
-        `Cannot resolve handoff for session ${phone} which is not in a handoff state.`,
+        `resolveHandoff: session ${phone} is in state "${session.state}", not AWAITING_HANDOFF — skipping`,
       );
       return;
     }
@@ -83,17 +126,16 @@ export class HandoffService {
     session.state = SessionState.IDLE;
     await this.sessionsService.save(session);
 
-    // Notify the user on WhatsApp that the handoff has been resolved
     try {
       const resolvedMessage = await this.botMessageService.get(
         session.data.clinicId,
-        MessageKey.BOOKING_CANCELLED,
+        MessageKey.HANDOFF_RESOLVED,
         {},
         session.data.language,
       );
       await this.whatsappService.sendText(phone, resolvedMessage);
     } catch (err) {
-      this.logger.warn(`Failed to send resolution message to ${phone}`, err);
+      this.logger.warn(`resolveHandoff: failed to send resolution message to ${phone}`, err);
     }
   }
 }

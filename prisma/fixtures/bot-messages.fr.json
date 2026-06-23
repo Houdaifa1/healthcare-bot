@@ -40,5 +40,6 @@
   { "key": "HANDOFF_WAITING",    "language": "FR", "body": "Un agent va vous contacter. Tapez sur le bouton pour revenir au menu." },
   { "key": "BUTTON_FAQ_LIST",    "language": "FR", "body": "❓ Autres questions" },
   { "key": "HEADER_SELECT_FAQ",  "language": "FR", "body": "Voir les questions" },
-  { "key": "HEADER_TIME_PAGE",   "language": "FR", "body": "Page" }
+  { "key": "HEADER_TIME_PAGE",   "language": "FR", "body": "Page" },
+  { "key": "HANDOFF_RESOLVED",   "language": "FR", "body": "✅ Notre équipe a traité votre demande. N'hésitez pas à nous écrire à tout moment." }
 ]

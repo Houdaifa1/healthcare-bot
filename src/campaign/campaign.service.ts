@@ -149,14 +149,22 @@ export class CampaignService {
   async launch(clinicId: string, id: string): Promise<Campaign> {
     const campaign = await this.findOneRaw(clinicId, id);
 
-    if (campaign.status !== CampaignStatus.DRAFT) {
+    // Only DRAFT or SCHEDULED campaigns can be launched
+    if (
+      campaign.status !== CampaignStatus.DRAFT &&
+      campaign.status !== CampaignStatus.SCHEDULED
+    ) {
       throw new ConflictException(
         `Campaign "${campaign.name}" is already ${campaign.status}`,
       );
     }
 
-    // ── If scheduledStartAt is set and in the future, enter SCHEDULED status ──
-    if (campaign.scheduledStartAt && campaign.scheduledStartAt > new Date()) {
+    // ── If DRAFT with scheduledStartAt in the future, enter SCHEDULED status ──
+    if (
+      campaign.status === CampaignStatus.DRAFT &&
+      campaign.scheduledStartAt &&
+      campaign.scheduledStartAt > new Date()
+    ) {
       this.logger.log(
         `Campaign "${campaign.name}" scheduled for ${campaign.scheduledStartAt.toISOString()} — entering SCHEDULED status`,
       );

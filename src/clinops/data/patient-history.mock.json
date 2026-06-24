@@ -40,14 +40,6 @@
         "actes_realises": ["Échocardiographie", "ECG"],
         "produits_pharmaceutiques": ["Bisoprolol 5mg"],
         "avis_medicaux": []
-      },
-      {
-        "date_admission": "2025-03-05T14:00:00",
-        "motif_admission": "Douleurs thoraciques",
-        "medecin_traitant": "DR Ahmed BENALI",
-        "actes_realises": ["ECG", "Prise de sang"],
-        "produits_pharmaceutiques": ["Trinitrine"],
-        "avis_medicaux": ["Hospitalisation 48h recommandée"]
       }
     ]
   },
@@ -76,14 +68,6 @@
         "actes_realises": ["Radiographie thoracique", "Consultation pneumologie"],
         "produits_pharmaceutiques": ["Amoxicilline 1g", "Ibuprofène 400mg"],
         "avis_medicaux": ["Réévaluation dans 2 semaines"]
-      },
-      {
-        "date_admission": "2025-12-10T10:30:00",
-        "motif_admission": "Toux persistante",
-        "medecin_traitant": "DR Miloud BAKOUCHE",
-        "actes_realises": ["Consultation pneumologie"],
-        "produits_pharmaceutiques": ["Sirop antitussif"],
-        "avis_medicaux": []
       }
     ]
   },
@@ -112,14 +96,6 @@
         "actes_realises": ["ECG", "Consultation cardiologie", "Holter 24h"],
         "produits_pharmaceutiques": ["Ramipril 5mg", "Atorvastatine 20mg"],
         "avis_medicaux": ["Pose stimulateur à évaluer"]
-      },
-      {
-        "date_admission": "2025-08-18T09:30:00",
-        "motif_admission": "Palpitations",
-        "medecin_traitant": "DR Ahmed BENALI",
-        "actes_realises": ["ECG"],
-        "produits_pharmaceutiques": ["Bisoprolol 2.5mg"],
-        "avis_medicaux": []
       }
     ]
   },
@@ -148,14 +124,6 @@
         "actes_realises": ["Scanner cérébral", "IRM cérébral"],
         "produits_pharmaceutiques": ["Doliprane 1g"],
         "avis_medicaux": ["Consultation neurochirurgie recommandée"]
-      },
-      {
-        "date_admission": "2025-10-22T11:00:00",
-        "motif_admission": "Céphalées chroniques",
-        "medecin_traitant": "DR Miloud BAKOUCHE",
-        "actes_realises": ["Consultation neurologie"],
-        "produits_pharmaceutiques": ["Amitriptyline 25mg"],
-        "avis_medicaux": []
       }
     ]
   },
@@ -169,14 +137,6 @@
         "medecin_traitant": "DR Nadia BENCHEKROUN",
         "actes_realises": ["Consultation gynécologie", "Mammographie"],
         "produits_pharmaceutiques": [],
-        "avis_medicaux": []
-      },
-      {
-        "date_admission": "2025-06-15T10:00:00",
-        "motif_admission": "Suivi gynécologique",
-        "medecin_traitant": "DR Nadia BENCHEKROUN",
-        "actes_realises": ["Consultation gynécologie"],
-        "produits_pharmaceutiques": ["Progestérone 200mg"],
         "avis_medicaux": []
       }
     ]
@@ -192,13 +152,19 @@
         "actes_realises": ["Glycémie à jeun", "HbA1c", "Bilan rénal"],
         "produits_pharmaceutiques": ["Metformine 850mg"],
         "avis_medicaux": ["Diabète bien contrôlé — poursuite traitement"]
-      },
+      }
+    ]
+  },
+  "CIN9999": {
+    "patient": "Houdaifa DRAHM",
+    "solde_impaye": 0.00,
+    "admissions": [
       {
-        "date_admission": "2025-04-03T09:00:00",
-        "motif_admission": "Contrôle diabète",
-        "medecin_traitant": "DR Ahmed BENALI",
-        "actes_realises": ["Glycémie", "Consultation endocrinologie"],
-        "produits_pharmaceutiques": ["Metformine 500mg"],
+        "date_admission": "2026-06-20T14:30:00",
+        "motif_admission": "Consultation générale",
+        "medecin_traitant": "DR Miloud BAKOUCHE",
+        "actes_realises": ["Consultation", "Bilan sanguin"],
+        "produits_pharmaceutiques": ["Paracétamol 1000mg"],
         "avis_medicaux": []
       }
     ]

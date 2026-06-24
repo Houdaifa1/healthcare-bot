@@ -332,6 +332,37 @@ export class CampaignService {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // DELETE — only allowed on DRAFT, STOPPED, COMPLETED, or SCHEDULED campaigns
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  async remove(clinicId: string, id: string): Promise<void> {
+    const campaign = await this.findOneRaw(clinicId, id);
+
+    if (campaign.status === CampaignStatus.RUNNING) {
+      throw new ConflictException(
+        `Campaign "${campaign.name}" is RUNNING — stop it before deleting`,
+      );
+    }
+
+    if (campaign.status === CampaignStatus.PAUSED) {
+      throw new ConflictException(
+        `Campaign "${campaign.name}" is PAUSED — stop or resume it before deleting`,
+      );
+    }
+
+    // Delete all campaign patients first (cascade)
+    await this.prisma.campaignPatient.deleteMany({
+      where: { campaignId: id },
+    });
+
+    await this.prisma.campaign.delete({
+      where: { id },
+    });
+
+    this.logger.log(`Campaign "${campaign.name}" (${id}) deleted`);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // PRIVATE — EXECUTE LAUNCH (shared by launch() and scheduler)
   // ═══════════════════════════════════════════════════════════════════════════
 

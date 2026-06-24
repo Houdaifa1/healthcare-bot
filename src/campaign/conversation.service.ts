@@ -404,17 +404,43 @@ CONVERSATION RULES:
   ): Promise<any> {
     const maxTokens = Math.min(1024, Math.max(256, aiMaxTurns * 20));
 
-    return this.client!.chat.completions.create({
-      model:       GROQ_MODEL,
-      max_tokens:  maxTokens,
-      temperature: 0.7,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        ...messages,
-      ],
-      tools:       GROQ_TOOLS,
-      tool_choice: 'auto',
-    });
+    try {
+      return await this.client!.chat.completions.create({
+        model:       GROQ_MODEL,
+        max_tokens:  maxTokens,
+        temperature: 0.7,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          ...messages,
+        ],
+        tools:       GROQ_TOOLS,
+        tool_choice: 'auto',
+      });
+    } catch (err: any) {
+      // Groq returns 400 when the model generates malformed tool calls
+      // (e.g., <function=...> text format). Parse failed_generation and
+      // return a synthetic response so processResponse can handle it.
+      const errorBody = err?.response?.data ?? err?.message ?? '';
+      const errorStr = typeof errorBody === 'string' ? errorBody : JSON.stringify(errorBody);
+
+      const failedGenMatch = errorStr.match(/"failed_generation"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+      if (failedGenMatch) {
+        const failedGen = failedGenMatch[1].replace(/\\"/g, '"').replace(/\\n/g, '\n');
+        this.logger.warn(`Groq tool call failed — parsing failed_generation as text`);
+
+        return {
+          choices: [{
+            message: {
+              content: failedGen,
+              tool_calls: null,
+            },
+          }],
+        };
+      }
+
+      this.logger.error(`Groq API error: ${errorStr}`);
+      throw err;
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════════════════

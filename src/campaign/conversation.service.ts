@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import Groq from 'groq-sdk';
 import { PrismaService } from '../prisma/prisma.service';
 import { SessionsService, CampaignSession, CampaignMessage } from '../sessions/sessions.service';
 import { WhatsAppService } from '../whatsapp/whatsapp.service';
@@ -11,31 +12,6 @@ import {
   Language,
   MessageKey,
 } from '@prisma/client';
-
-// ─── Anthropic API types ───────────────────────────────────────────────────────
-
-interface AnthropicTextBlock {
-  type:  'text';
-  text:  string;
-}
-
-interface AnthropicToolUseBlock {
-  type:  'tool_use';
-  id:    string;
-  name:  string;
-  input: Record<string, unknown>;
-}
-
-type AnthropicContentBlock = AnthropicTextBlock | AnthropicToolUseBlock;
-
-interface AnthropicMessage {
-  id:           string;
-  type:         'message';
-  role:         'assistant';
-  content:      AnthropicContentBlock[];
-  stop_reason:  'end_turn' | 'tool_use' | 'max_tokens' | string;
-  usage:        { input_tokens: number; output_tokens: number };
-}
 
 // ─── Tool input shapes ────────────────────────────────────────────────────────
 
@@ -59,96 +35,106 @@ interface EndConversationInput {
   outcome: ConversationOutcome;
 }
 
-// ─── Claude tool definitions ──────────────────────────────────────────────────
+// ─── Groq tool definitions (OpenAI function-calling format) ───────────────────
 
-const CLAUDE_TOOLS = [
+const GROQ_TOOLS: any[] = [
   {
-    name:        'log_complaint',
-    description: 'Log a patient complaint or medical concern detected in the conversation. Call this whenever the patient expresses dissatisfaction, reports a medical issue, or describes an urgent situation.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        type: {
-          type: 'string',
-          enum: ['COMPLAINT', 'MEDICAL_CONCERN', 'URGENT'],
-          description: 'COMPLAINT = service/experience complaint, MEDICAL_CONCERN = health issue, URGENT = emergency requiring immediate attention',
+    type: 'function',
+    function: {
+      name:        'log_complaint',
+      description: 'Log a patient complaint or medical concern detected in the conversation. Call this whenever the patient expresses dissatisfaction, reports a medical issue, or describes an urgent situation.',
+      parameters: {
+        type: 'object',
+        properties: {
+          type: {
+            type: 'string',
+            enum: ['COMPLAINT', 'MEDICAL_CONCERN', 'URGENT'],
+            description: 'COMPLAINT = service/experience complaint, MEDICAL_CONCERN = health issue, URGENT = emergency requiring immediate attention',
+          },
+          severity: {
+            type: 'string',
+            enum: ['LOW', 'MEDIUM', 'HIGH'],
+            description: 'LOW = minor inconvenience, MEDIUM = significant issue, HIGH = serious concern requiring urgent staff attention',
+          },
+          summary: {
+            type: 'string',
+            description: 'A clear 1-2 sentence summary of the complaint in the language the patient used',
+          },
         },
-        severity: {
-          type: 'string',
-          enum: ['LOW', 'MEDIUM', 'HIGH'],
-          description: 'LOW = minor inconvenience, MEDIUM = significant issue, HIGH = serious concern requiring urgent staff attention',
-        },
-        summary: {
-          type: 'string',
-          description: 'A clear 1-2 sentence summary of the complaint in the language the patient used',
-        },
+        required: ['type', 'severity', 'summary'],
       },
-      required: ['type', 'severity', 'summary'],
     },
   },
   {
-    name:        'request_booking',
-    description: 'Create a booking request when the patient expresses intent to schedule a new appointment or follow-up visit.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        preferredDoctor: {
-          type: 'string',
-          description: 'Doctor name if the patient mentioned a preference',
+    type: 'function',
+    function: {
+      name:        'request_booking',
+      description: 'Create a booking request when the patient expresses intent to schedule a new appointment or follow-up visit.',
+      parameters: {
+        type: 'object',
+        properties: {
+          preferredDoctor: {
+            type: 'string',
+            description: 'Doctor name if the patient mentioned a preference',
+          },
+          preferredDateRange: {
+            type: 'string',
+            description: 'Free text date preference as expressed by the patient, e.g. "semaine prochaine", "lundi matin", "next week"',
+          },
+          reason: {
+            type: 'string',
+            description: 'Reason for the new appointment as expressed by the patient',
+          },
         },
-        preferredDateRange: {
-          type: 'string',
-          description: 'Free text date preference as expressed by the patient, e.g. "semaine prochaine", "lundi matin", "next week"',
-        },
-        reason: {
-          type: 'string',
-          description: 'Reason for the new appointment as expressed by the patient',
-        },
+        required: [],
       },
-      required: [],
     },
   },
   {
-    name:        'request_handoff',
-    description: 'Transfer the conversation to a human staff member. Use when the patient is very distressed, the situation is too complex for AI, the patient explicitly asks for a human, or there is an urgent medical situation.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        reason: {
-          type: 'string',
-          description: 'Clear explanation of why handoff is needed, for the staff member who will take over',
+    type: 'function',
+    function: {
+      name:        'request_handoff',
+      description: 'Transfer the conversation to a human staff member. Use when the patient is very distressed, the situation is too complex for AI, the patient explicitly asks for a human, or there is an urgent medical situation.',
+      parameters: {
+        type: 'object',
+        properties: {
+          reason: {
+            type: 'string',
+            description: 'Clear explanation of why handoff is needed, for the staff member who will take over',
+          },
         },
+        required: ['reason'],
       },
-      required: ['reason'],
     },
   },
   {
-    name:        'end_conversation',
-    description: 'Close the conversation when the follow-up is complete. Call this when the patient has no more concerns, has been helped, or has clearly disengaged.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        outcome: {
-          type: 'string',
-          enum: ['COMPLETED', 'COMPLAINED', 'REBOOKED', 'HANDED_OFF', 'URGENT', 'OPTED_OUT', 'NO_RESPONSE'],
-          description: 'The final outcome of this conversation',
+    type: 'function',
+    function: {
+      name:        'end_conversation',
+      description: 'Close the conversation when the follow-up is complete. Call this when the patient has no more concerns, has been helped, or has clearly disengaged.',
+      parameters: {
+        type: 'object',
+        properties: {
+          outcome: {
+            type: 'string',
+            enum: ['COMPLETED', 'COMPLAINED', 'REBOOKED', 'HANDED_OFF', 'URGENT', 'OPTED_OUT', 'NO_RESPONSE'],
+            description: 'The final outcome of this conversation',
+          },
         },
+        required: ['outcome'],
       },
-      required: ['outcome'],
     },
   },
 ];
 
-// ─── Anthropic model ──────────────────────────────────────────────────────────
+// ─── Groq model ──────────────────────────────────────────────────────────────
 
-const ANTHROPIC_MODEL   = 'claude-sonnet-4-6';
-const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
-const ANTHROPIC_VERSION = '2023-06-01';
+const GROQ_MODEL = 'llama-3.3-70b-versatile';
 
 @Injectable()
 export class ConversationService {
   private readonly logger = new Logger(ConversationService.name);
-  private readonly anthropicApiKey: string;
+  private client: Groq | null;
 
   constructor(
     private readonly configService:  ConfigService,
@@ -156,11 +142,14 @@ export class ConversationService {
     private readonly sessionsService: SessionsService,
     private readonly whatsappService: WhatsAppService,
   ) {
-    const key = this.configService.get<string>('anthropic.apiKey');
-    if (!key) {
-      throw new Error('ANTHROPIC_API_KEY is not set');
+    const apiKey = this.configService.get<string>('GROQ_API_KEY');
+    if (apiKey) {
+      this.client = new Groq({ apiKey });
+      this.logger.log('Groq AI initialized for campaign conversations');
+    } else {
+      this.client = null;
+      this.logger.warn('GROQ_API_KEY not set — AI conversation engine disabled until configured');
     }
-    this.anthropicApiKey = key;
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -168,6 +157,11 @@ export class ConversationService {
   // ═══════════════════════════════════════════════════════════════════════════
 
   async handleReply(phone: string, patientMessage: string): Promise<void> {
+    if (!this.client) {
+      this.logger.error('Cannot handle reply — GROQ_API_KEY is not set');
+      return;
+    }
+
     this.logger.log(`Campaign reply from ${phone}: "${patientMessage}"`);
 
     // ── 1. Load Redis session ──────────────────────────────────────────────
@@ -208,8 +202,6 @@ export class ConversationService {
     }
 
     // ── 5. Detect and persist language on first reply ─────────────────────
-    // Language is null until the patient's first message — detect it here
-    // and save it to both session and DB so reminders use the right language.
     if (session.language === null) {
       const detected = this.detectLanguage(patientMessage);
       session.language = detected;
@@ -232,7 +224,6 @@ export class ConversationService {
         },
       });
 
-      // Increment campaign repliedCount
       await this.prisma.campaign.update({
         where: { id: campaignPatient.campaignId },
         data:  { repliedCount: { increment: 1 } },
@@ -262,22 +253,20 @@ export class ConversationService {
       return;
     }
 
-    // ── 11. Build Claude messages array ───────────────────────────────────
+    // ── 11. Build messages array ───────────────────────────────────────────
     const systemPrompt = this.buildSystemPrompt(session, campaignPatient);
-    const claudeMessages = this.buildClaudeMessages(session);
+    const messages = this.buildMessages(session);
 
-    // ── 12. Call Claude ────────────────────────────────────────────────────
-    const response = await this.callClaude(systemPrompt, claudeMessages, aiMaxTurns);
+    // ── 12. Call Groq ──────────────────────────────────────────────────────
+    const response = await this.callGroq(systemPrompt, messages, aiMaxTurns);
 
     // ── 13. Execute tool calls ────────────────────────────────────────────
-    // Tool calls are side effects — complaints, bookings, handoffs, end_conversation.
-    // We collect Claude's text response separately.
-    const { textReply, conversationEnded } = await this.processClaudeResponse(
+    const { textReply, conversationEnded } = await this.processResponse(
       response,
       session,
       campaignPatient.id,
       campaignPatient.campaignId,
-      clinic.notificationPhone ?? campaign_notification_phone_fallback(campaignPatient),
+      clinic.notificationPhone ?? null,
       patientMessage,
     );
 
@@ -324,7 +313,6 @@ export class ConversationService {
     campaignPatient: { patientSnapshot: any; patientName: string; visitDate: Date; prestation: string; medecinTraitant: string; ageYears: number | null; sexe: string | null; ville: string | null },
   ): string {
     const snapshot      = campaignPatient.patientSnapshot as Record<string, any>;
-    const patientData   = snapshot?.patient  ?? {};
     const historyData   = snapshot?.history  ?? null;
     const language      = session.language ?? Language.FR;
 
@@ -334,11 +322,10 @@ export class ConversationService {
         ? 'Respond in Moroccan Darija (Arabic). Use simple, clear language.'
         : 'Always respond in French. Use polite, professional "vous" form.';
 
-    // Build admission history summary
     let historySection = 'No previous admission history available.';
     if (historyData?.admissions && Array.isArray(historyData.admissions) && historyData.admissions.length > 0) {
       const admissions = historyData.admissions
-        .slice(0, 10) // last 10 admissions max — avoid bloating context
+        .slice(0, 10)
         .map((a: any, i: number) => {
           const date   = a.date_admission ? new Date(a.date_admission).toLocaleDateString('fr-FR') : 'Unknown date';
           const motif  = a.motif_admission ?? 'Unknown';
@@ -392,130 +379,119 @@ CONVERSATION RULES:
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // BUILD CLAUDE MESSAGES ARRAY
+  // BUILD MESSAGES ARRAY
   // ═══════════════════════════════════════════════════════════════════════════
 
-  private buildClaudeMessages(
+  private buildMessages(
     session: CampaignSession,
-  ): { role: 'user' | 'assistant'; content: string }[] {
-    // Map session messages to Claude format
-    // Only include messages that have content — filter out empty strings
+  ): any[] {
     return session.messages
       .filter(m => m.content?.trim())
       .map(m => ({
-        role:    m.role,
+        role:    m.role as 'user' | 'assistant',
         content: m.content,
       }));
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // CALL CLAUDE API
+  // CALL GROQ API
   // ═══════════════════════════════════════════════════════════════════════════
 
-  private async callClaude(
+  private async callGroq(
     systemPrompt: string,
-    messages:     { role: 'user' | 'assistant'; content: string }[],
+    messages:     any[],
     aiMaxTurns:   number,
-  ): Promise<AnthropicMessage> {
-    // max_tokens scaled to conversation length — short WhatsApp replies need little
+  ): Promise<any> {
     const maxTokens = Math.min(1024, Math.max(256, aiMaxTurns * 20));
 
-    const body = {
-      model:      ANTHROPIC_MODEL,
-      max_tokens: maxTokens,
-      system:     systemPrompt,
-      tools:      CLAUDE_TOOLS,
-      messages,
-    };
-
-    const response = await fetch(ANTHROPIC_API_URL, {
-      method:  'POST',
-      headers: {
-        'Content-Type':      'application/json',
-        'x-api-key':         this.anthropicApiKey,
-        'anthropic-version': ANTHROPIC_VERSION,
-      },
-      body: JSON.stringify(body),
+    return this.client!.chat.completions.create({
+      model:       GROQ_MODEL,
+      max_tokens:  maxTokens,
+      temperature: 0.7,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        ...messages,
+      ],
+      tools:       GROQ_TOOLS,
+      tool_choice: 'auto',
     });
-
-    if (!response.ok) {
-      let errorBody = '';
-      try {
-        errorBody = JSON.stringify(await response.json());
-      } catch {
-        errorBody = await response.text().catch(() => '');
-      }
-      const msg = `Anthropic API error ${response.status}: ${errorBody}`;
-      this.logger.error(msg);
-      throw new Error(msg);
-    }
-
-    return response.json() as Promise<AnthropicMessage>;
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // PROCESS CLAUDE RESPONSE — execute tools, extract text
+  // PROCESS RESPONSE — execute tools, extract text
   // ═══════════════════════════════════════════════════════════════════════════
 
-  private async processClaudeResponse(
-    response:            AnthropicMessage,
-    session:             CampaignSession,
-    campaignPatientId:   string,
-    campaignId:          string,
-    notificationPhone:   string | null,
-    rawPatientMessage:   string,
+  private async processResponse(
+    response:          any,
+    session:           CampaignSession,
+    campaignPatientId: string,
+    campaignId:        string,
+    notificationPhone: string | null,
+    rawPatientMessage: string,
   ): Promise<{ textReply: string | null; conversationEnded: boolean }> {
     let textReply:         string | null = null;
     let conversationEnded: boolean       = false;
 
-    for (const block of response.content) {
-      if (block.type === 'text' && block.text.trim()) {
-        // Concatenate all text blocks into one reply
-        textReply = textReply
-          ? `${textReply}\n\n${block.text.trim()}`
-          : block.text.trim();
-        continue;
-      }
+    const choice = response.choices[0];
+    if (!choice) {
+      this.logger.warn('Groq returned no choices');
+      return { textReply: null, conversationEnded: false };
+    }
 
-      if (block.type === 'tool_use') {
-        this.logger.log(`Tool called: ${block.name} — input: ${JSON.stringify(block.input)}`);
+    const msg = choice.message;
 
-        switch (block.name) {
+    // ── Extract text content ─────────────────────────────────────────────
+    if (msg.content?.trim()) {
+      textReply = msg.content.trim();
+    }
+
+    // ── Process tool calls ───────────────────────────────────────────────
+    if (msg.tool_calls && msg.tool_calls.length > 0) {
+      for (const toolCall of msg.tool_calls) {
+        const name = toolCall.function.name;
+        let args: Record<string, unknown>;
+        try {
+          args = JSON.parse(toolCall.function.arguments);
+        } catch {
+          this.logger.warn(`Failed to parse tool arguments for ${name}: ${toolCall.function.arguments}`);
+          continue;
+        }
+
+        this.logger.log(`Tool called: ${name} — input: ${JSON.stringify(args)}`);
+
+        switch (name) {
           case 'log_complaint': {
-            const input = block.input as unknown as LogComplaintInput;
+            const input = args as unknown as LogComplaintInput;
             await this.executeLogComplaint(input, campaignPatientId, session.clinicId, rawPatientMessage, campaignId);
             break;
           }
 
           case 'request_booking': {
-            const input = block.input as unknown as RequestBookingInput;
+            const input = args as unknown as RequestBookingInput;
             await this.executeRequestBooking(input, campaignPatientId, session.clinicId, rawPatientMessage);
             break;
           }
 
           case 'request_handoff': {
-            const input = block.input as unknown as RequestHandoffInput;
+            const input = args as unknown as RequestHandoffInput;
             await this.executeRequestHandoff(input, session, campaignPatientId, campaignId, notificationPhone);
             conversationEnded = true;
             break;
           }
 
           case 'end_conversation': {
-            const input = block.input as unknown as EndConversationInput;
+            const input = args as unknown as EndConversationInput;
             await this.closeConversation(session, campaignPatientId, campaignId, input.outcome);
             conversationEnded = true;
             break;
           }
 
           default:
-            this.logger.warn(`Unknown tool called: ${block.name}`);
+            this.logger.warn(`Unknown tool called: ${name}`);
         }
       }
     }
 
-    // If Claude returned tool_use as stop_reason but no text, that's fine —
-    // tool was a side effect only. If there's no text reply and conversation
-    // didn't end, Claude just processed the turn silently.
     return { textReply, conversationEnded };
   }
 
@@ -541,7 +517,6 @@ CONVERSATION RULES:
       },
     });
 
-    // Increment campaign complainedCount
     await this.prisma.campaign.update({
       where: { id: campaignId },
       data:  { complainedCount: { increment: 1 } },
@@ -579,10 +554,8 @@ CONVERSATION RULES:
     campaignId:        string,
     notificationPhone: string | null,
   ): Promise<void> {
-    // Update session status
     session.status = 'handed_off';
 
-    // Update patient record
     await this.prisma.campaignPatient.update({
       where: { id: campaignPatientId },
       data: {
@@ -592,16 +565,13 @@ CONVERSATION RULES:
       },
     });
 
-    // Increment campaign completedCount
     await this.prisma.campaign.update({
       where: { id: campaignId },
       data:  { completedCount: { increment: 1 } },
     });
 
-    // Delete Redis session — conversation is over
     await this.sessionsService.deleteCampaignSession(session.phone);
 
-    // Notify staff via WhatsApp if a notification phone is configured
     if (notificationPhone) {
       try {
         const msg =
@@ -610,7 +580,6 @@ CONVERSATION RULES:
           `Reason: ${input.reason}`;
         await this.whatsappService.sendText(notificationPhone, msg);
       } catch (err: any) {
-        // Staff notification failure must not crash the patient flow
         this.logger.error(`Failed to notify staff of handoff: ${err.message}`);
       }
     }
@@ -637,13 +606,11 @@ CONVERSATION RULES:
       },
     });
 
-    // Increment campaign completedCount
     await this.prisma.campaign.update({
       where: { id: campaignId },
       data:  { completedCount: { increment: 1 } },
     });
 
-    // Delete Redis session — conversation is over
     await this.sessionsService.deleteCampaignSession(session.phone);
 
     this.logger.log(
@@ -655,32 +622,20 @@ CONVERSATION RULES:
   // PRIVATE HELPERS
   // ═══════════════════════════════════════════════════════════════════════════
 
-  /**
-   * Detects language from the first patient message.
-   * Simple heuristic — Arabic script detection + common French/English words.
-   * Good enough for first-message detection; Claude adapts from context after.
-   */
   private detectLanguage(message: string): Language {
-    // Arabic script detection — covers Darija written in Arabic
     if (/[\u0600-\u06FF]/.test(message)) return Language.AR;
 
     const lower = message.toLowerCase();
 
-    // Common French indicators
     const frenchWords = ['bonjour', 'merci', 'oui', 'non', 'je', 'vous', 'comment', 'bien', 'bonsoir', 'salam'];
     if (frenchWords.some(w => lower.includes(w))) return Language.FR;
 
-    // Common English indicators
     const englishWords = ['hello', 'hi', 'thanks', 'yes', 'no', 'good', 'how', 'please', 'fine'];
     if (englishWords.some(w => lower.includes(w))) return Language.EN;
 
-    // Default to clinic default — FR for Innova
     return Language.FR;
   }
 
-  /**
-   * Resolves aiMaxTurns — campaign override takes precedence over clinic default.
-   */
   private async resolveAiMaxTurns(campaignId: string, clinicAiMaxTurns: number): Promise<number> {
     const campaign = await this.prisma.campaign.findUnique({
       where:  { id: campaignId },
@@ -689,10 +644,6 @@ CONVERSATION RULES:
     return campaign?.aiMaxTurns ?? clinicAiMaxTurns;
   }
 
-  /**
-   * Fetches a single bot message body from the DB.
-   * Falls back to FR if the requested language has no record.
-   */
   async fetchBotMessage(
     clinicId: string,
     key:      MessageKey,
@@ -712,14 +663,4 @@ CONVERSATION RULES:
 
     return null;
   }
-}
-
-// ─── Module-level helper (not a method — avoids extra DB call) ────────────────
-// Resolves notification phone from campaign patient's campaign when clinic has none.
-// This is called only in the handoff path where we already have campaignPatient loaded.
-function campaign_notification_phone_fallback(
-  campaignPatient: { campaignId: string },
-): null {
-  // No fallback possible without an extra DB call here — caller handles null gracefully.
-  return null;
 }

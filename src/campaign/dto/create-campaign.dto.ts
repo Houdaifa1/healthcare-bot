@@ -5,6 +5,7 @@ import {
   IsDateString,
   IsInt,
   IsPositive,
+  Min,
   MinLength,
   MaxLength,
 } from 'class-validator';
@@ -45,7 +46,7 @@ export class CreateCampaignDto {
 
   @IsOptional()
   @IsInt()
-  @IsPositive()
+  @Min(0)
   delayHours?: number;
 
   @IsOptional()

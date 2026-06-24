@@ -71,9 +71,9 @@ export class ClinOpsService {
 
     const { cin_passeport, date_derniere_consultation, motif, numeroTelephone, OnlyVerifiedNumbers } = filters;
 
-    if (!cin_passeport && !motif && !numeroTelephone) {
+    if (!cin_passeport && !motif && !numeroTelephone && !OnlyVerifiedNumbers) {
       throw new BadRequestException(
-        'Au moins un filtre est requis (cin_passeport, motif, ou numeroTelephone)',
+        'At least one filter is required (cin_passeport, motif, numeroTelephone, or OnlyVerifiedNumbers)',
       );
     }
 

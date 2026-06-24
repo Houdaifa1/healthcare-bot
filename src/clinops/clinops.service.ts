@@ -279,7 +279,14 @@ export class ClinOpsService {
    * __dirname resolves correctly in both ts-node (src/) and nest build (dist/).
    */
   private loadJson<T>(filename: string): T {
-    const filePath = path.join(__dirname, 'data', filename);
+    // Primary: dist/src/clinops/data/ (works in ts-node dev)
+    let filePath = path.join(__dirname, 'data', filename);
+
+    // Fallback: dist/clinops/data/ (nest-cli assets strips src/ prefix in Docker)
+    if (!fs.existsSync(filePath)) {
+      filePath = path.join(__dirname, '..', '..', 'clinops', 'data', filename);
+    }
+
     try {
       return JSON.parse(fs.readFileSync(filePath, 'utf-8')) as T;
     } catch (err: any) {

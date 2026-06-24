@@ -454,20 +454,24 @@ export class CampaignService {
 
     if (campaign.filterMotif) filters.motif = campaign.filterMotif;
 
-    if (campaign.filterDateFrom) {
-      filters.date_derniere_consultation = campaign.filterDateFrom.toISOString().substring(0, 10);
-    }
-
+    // Do NOT pass date_derniere_consultation to ClinOps search — it only matches
+    // exact dates. We do date range filtering post-search below.
     filters.OnlyVerifiedNumbers = true;
 
     let patients = await this.clinops.searchPatients(filters);
 
-    if (campaign.filterDateFrom && campaign.filterDateTo) {
-      const from = campaign.filterDateFrom.getTime();
-      const to   = campaign.filterDateTo.getTime();
+    // Date range filtering — post-search
+    if (campaign.filterDateFrom || campaign.filterDateTo) {
+      const fromTs = campaign.filterDateFrom
+        ? new Date(campaign.filterDateFrom.getFullYear(), campaign.filterDateFrom.getMonth(), campaign.filterDateFrom.getDate()).getTime()
+        : 0;
+      const toTs = campaign.filterDateTo
+        ? new Date(campaign.filterDateTo.getFullYear(), campaign.filterDateTo.getMonth(), campaign.filterDateTo.getDate(), 23, 59, 59).getTime()
+        : Infinity;
+
       patients = patients.filter((p) => {
         const visitTs = new Date(p.date_derniere_admission).getTime();
-        return visitTs >= from && visitTs <= to;
+        return visitTs >= fromTs && visitTs <= toTs;
       });
     }
 

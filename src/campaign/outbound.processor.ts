@@ -135,16 +135,26 @@ export class OutboundProcessor extends WorkerHost {
       return;
     }
 
-    // ── 10. Send opening message via WhatsApp ──────────────────────────────
-    await this.whatsappService.sendText(campaignPatient.phone, openingMessage);
+    // ── 10. Substitute template variables and send ─────────────────────────
+    const visitDate = new Date(campaignPatient.visitDate).toLocaleDateString('fr-FR');
+    const personalized = openingMessage
+      .replace(/\{\{name\}\}/g, campaignPatient.patientName)
+      .replace(/\{\{visitDate\}\}/g, visitDate)
+      .replace(/\{\{doctor\}\}/g, campaignPatient.medecinTraitant)
+      .replace(/\{\{clinicName\}\}/g, clinic.name);
+
+    await this.whatsappService.sendText(campaignPatient.phone, personalized);
 
     this.logger.log(
       `Opening message sent to ${campaignPatient.phone} (${campaignPatient.patientName})`,
     );
 
     // ── 11. Create campaign Redis session ──────────────────────────────────
+    // Normalise phone to match WhatsApp webhook format (no '+' prefix)
+    const normalisedPhone = campaignPatient.phone.replace(/^\+/, '').replace(/\s/g, '');
+
     const session: CampaignSession = {
-      phone:             campaignPatient.phone,
+      phone:             normalisedPhone,
       campaignPatientId: campaignPatient.id,
       clinicId,
       patientSnapshot:   campaignPatient.patientSnapshot as Record<string, any>,

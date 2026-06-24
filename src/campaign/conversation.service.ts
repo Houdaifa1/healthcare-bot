@@ -445,7 +445,7 @@ CONVERSATION RULES:
       textReply = msg.content.trim();
     }
 
-    // ── Process tool calls ───────────────────────────────────────────────
+    // ── Process tool calls (structured) ───────────────────────────────────
     if (msg.tool_calls && msg.tool_calls.length > 0) {
       for (const toolCall of msg.tool_calls) {
         const name = toolCall.function.name;
@@ -458,36 +458,31 @@ CONVERSATION RULES:
         }
 
         this.logger.log(`Tool called: ${name} — input: ${JSON.stringify(args)}`);
+        const result = await this.executeToolCall(name, args, session, campaignPatientId, campaignId, notificationPhone, rawPatientMessage);
+        if (result.ended) conversationEnded = true;
+      }
+    }
 
-        switch (name) {
-          case 'log_complaint': {
-            const input = args as unknown as LogComplaintInput;
-            await this.executeLogComplaint(input, campaignPatientId, session.clinicId, rawPatientMessage, campaignId);
-            break;
-          }
-
-          case 'request_booking': {
-            const input = args as unknown as RequestBookingInput;
-            await this.executeRequestBooking(input, campaignPatientId, session.clinicId, rawPatientMessage);
-            break;
-          }
-
-          case 'request_handoff': {
-            const input = args as unknown as RequestHandoffInput;
-            await this.executeRequestHandoff(input, session, campaignPatientId, campaignId, notificationPhone);
-            conversationEnded = true;
-            break;
-          }
-
-          case 'end_conversation': {
-            const input = args as unknown as EndConversationInput;
-            await this.closeConversation(session, campaignPatientId, campaignId, input.outcome);
-            conversationEnded = true;
-            break;
-          }
-
-          default:
-            this.logger.warn(`Unknown tool called: ${name}`);
+    // ── Parse text for tool calls (Groq open-source model fallback) ───────
+    // Some models generate tool calls as text instead of using the function calling API.
+    // Pattern: <function=tool_name{json_args}></function> or similar
+    if (msg.content) {
+      const textToolCalls = this.extractToolCallsFromText(msg.content);
+      for (const { name, args } of textToolCalls) {
+        this.logger.log(`Tool called (from text): ${name} — input: ${JSON.stringify(args)}`);
+        const result = await this.executeToolCall(name, args, session, campaignPatientId, campaignId, notificationPhone, rawPatientMessage);
+        if (result.ended) conversationEnded = true;
+      }
+      // Strip tool call text from the reply before sending to user
+      if (textToolCalls.length > 0) {
+        let cleaned = msg.content;
+        for (const { raw } of textToolCalls) {
+          cleaned = cleaned.replace(raw, '').trim();
+        }
+        if (cleaned) {
+          textReply = cleaned;
+        } else {
+          textReply = null; // No text left after stripping tool calls
         }
       }
     }
@@ -616,6 +611,84 @@ CONVERSATION RULES:
     this.logger.log(
       `Conversation closed for patient ${campaignPatientId} — outcome: ${outcome}`,
     );
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // TOOL CALL EXECUTOR (shared by structured + text-parsed calls)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  private async executeToolCall(
+    name: string,
+    args: Record<string, unknown>,
+    session: CampaignSession,
+    campaignPatientId: string,
+    campaignId: string,
+    notificationPhone: string | null,
+    rawPatientMessage: string,
+  ): Promise<{ ended: boolean }> {
+    switch (name) {
+      case 'log_complaint': {
+        const input = args as unknown as LogComplaintInput;
+        await this.executeLogComplaint(input, campaignPatientId, session.clinicId, rawPatientMessage, campaignId);
+        return { ended: false };
+      }
+      case 'request_booking': {
+        const input = args as unknown as RequestBookingInput;
+        await this.executeRequestBooking(input, campaignPatientId, session.clinicId, rawPatientMessage);
+        return { ended: false };
+      }
+      case 'request_handoff': {
+        const input = args as unknown as RequestHandoffInput;
+        await this.executeRequestHandoff(input, session, campaignPatientId, campaignId, notificationPhone);
+        return { ended: true };
+      }
+      case 'end_conversation': {
+        const input = args as unknown as EndConversationInput;
+        await this.closeConversation(session, campaignPatientId, campaignId, input.outcome);
+        return { ended: true };
+      }
+      default:
+        this.logger.warn(`Unknown tool called: ${name}`);
+        return { ended: false };
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // TEXT-BASED TOOL CALL PARSER (Groq open-source model fallback)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  private extractToolCallsFromText(text: string): { name: string; args: Record<string, unknown>; raw: string }[] {
+    const results: { name: string; args: Record<string, unknown>; raw: string }[] = [];
+
+    // Pattern 1: <function=tool_name{json}></function>
+    const fnPattern = /<function=(\w+)\{([^}]*)\}><\/function>/g;
+    let match;
+    while ((match = fnPattern.exec(text)) !== null) {
+      const name = match[1];
+      const argsStr = match[2];
+      try {
+        const args = JSON.parse('{' + argsStr + '}');
+        results.push({ name, args, raw: match[0] });
+      } catch {
+        this.logger.warn(`Failed to parse text tool call: ${match[0]}`);
+      }
+    }
+
+    // Pattern 2: ```json\n{"tool": "name", ...}\n```
+    const jsonBlockPattern = /```json\n(\{[^}]*"tool"[^}]*\})\n```/g;
+    while ((match = jsonBlockPattern.exec(text)) !== null) {
+      try {
+        const parsed = JSON.parse(match[1]);
+        if (parsed.tool) {
+          const { tool, ...args } = parsed;
+          results.push({ name: tool, args, raw: match[0] });
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    return results;
   }
 
   // ═══════════════════════════════════════════════════════════════════════════

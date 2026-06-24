@@ -41,5 +41,10 @@
   { "key": "BUTTON_FAQ_LIST",    "language": "EN", "body": "❓ More questions" },
   { "key": "HEADER_SELECT_FAQ",  "language": "EN", "body": "View questions" },
   { "key": "HEADER_TIME_PAGE",   "language": "EN", "body": "Page" },
-  { "key": "HANDOFF_RESOLVED",   "language": "EN", "body": "✅ Our team has handled your request. Feel free to message us anytime." }
+  { "key": "HANDOFF_RESOLVED",   "language": "EN", "body": "✅ Our team has handled your request. Feel free to message us anytime." },
+  { "key": "CAMPAIGN_OPENING_MESSAGE",  "language": "EN", "body": "Hello {{name}}! We're following up on your visit on {{visitDate}} at Innova Smart Health. How are you feeling?" },
+  { "key": "CAMPAIGN_REMINDER_MESSAGE", "language": "EN", "body": "Hi {{name}}, we haven't heard from you. Is there anything we can help you with?" },
+  { "key": "CAMPAIGN_URGENT_MESSAGE",   "language": "EN", "body": "🔴 Urgent situation detected. A member of our team will contact you very shortly." },
+  { "key": "CAMPAIGN_HANDOFF_MESSAGE",  "language": "EN", "body": "An agent is taking over. Please hold on." },
+  { "key": "CAMPAIGN_REBOOK_CONFIRM",   "language": "EN", "body": "✅ Your appointment request has been recorded. Our team will contact you to confirm the slot." }
 ]

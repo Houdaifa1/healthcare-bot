@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Patch,
+  Delete,
   Param,
   Body,
   UseGuards,
@@ -80,5 +81,11 @@ export class CampaignController {
   @Post(':id/cancel-schedule')
   cancelSchedule(@Request() req: any, @Param('id') id: string) {
     return this.campaignService.cancelSchedule(req.user.clinicId, id);
+  }
+
+  // DELETE /api/admin/v1/campaigns/:id
+  @Delete(':id')
+  remove(@Request() req: any, @Param('id') id: string) {
+    return this.campaignService.remove(req.user.clinicId, id);
   }
 }

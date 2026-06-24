@@ -242,17 +242,20 @@ export class WhatsAppService {
       body: JSON.stringify(payload),
     });
 
+    let responseBody = '';
+    try {
+      responseBody = JSON.stringify(await response.json());
+    } catch {
+      responseBody = await response.text().catch(() => '');
+    }
+
     if (!response.ok) {
-      let errorBody = '';
-      try {
-        errorBody = JSON.stringify(await response.json());
-      } catch {
-        errorBody = await response.text().catch(() => '');
-      }
-      const msg = `Meta API error ${response.status}: ${errorBody}`;
+      const msg = `Meta API error ${response.status}: ${responseBody}`;
       this.logger.error(msg);
       throw new Error(msg);
     }
+
+    this.logger.log(`Meta API response: ${responseBody}`);
   }
 
   // ─── Phone normalisation ───────────────────────────────────────────────────

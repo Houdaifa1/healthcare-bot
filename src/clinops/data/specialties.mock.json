@@ -1,0 +1,7 @@
+[
+  { "specialityId": 1, "specialityLabel": "Neurologie" },
+  { "specialityId": 2, "specialityLabel": "Cardiologie" },
+  { "specialityId": 3, "specialityLabel": "Gynécologie" },
+  { "specialityId": 4, "specialityLabel": "Pneumologie" },
+  { "specialityId": 5, "specialityLabel": "Endocrinologie" }
+]

@@ -1,0 +1,10 @@
+[
+  { "doctorId": 10, "doctorLabel": "DR Miloud BAKOUCHE",    "specialite_id": 1 },
+  { "doctorId": 11, "doctorLabel": "DR Khalid MANSOURI",    "specialite_id": 1 },
+  { "doctorId": 15, "doctorLabel": "DR Ahmed BENALI",       "specialite_id": 2 },
+  { "doctorId": 16, "doctorLabel": "DR Yassine LAHRICHI",   "specialite_id": 2 },
+  { "doctorId": 20, "doctorLabel": "DR Nadia BENCHEKROUN",  "specialite_id": 3 },
+  { "doctorId": 21, "doctorLabel": "DR Sanaa EL OUAFI",     "specialite_id": 3 },
+  { "doctorId": 25, "doctorLabel": "DR Rachid BOUHALI",     "specialite_id": 4 },
+  { "doctorId": 30, "doctorLabel": "DR Imane TAZI",         "specialite_id": 5 }
+]

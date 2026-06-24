@@ -4,11 +4,12 @@ import { Job } from 'bullmq';
 import { OrchestratorService } from '../orchestrator/orchestrator.service';
 import { SessionsService } from '../sessions/sessions.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { ConversationService } from '../campaign/conversation.service';
 
 export interface MessageJob {
-  from:      string; // E.164 without '+', e.g. "212644645877"
-  name:      string; // WhatsApp display name
-  text:      string; // Extracted message text or button/list ID
+  from:      string;
+  name:      string;
+  text:      string;
   messageId: string;
   timestamp: string;
 }
@@ -18,12 +19,12 @@ export class MessageProcessor extends WorkerHost {
   private readonly logger = new Logger(MessageProcessor.name);
 
   constructor(
-    private readonly orchestratorService: OrchestratorService,
-    private readonly sessionsService:     SessionsService,
-    private readonly prisma:             PrismaService,
+    private readonly orchestratorService:   OrchestratorService,
+    private readonly sessionsService:       SessionsService,
+    private readonly prisma:               PrismaService,
+    private readonly conversationService:  ConversationService,
   ) {
     super();
-    // No Redis instantiation here — SessionsService owns the shared connection.
   }
 
   async process(job: Job<MessageJob>): Promise<void> {
@@ -31,8 +32,6 @@ export class MessageProcessor extends WorkerHost {
     this.logger.log(`Processing message from ${name} (+${from}): "${text}"`);
 
     // ── 1. Message deduplication ───────────────────────────────────────────
-    // Delegated to SessionsService.markMessageProcessed() which uses the
-    // shared Redis connection and a 5-min TTL NX SET.
     if (messageId) {
       const isNew = await this.sessionsService.markMessageProcessed(messageId);
       if (!isNew) {
@@ -42,8 +41,6 @@ export class MessageProcessor extends WorkerHost {
     }
 
     // ── 2. Load clinic dynamically ─────────────────────────────────────────
-    // Never hardcode the clinic ID — take the first (and only) active clinic
-    // from the DB. This lets the seed value change without a code change.
     const clinic = await this.prisma.clinic.findFirst();
     if (!clinic) {
       this.logger.error('No clinic record found — run `npm run seed` first');
@@ -53,13 +50,10 @@ export class MessageProcessor extends WorkerHost {
     // ── 3. Campaign routing ────────────────────────────────────────────────
     // If this phone has an active AI campaign conversation, route there
     // instead of the reactive orchestrator.
-    // CampaignConversationService will be injected here once built.
     const hasCampaign = await this.sessionsService.hasActiveCampaignSession(from);
     if (hasCampaign) {
-      this.logger.log(`Phone ${from} has active campaign session — routing to CampaignConversationService`);
-      // TODO: inject CampaignConversationService and call:
-      //   await this.campaignConversationService.handleReply(from, text);
-      // This TODO is intentional — placeholder until the campaign module is built.
+      this.logger.log(`Phone ${from} has active campaign session — routing to ConversationService`);
+      await this.conversationService.handleReply(from, text);
       return;
     }
 
@@ -82,7 +76,6 @@ export class MessageProcessor extends WorkerHost {
         error?.response?.statusCode ??
         0;
 
-      // Meta API transient errors (5xx) or send timeout — let BullMQ retry
       if (
         message.includes('not connected after') ||
         message.includes('Meta API error 5') ||
@@ -95,7 +88,6 @@ export class MessageProcessor extends WorkerHost {
         throw error;
       }
 
-      // 4xx (except 428) are permanent caller errors — do not retry
       if (statusCode >= 400 && statusCode < 500) {
         this.logger.error(
           `Permanent failure for ${from} (HTTP ${statusCode}): ${message}`,
@@ -103,7 +95,6 @@ export class MessageProcessor extends WorkerHost {
         return;
       }
 
-      // Unknown errors — rethrow for BullMQ retry
       throw error;
     }
   }

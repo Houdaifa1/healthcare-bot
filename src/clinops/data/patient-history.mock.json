@@ -1,0 +1,206 @@
+{
+  "CIN1001": {
+    "patient": "Hind BEN SALAH",
+    "solde_impaye": 0.00,
+    "admissions": [
+      {
+        "date_admission": "2026-06-01T09:30:00",
+        "motif_admission": "Scanner cérébral",
+        "medecin_traitant": "DR Miloud BAKOUCHE",
+        "actes_realises": ["Scanner cérébral", "Consultation neurologie"],
+        "produits_pharmaceutiques": ["Paracétamol 500mg"],
+        "avis_medicaux": []
+      },
+      {
+        "date_admission": "2025-11-14T10:00:00",
+        "motif_admission": "Consultation neurologie",
+        "medecin_traitant": "DR Miloud BAKOUCHE",
+        "actes_realises": ["Consultation neurologie"],
+        "produits_pharmaceutiques": [],
+        "avis_medicaux": ["Suivi recommandé dans 6 mois"]
+      }
+    ]
+  },
+  "CIN1002": {
+    "patient": "Youssef AMRANI",
+    "solde_impaye": 1500.00,
+    "admissions": [
+      {
+        "date_admission": "2026-06-02T11:00:00",
+        "motif_admission": "Consultation cardiologie",
+        "medecin_traitant": "DR Ahmed BENALI",
+        "actes_realises": ["ECG", "Consultation cardiologie"],
+        "produits_pharmaceutiques": ["Aspirine 100mg", "Amlodipine 5mg"],
+        "avis_medicaux": ["Contrôle tension artérielle recommandé"]
+      },
+      {
+        "date_admission": "2025-09-20T09:00:00",
+        "motif_admission": "Bilan cardiaque",
+        "medecin_traitant": "DR Ahmed BENALI",
+        "actes_realises": ["Échocardiographie", "ECG"],
+        "produits_pharmaceutiques": ["Bisoprolol 5mg"],
+        "avis_medicaux": []
+      },
+      {
+        "date_admission": "2025-03-05T14:00:00",
+        "motif_admission": "Douleurs thoraciques",
+        "medecin_traitant": "DR Ahmed BENALI",
+        "actes_realises": ["ECG", "Prise de sang"],
+        "produits_pharmaceutiques": ["Trinitrine"],
+        "avis_medicaux": ["Hospitalisation 48h recommandée"]
+      }
+    ]
+  },
+  "CIN1003": {
+    "patient": "Fatima Zahra IDRISSI",
+    "solde_impaye": 0.00,
+    "admissions": [
+      {
+        "date_admission": "2026-06-03T14:15:00",
+        "motif_admission": "Consultation gynécologie",
+        "medecin_traitant": "DR Nadia BENCHEKROUN",
+        "actes_realises": ["Consultation gynécologie", "Échographie pelvienne"],
+        "produits_pharmaceutiques": ["Acide folique 400mcg"],
+        "avis_medicaux": []
+      }
+    ]
+  },
+  "CIN1004": {
+    "patient": "Karim TAHIRI",
+    "solde_impaye": 300.00,
+    "admissions": [
+      {
+        "date_admission": "2026-06-04T08:45:00",
+        "motif_admission": "Radiographie thoracique",
+        "medecin_traitant": "DR Miloud BAKOUCHE",
+        "actes_realises": ["Radiographie thoracique", "Consultation pneumologie"],
+        "produits_pharmaceutiques": ["Amoxicilline 1g", "Ibuprofène 400mg"],
+        "avis_medicaux": ["Réévaluation dans 2 semaines"]
+      },
+      {
+        "date_admission": "2025-12-10T10:30:00",
+        "motif_admission": "Toux persistante",
+        "medecin_traitant": "DR Miloud BAKOUCHE",
+        "actes_realises": ["Consultation pneumologie"],
+        "produits_pharmaceutiques": ["Sirop antitussif"],
+        "avis_medicaux": []
+      }
+    ]
+  },
+  "CIN1005": {
+    "patient": "Samira OUALI",
+    "solde_impaye": 0.00,
+    "admissions": [
+      {
+        "date_admission": "2026-06-05T10:00:00",
+        "motif_admission": "Analyse biologique",
+        "medecin_traitant": "DR Ahmed BENALI",
+        "actes_realises": ["Numération formule sanguine", "Bilan lipidique"],
+        "produits_pharmaceutiques": [],
+        "avis_medicaux": ["Résultats normaux"]
+      }
+    ]
+  },
+  "CIN1006": {
+    "patient": "Hassan MOUSSAOUI",
+    "solde_impaye": 800.00,
+    "admissions": [
+      {
+        "date_admission": "2026-06-06T13:00:00",
+        "motif_admission": "Consultation cardiologie",
+        "medecin_traitant": "DR Ahmed BENALI",
+        "actes_realises": ["ECG", "Consultation cardiologie", "Holter 24h"],
+        "produits_pharmaceutiques": ["Ramipril 5mg", "Atorvastatine 20mg"],
+        "avis_medicaux": ["Pose stimulateur à évaluer"]
+      },
+      {
+        "date_admission": "2025-08-18T09:30:00",
+        "motif_admission": "Palpitations",
+        "medecin_traitant": "DR Ahmed BENALI",
+        "actes_realises": ["ECG"],
+        "produits_pharmaceutiques": ["Bisoprolol 2.5mg"],
+        "avis_medicaux": []
+      }
+    ]
+  },
+  "CIN1007": {
+    "patient": "Nadia BERRADA",
+    "solde_impaye": 0.00,
+    "admissions": [
+      {
+        "date_admission": "2026-06-07T09:00:00",
+        "motif_admission": "Échographie abdominale",
+        "medecin_traitant": "DR Nadia BENCHEKROUN",
+        "actes_realises": ["Échographie abdominale"],
+        "produits_pharmaceutiques": [],
+        "avis_medicaux": ["RAS — suivi annuel recommandé"]
+      }
+    ]
+  },
+  "CIN1008": {
+    "patient": "Omar FILALI",
+    "solde_impaye": 200.00,
+    "admissions": [
+      {
+        "date_admission": "2026-06-08T15:30:00",
+        "motif_admission": "Scanner cérébral",
+        "medecin_traitant": "DR Miloud BAKOUCHE",
+        "actes_realises": ["Scanner cérébral", "IRM cérébral"],
+        "produits_pharmaceutiques": ["Doliprane 1g"],
+        "avis_medicaux": ["Consultation neurochirurgie recommandée"]
+      },
+      {
+        "date_admission": "2025-10-22T11:00:00",
+        "motif_admission": "Céphalées chroniques",
+        "medecin_traitant": "DR Miloud BAKOUCHE",
+        "actes_realises": ["Consultation neurologie"],
+        "produits_pharmaceutiques": ["Amitriptyline 25mg"],
+        "avis_medicaux": []
+      }
+    ]
+  },
+  "CIN1009": {
+    "patient": "Latifa CHRAIBI",
+    "solde_impaye": 0.00,
+    "admissions": [
+      {
+        "date_admission": "2026-06-09T11:45:00",
+        "motif_admission": "Consultation gynécologie",
+        "medecin_traitant": "DR Nadia BENCHEKROUN",
+        "actes_realises": ["Consultation gynécologie", "Mammographie"],
+        "produits_pharmaceutiques": [],
+        "avis_medicaux": []
+      },
+      {
+        "date_admission": "2025-06-15T10:00:00",
+        "motif_admission": "Suivi gynécologique",
+        "medecin_traitant": "DR Nadia BENCHEKROUN",
+        "actes_realises": ["Consultation gynécologie"],
+        "produits_pharmaceutiques": ["Progestérone 200mg"],
+        "avis_medicaux": []
+      }
+    ]
+  },
+  "CIN1010": {
+    "patient": "Rachid BENKIRANE",
+    "solde_impaye": 0.00,
+    "admissions": [
+      {
+        "date_admission": "2026-06-10T08:00:00",
+        "motif_admission": "Analyse biologique",
+        "medecin_traitant": "DR Ahmed BENALI",
+        "actes_realises": ["Glycémie à jeun", "HbA1c", "Bilan rénal"],
+        "produits_pharmaceutiques": ["Metformine 850mg"],
+        "avis_medicaux": ["Diabète bien contrôlé — poursuite traitement"]
+      },
+      {
+        "date_admission": "2025-04-03T09:00:00",
+        "motif_admission": "Contrôle diabète",
+        "medecin_traitant": "DR Ahmed BENALI",
+        "actes_realises": ["Glycémie", "Consultation endocrinologie"],
+        "produits_pharmaceutiques": ["Metformine 500mg"],
+        "avis_medicaux": []
+      }
+    ]
+  }
+}

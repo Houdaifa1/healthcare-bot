@@ -18,11 +18,11 @@ model Clinic {
   isActive               Boolean      @default(true)
 
   // ── Campaign / follow-up settings ──
-  notificationPhone      String?      // WhatsApp number that receives staff alerts
-  campaignDelayHours     Int          @default(24)   // hours after visit before opening message
-  reminderCount          Int          @default(1)    // how many no-reply reminders to send
-  reminderIntervalHours  Int          @default(48)   // hours between reminders
-  aiMaxTurns             Int          @default(20)   // max conversation turns before auto-close
+  notificationPhone      String?
+  campaignDelayHours     Int          @default(24)
+  reminderCount          Int          @default(1)
+  reminderIntervalHours  Int          @default(48)
+  aiMaxTurns             Int          @default(20)
 
   createdAt              DateTime     @default(now())
   updatedAt              DateTime     @updatedAt
@@ -159,21 +159,19 @@ model Campaign {
   clinicId          String
   name              String
   status            CampaignStatus   @default(DRAFT)
+  scheduledStartAt  DateTime?
 
-  // filters used to pull patients from ClinOps
   filterDateFrom    DateTime?
   filterDateTo      DateTime?
   filterDoctor      String?
   filterMotif       String?
 
-  // override clinic defaults per campaign if needed
-  notificationPhone String?
-  delayHours        Int?
-  reminderCount     Int?
+  notificationPhone     String?
+  delayHours            Int?
+  reminderCount         Int?
   reminderIntervalHours Int?
-  aiMaxTurns        Int?
+  aiMaxTurns            Int?
 
-  // stats — denormalized for fast dashboard queries
   targetedCount     Int              @default(0)
   contactedCount    Int              @default(0)
   repliedCount      Int              @default(0)
@@ -195,27 +193,23 @@ model CampaignPatient {
   campaignId       String
   clinicId         String
 
-  // ── Patient identifiers — exact ClinOps field names ──────────────────
-  clinopsPatientId Int?                  // ClinOps patient_id
-  patientName      String                // ClinOps: "patient" — full name "Hind BEN"
-  cin              String?               // ClinOps: "cin"
-  sexe             String?               // ClinOps: "sexe" — "M" or "F"
-  ageYears         Int?                  // ClinOps: "age_years"
-  ville            String?               // ClinOps: "ville"
-  pays             String?               // ClinOps: "pays"
-  phone            String                // ClinOps: "numeroTelephonePrincipale" — normalized +212XXXXXXXXX
-  phoneSecondaire  String?               // ClinOps: "numeroTelephoneSecondaire"
-  soldeImpaye      String?               // ClinOps: "solde_impaye" — kept as string matching API
+  clinopsPatientId Int?
+  patientName      String
+  cin              String?
+  sexe             String?
+  ageYears         Int?
+  ville            String?
+  pays             String?
+  phone            String
+  phoneSecondaire  String?
+  soldeImpaye      String?
 
-  // ── Visit data — frozen at import time ───────────────────────────────
-  visitDate        DateTime              // ClinOps: "date_derniere_admission"
-  prestation       String                // ClinOps: "prestation" — act/visit reason
-  medecinTraitant  String                // ClinOps: "medecin_traitant"
+  visitDate        DateTime
+  prestation       String
+  medecinTraitant  String
 
-  // ── Full snapshot — raw ClinOps response frozen at import ────────────
-  patientSnapshot  Json                  // full searchPatientsInfos + getPatientHistory data
+  patientSnapshot  Json
 
-  // ── Conversation state ───────────────────────────────────────────────
   status           CampaignPatientStatus @default(PENDING)
   language         Language?
   turnCount        Int                   @default(0)
@@ -228,6 +222,7 @@ model CampaignPatient {
   contactedAt      DateTime?
   repliedAt        DateTime?
   completedAt      DateTime?
+  parkedAt         DateTime?             // set when job fires during PAUSED campaign
 
   campaign         Campaign              @relation(fields: [campaignId], references: [id])
   complaints       Complaint[]
@@ -242,8 +237,8 @@ model Complaint {
 
   type               ComplaintType
   severity           ComplaintSeverity
-  triggeringMessage  String            // exact patient message that triggered detection
-  summary            String            // AI-generated summary
+  triggeringMessage  String
+  summary            String
   status             ComplaintStatus   @default(NEW)
   staffNote          String?
 
@@ -260,13 +255,13 @@ model BookingRequest {
   id                 String               @id @default(cuid())
   campaignPatientId  String
   clinicId           String
-  appointmentId      String?              @unique // set when staff confirms
+  appointmentId      String?              @unique
 
   preferredSpecialty String?
   preferredDoctor    String?
-  preferredDateRange String?              // free text: "semaine prochaine", "lundi matin"
+  preferredDateRange String?
   reason             String?
-  rawPatientRequest  String               // exact patient message
+  rawPatientRequest  String
 
   status             BookingRequestStatus @default(PENDING)
 
@@ -300,6 +295,7 @@ enum AdminRole {
 
 enum CampaignStatus {
   DRAFT
+  SCHEDULED
   RUNNING
   PAUSED
   COMPLETED
@@ -308,6 +304,7 @@ enum CampaignStatus {
 
 enum CampaignPatientStatus {
   PENDING       // not yet contacted
+  PARKED        // job fired while campaign was PAUSED — waiting for resume
   CONTACTED     // opening message sent, no reply yet
   REPLIED       // patient replied at least once
   COMPLETED     // conversation closed naturally
@@ -326,9 +323,9 @@ enum ConversationOutcome {
 }
 
 enum ComplaintType {
-  COMPLAINT       // service complaint
-  MEDICAL_CONCERN // health concern
-  URGENT          // emergency
+  COMPLAINT
+  MEDICAL_CONCERN
+  URGENT
 }
 
 enum ComplaintSeverity {
@@ -393,10 +390,9 @@ enum MessageKey {
   BUTTON_FAQ_LIST
   HEADER_SELECT_FAQ
   HEADER_TIME_PAGE
-  // ── Campaign follow-up ──
-  CAMPAIGN_OPENING_MESSAGE   // the outbound template message sent to patients
-  CAMPAIGN_REMINDER_MESSAGE  // the reminder if patient never replied
-  CAMPAIGN_URGENT_MESSAGE    // message sent to patient in emergency case
-  CAMPAIGN_HANDOFF_MESSAGE   // message sent when handing off to human
-  CAMPAIGN_REBOOK_CONFIRM    // confirmation sent when booking request is confirmed by staff
+  CAMPAIGN_OPENING_MESSAGE
+  CAMPAIGN_REMINDER_MESSAGE
+  CAMPAIGN_URGENT_MESSAGE
+  CAMPAIGN_HANDOFF_MESSAGE
+  CAMPAIGN_REBOOK_CONFIRM
 }

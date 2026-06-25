@@ -26,6 +26,10 @@ export default () => ({
     apiKey: process.env.ANTHROPIC_API_KEY,
   },
 
+  openrouter: {
+    apiKey: process.env.OPENROUTER_API_KEY,
+  },
+
   jwt: {
     secret: process.env.JWT_SECRET,
   },

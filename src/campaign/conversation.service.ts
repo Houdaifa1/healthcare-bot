@@ -155,7 +155,7 @@ const TOOLS = [
 // ─── Model config ─────────────────────────────────────────────────────────────
 
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const OPENROUTER_MODEL   = 'deepseek/deepseek-chat-v3-0324:free';
+const OPENROUTER_MODEL = 'qwen/qwen3-next-80b-a3b-instruct:free';
 
 @Injectable()
 export class ConversationService {

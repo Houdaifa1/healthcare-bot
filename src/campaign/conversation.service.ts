@@ -155,7 +155,7 @@ const TOOLS = [
 // ─── Model config ─────────────────────────────────────────────────────────────
 
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const OPENROUTER_MODEL = 'qwen/qwen3-next-80b-a3b-instruct:free';
+const OPENROUTER_MODEL = 'openrouter/auto';
 
 @Injectable()
 export class ConversationService {

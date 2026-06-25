@@ -58,7 +58,7 @@ export interface CampaignSession {
   messages:          CampaignMessage[];
   turnCount:         number;
   remindersSent:     number;
-  status:            'awaiting_reply' | 'active' | 'completed' | 'handed_off';
+  status:            'awaiting_reply' | 'active' | 'admin_handling' | 'completed' | 'handed_off';
   startedAt:         number;
   lastActivityAt:    number;
 }

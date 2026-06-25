@@ -12,6 +12,8 @@ import { ClinOpsService } from '../clinops/clinops.service';
 import { ClinOpsPatient } from '../clinops/clinops.types';
 import { CreateCampaignDto } from './dto/create-campaign.dto';
 import { UpdateCampaignDto } from './dto/update-campaign.dto';
+import { SessionsService } from '../sessions/sessions.service';
+import { WhatsAppService } from '../whatsapp/whatsapp.service';
 import { QUEUES, JOBS } from '../queue/queue.constants';
 import { Campaign, CampaignStatus, CampaignPatientStatus } from '@prisma/client';
 
@@ -26,10 +28,12 @@ export class CampaignService {
   private readonly logger = new Logger(CampaignService.name);
 
   constructor(
-    private readonly prisma:       PrismaService,
-    private readonly clinops:      ClinOpsService,
+    private readonly prisma:            PrismaService,
+    private readonly clinops:           ClinOpsService,
+    private readonly sessionsService:   SessionsService,
+    private readonly whatsappService:   WhatsAppService,
     @InjectQueue(QUEUES.CAMPAIGN_OUTBOUND)
-    private readonly outboundQueue: Queue,
+    private readonly outboundQueue:     Queue,
   ) {}
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -383,6 +387,58 @@ export class CampaignService {
     });
 
     this.logger.log(`Campaign "${campaign.name}" (${id}) deleted`);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STAFF TAKEOVER — admin takes over AI conversation
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  async takeover(clinicId: string, phone: string): Promise<void> {
+    const session = await this.sessionsService.getCampaignSession(phone);
+    if (!session || session.clinicId !== clinicId) {
+      throw new NotFoundException(`No active campaign session for ${phone}`);
+    }
+    if (session.status !== 'active' && session.status !== 'awaiting_reply') {
+      throw new ConflictException(`Session for ${phone} is ${session.status} — cannot take over`);
+    }
+
+    session.status = 'admin_handling';
+    await this.sessionsService.saveCampaignSession(session);
+    this.logger.log(`Staff took over conversation for ${phone}`);
+  }
+
+  async resumeBot(clinicId: string, phone: string): Promise<void> {
+    const session = await this.sessionsService.getCampaignSession(phone);
+    if (!session || session.clinicId !== clinicId) {
+      throw new NotFoundException(`No active campaign session for ${phone}`);
+    }
+    if (session.status !== 'admin_handling') {
+      throw new ConflictException(`Session for ${phone} is ${session.status} — cannot resume bot`);
+    }
+
+    session.status = 'active';
+    await this.sessionsService.saveCampaignSession(session);
+    this.logger.log(`Staff handed conversation back to AI for ${phone}`);
+  }
+
+  async sendStaffMessage(clinicId: string, phone: string, message: string): Promise<void> {
+    const session = await this.sessionsService.getCampaignSession(phone);
+    if (!session || session.clinicId !== clinicId) {
+      throw new NotFoundException(`No active campaign session for ${phone}`);
+    }
+
+    // Send message via WhatsApp
+    await this.whatsappService.sendText(phone, message);
+
+    // Add to session history
+    session.messages.push({
+      role:      'assistant',
+      content:   message,
+      timestamp: Date.now(),
+    });
+
+    await this.sessionsService.saveCampaignSession(session);
+    this.logger.log(`Staff message sent to ${phone}`);
   }
 
   // ═══════════════════════════════════════════════════════════════════════════

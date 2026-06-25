@@ -147,7 +147,7 @@ const CLAUDE_TOOLS = [
 
 // ─── Anthropic model ──────────────────────────────────────────────────────────
 
-const ANTHROPIC_MODEL = 'claude-sonnet-4-6';
+const ANTHROPIC_MODEL = 'claude-haiku-4-5';
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
 
@@ -595,7 +595,7 @@ CONVERSATION RULES:
     triggeringMessage: string,
     campaignId: string,
     clinic: { id: string; notificationPhone?: string | null },
-    currentLanguage: Language, // FIX: Injected active language tracking context
+    currentLanguage: Language,
   ): Promise<void> {
     await this.prisma.complaint.create({
       data: {
@@ -605,8 +605,9 @@ CONVERSATION RULES:
         severity: input.severity,
         triggeringMessage,
         summary: input.summary,
-        language: currentLanguage, // FIX: Saving language directly to DB model for dashboard indexing
-      } as any, // Typecast safely in case your local client schema compilation is trailing behind
+        // ❌ REMOVE THIS LINE (It doesn't exist in your schema.prisma)
+        // language: currentLanguage, 
+      },
     });
 
     await this.prisma.campaign.update({

@@ -350,7 +350,30 @@ export class CampaignService {
       );
     }
 
-    // Delete all campaign patients first (cascade)
+    // Check for unresolved complaints — block deletion
+    const unresolvedComplaints = await this.prisma.complaint.count({
+      where: {
+        clinicId,
+        status: { not: 'RESOLVED' },
+        campaignPatient: { campaignId: id },
+      },
+    });
+
+    if (unresolvedComplaints > 0) {
+      throw new ConflictException(
+        `${unresolvedComplaints} unresolved complaint(s) in this campaign — resolve them before deleting`,
+      );
+    }
+
+    // Delete in order: complaints (resolved) → booking requests → campaign patients → campaign
+    await this.prisma.complaint.deleteMany({
+      where: { campaignPatient: { campaignId: id } },
+    });
+
+    await this.prisma.bookingRequest.deleteMany({
+      where: { campaignPatient: { campaignId: id } },
+    });
+
     await this.prisma.campaignPatient.deleteMany({
       where: { campaignId: id },
     });

@@ -42,7 +42,7 @@
   { "key": "HEADER_SELECT_FAQ",  "language": "FR", "body": "Voir les questions" },
   { "key": "HEADER_TIME_PAGE",   "language": "FR", "body": "Page" },
   { "key": "HANDOFF_RESOLVED",   "language": "FR", "body": "✅ Notre équipe a traité votre demande. N'hésitez pas à nous écrire à tout moment." },
-  { "key": "CAMPAIGN_OPENING_MESSAGE",  "language": "FR", "body": "Bonjour {{name}} ! Nous suivons votre visite du {{visitDate}} à Innova Smart Health. Comment vous sentez-vous ?" },
+  { "key": "CAMPAIGN_OPENING_MESSAGE",  "language": "FR", "body": "Bonjour {{name}} ! Nous suivons votre visite du {{visitDate}} à {{clinicName}}. Comment vous sentez-vous ?" },
   { "key": "CAMPAIGN_REMINDER_MESSAGE", "language": "FR", "body": "Bonjour {{name}}, nous n'avons pas eu de nouvelles. Y a-t-il quelque chose que nous pouvons faire pour vous ?" },
   { "key": "CAMPAIGN_URGENT_MESSAGE",   "language": "FR", "body": "🔴 Situation urgente détectée. Un membre de notre équipe va vous contacter très rapidement." },
   { "key": "CAMPAIGN_HANDOFF_MESSAGE",  "language": "FR", "body": "Un agent va prendre le relais. Merci de patienter." },

@@ -15,7 +15,7 @@ import { UpdateCampaignDto } from './dto/update-campaign.dto';
 import { SessionsService } from '../sessions/sessions.service';
 import { WhatsAppService } from '../whatsapp/whatsapp.service';
 import { QUEUES, JOBS } from '../queue/queue.constants';
-import { Campaign, CampaignStatus, CampaignPatientStatus } from '@prisma/client';
+import { Campaign, CampaignStatus, CampaignPatientStatus, ConversationOutcome } from '@prisma/client';
 
 export interface CampaignOutboundJob {
   campaignPatientId: string;
@@ -514,6 +514,75 @@ export class CampaignService {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // AGEND SEND MESSAGE (handoff / live session)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  async sendPatientMessage(clinicId: string, campaignId: string, patientId: string, message: string) {
+    const patient = await this.prisma.campaignPatient.findFirst({
+      where: { id: patientId, campaignId, clinicId },
+    });
+
+    if (!patient) {
+      throw new NotFoundException(`Patient ${patientId} not found in campaign ${campaignId}`);
+    }
+
+    const session = await this.sessionsService.getCampaignSession(patient.phone);
+    if (!session) {
+      throw new NotFoundException(`No active session found for patient ${patientId}`);
+    }
+
+    await this.whatsappService.sendText(patient.phone, message);
+
+    const staffMsg = {
+      role: 'assistant' as const,
+      content: message,
+      timestamp: Date.now(),
+    };
+
+    session.messages.push(staffMsg);
+    await this.sessionsService.saveCampaignSession(session);
+
+    await this.prisma.campaignPatient.update({
+      where: { id: patientId },
+      data: { messages: session.messages as any },
+    }).catch(() => {});
+
+    return { success: true };
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // RESOLVE HANDOFF / LIVE SESSION
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  async resolveConversation(clinicId: string, campaignId: string, patientId: string) {
+    const patient = await this.prisma.campaignPatient.findFirst({
+      where: { id: patientId, campaignId, clinicId },
+    });
+
+    if (!patient) {
+      throw new NotFoundException(`Patient ${patientId} not found in campaign ${campaignId}`);
+    }
+
+    await this.prisma.campaignPatient.update({
+      where: { id: patientId },
+      data: {
+        status:      CampaignPatientStatus.COMPLETED,
+        outcome:     ConversationOutcome.HANDED_OFF,
+        completedAt: new Date(),
+      },
+    });
+
+    await this.prisma.campaign.update({
+      where: { id: campaignId },
+      data: { completedCount: { increment: 1 } },
+    });
+
+    await this.sessionsService.deleteCampaignSession(patient.phone);
+
+    return { success: true };
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // PRIVATE HELPERS
   // ═══════════════════════════════════════════════════════════════════════════
 
@@ -562,6 +631,125 @@ export class CampaignService {
     return patients;
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // GET CONVERSATION HISTORY
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  async getConversation(clinicId: string, campaignId: string, patientId: string) {
+    const patient = await this.prisma.campaignPatient.findFirst({
+      where: { id: patientId, campaignId, clinicId },
+      select: {
+        id:               true,
+        patientName:      true,
+        phone:            true,
+        messages:         true,
+        turnCount:        true,
+        language:         true,
+        status:           true,
+        outcome:          true,
+        createdAt:        true,
+        updatedAt:        true,
+        complaints:       true,
+        bookingRequests:  true,
+      },
+    });
+
+    if (!patient) {
+      throw new NotFoundException(`Patient ${patientId} not found in campaign ${campaignId}`);
+    }
+
+    return patient;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CLOSE / FORCE-END A PATIENT CONVERSATION
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  async closePatientConversation(clinicId: string, campaignId: string, patientId: string) {
+    const patient = await this.prisma.campaignPatient.findFirst({
+      where: { id: patientId, campaignId, clinicId },
+      include: { campaign: true },
+    });
+
+    if (!patient) {
+      throw new NotFoundException(`Patient ${patientId} not found in campaign ${campaignId}`);
+    }
+
+    await this.prisma.campaignPatient.update({
+      where: { id: patientId },
+      data: {
+        status:      CampaignPatientStatus.COMPLETED,
+        outcome:     ConversationOutcome.COMPLETED,
+        completedAt: new Date(),
+      },
+    });
+
+    await this.prisma.campaign.update({
+      where: { id: campaignId },
+      data: { completedCount: { increment: 1 } },
+    });
+
+    await this.sessionsService.deleteCampaignSession(patient.phone);
+
+    return { success: true, patientId, outcome: ConversationOutcome.COMPLETED };
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // TAKE OVER — PAUSE BOT, LET STAFF HANDLE
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  async takeOverConversation(clinicId: string, campaignId: string, patientId: string) {
+    const patient = await this.prisma.campaignPatient.findFirst({
+      where: { id: patientId, campaignId, clinicId },
+      include: { campaign: true },
+    });
+
+    if (!patient) {
+      throw new NotFoundException(`Patient ${patientId} not found in campaign ${campaignId}`);
+    }
+
+    // Update session status so bot stops replying
+    const session = await this.sessionsService.getCampaignSession(patient.phone);
+    if (session) {
+      session.status = 'admin_handling';
+      await this.sessionsService.saveCampaignSession(session);
+    } else {
+      // Create a minimal session with admin_handling status
+      await this.sessionsService.saveCampaignSession({
+        phone: patient.phone,
+        campaignPatientId: patient.id,
+        clinicId,
+        patientSnapshot: {},
+        language: patient.language ?? undefined,
+        messages: [],
+        turnCount: patient.turnCount,
+        remindersSent: patient.remindersSent,
+        status: 'admin_handling',
+        startedAt: Date.now(),
+        lastActivityAt: Date.now(),
+      } as any);
+    }
+
+    // Update patient status to COMPLETED to stop reminder cycle
+    await this.prisma.campaignPatient.update({
+      where: { id: patientId },
+      data: {
+        status: CampaignPatientStatus.COMPLETED,
+        outcome: ConversationOutcome.HANDED_OFF,
+      },
+    });
+
+    await this.prisma.campaign.update({
+      where: { id: campaignId },
+      data: { completedCount: { increment: 1 } },
+    });
+
+    return { success: true, patientId, status: 'admin_handling' };
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PRIVATE HELPERS
+  // ═══════════════════════════════════════════════════════════════════════════
   private validateFilters(
     dto: Pick<CreateCampaignDto, 'filterDateFrom' | 'filterDateTo' | 'filterDoctor' | 'filterMotif'>,
   ): void {

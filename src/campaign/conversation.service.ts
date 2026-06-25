@@ -12,30 +12,35 @@ import {
   MessageKey,
 } from '@prisma/client';
 
-// ─── OpenAI-compatible response types ────────────────────────────────────────
+// ─── Anthropic API types ───────────────────────────────────────────────────────
 
-interface OAIToolCall {
-  id:       string;
-  type:     'function';
-  function: {
-    name:      string;
-    arguments: string;
-  };
+interface AnthropicTextBlock {
+  type:  'text';
+  text:  string;
 }
 
-interface OAIMessage {
-  role:        'assistant';
-  content:     string | null;
-  tool_calls?: OAIToolCall[];
+interface AnthropicToolUseBlock {
+  type:  'tool_use';
+  id:    string;
+  name:  string;
+  input: Record<string, unknown>;
 }
 
-interface OAIChoice {
-  message:       OAIMessage;
-  finish_reason: 'stop' | 'tool_calls' | 'length' | string;
+interface AnthropicToolResultBlock {
+  type:       'tool_result';
+  tool_use_id: string;
+  content:    string;
 }
 
-interface OAIResponse {
-  choices: OAIChoice[];
+type AnthropicContentBlock = AnthropicTextBlock | AnthropicToolUseBlock | AnthropicToolResultBlock;
+
+interface AnthropicMessage {
+  id:           string;
+  type:         'message';
+  role:         'assistant';
+  content:      AnthropicContentBlock[];
+  stop_reason:  'end_turn' | 'tool_use' | 'max_tokens' | string;
+  usage:        { input_tokens: number; output_tokens: number };
 }
 
 // ─── Tool input shapes ────────────────────────────────────────────────────────
@@ -60,133 +65,117 @@ interface EndConversationInput {
   outcome: ConversationOutcome;
 }
 
-// ─── Tool definitions ─────────────────────────────────────────────────────────
+// ─── Claude tool definitions ──────────────────────────────────────────────────
 
-const TOOLS = [
+const CLAUDE_TOOLS = [
   {
-    type: 'function',
-    function: {
-      name:        'log_complaint',
-      description: 'Log a patient complaint or medical concern detected in the conversation. Call this whenever the patient expresses dissatisfaction, reports a medical issue, or describes an urgent situation.',
-      parameters: {
-        type: 'object',
-        properties: {
-          type: {
-            type:        'string',
-            enum:        ['COMPLAINT', 'MEDICAL_CONCERN', 'URGENT'],
-            description: 'COMPLAINT = service/experience complaint, MEDICAL_CONCERN = health issue, URGENT = emergency requiring immediate attention',
-          },
-          severity: {
-            type:        'string',
-            enum:        ['LOW', 'MEDIUM', 'HIGH'],
-            description: 'LOW = minor inconvenience, MEDIUM = significant issue, HIGH = serious concern requiring urgent staff attention',
-          },
-          summary: {
-            type:        'string',
-            description: 'A clear 1-2 sentence summary of the complaint in the language the patient used',
-          },
+    name:        'log_complaint',
+    description: 'Log a patient complaint or medical concern detected in the conversation. Call this whenever the patient expresses dissatisfaction, reports a medical issue, or describes an urgent situation.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        type: {
+          type: 'string',
+          enum: ['COMPLAINT', 'MEDICAL_CONCERN', 'URGENT'],
+          description: 'COMPLAINT = service/experience complaint, MEDICAL_CONCERN = health issue, URGENT = emergency requiring immediate attention',
         },
-        required: ['type', 'severity', 'summary'],
+        severity: {
+          type: 'string',
+          enum: ['LOW', 'MEDIUM', 'HIGH'],
+          description: 'LOW = minor inconvenience, MEDIUM = significant issue, HIGH = serious concern requiring urgent staff attention',
+        },
+        summary: {
+          type: 'string',
+          description: 'A clear 1-2 sentence summary of the complaint in the language the patient used',
+        },
       },
+      required: ['type', 'severity', 'summary'],
     },
   },
   {
-    type: 'function',
-    function: {
-      name:        'request_booking',
-      description: 'Create a booking request when the patient expresses intent to schedule a new appointment or follow-up visit.',
-      parameters: {
-        type: 'object',
-        properties: {
-          preferredDoctor: {
-            type:        'string',
-            description: 'Doctor name if the patient mentioned a preference',
-          },
-          preferredDateRange: {
-            type:        'string',
-            description: 'Free text date preference as expressed by the patient',
-          },
-          reason: {
-            type:        'string',
-            description: 'Reason for the new appointment as expressed by the patient',
-          },
+    name:        'request_booking',
+    description: 'Create a booking request when the patient expresses intent to schedule a new appointment or follow-up visit.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        preferredDoctor: {
+          type: 'string',
+          description: 'Doctor name if the patient mentioned a preference',
         },
-        required: [],
+        preferredDateRange: {
+          type: 'string',
+          description: 'Free text date preference as expressed by the patient, e.g. "semaine prochaine", "lundi matin", "next week"',
+        },
+        reason: {
+          type: 'string',
+          description: 'Reason for the new appointment as expressed by the patient',
+        },
       },
+      required: [],
     },
   },
   {
-    type: 'function',
-    function: {
-      name:        'request_handoff',
-      description: 'Transfer the conversation to a human staff member. Use when the patient is very distressed, the situation is too complex for AI, the patient explicitly asks for a human, or there is an urgent medical situation.',
-      parameters: {
-        type: 'object',
-        properties: {
-          reason: {
-            type:        'string',
-            description: 'Clear explanation of why handoff is needed, for the staff member who will take over',
-          },
+    name:        'request_handoff',
+    description: 'Transfer the conversation to a human staff member. Use when the patient is very distressed, the situation is too complex for AI, the patient explicitly asks for a human, or there is an urgent medical situation.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        reason: {
+          type: 'string',
+          description: 'Clear explanation of why handoff is needed, for the staff member who will take over',
         },
-        required: ['reason'],
       },
+      required: ['reason'],
     },
   },
   {
-    type: 'function',
-    function: {
-      name:        'end_conversation',
-      description: 'Close the conversation when the follow-up is complete.',
-      parameters: {
-        type: 'object',
-        properties: {
-          outcome: {
-            type:        'string',
-            enum:        ['COMPLETED', 'COMPLAINED', 'REBOOKED', 'HANDED_OFF', 'URGENT', 'OPTED_OUT', 'NO_RESPONSE'],
-            description: 'The final outcome of this conversation',
-          },
+    name:        'end_conversation',
+    description: 'Close the conversation when the follow-up is complete. Call this when the patient has no more concerns, has been helped, or has clearly disengaged.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        outcome: {
+          type: 'string',
+          enum: ['COMPLETED', 'COMPLAINED', 'REBOOKED', 'HANDED_OFF', 'URGENT', 'OPTED_OUT', 'NO_RESPONSE'],
+          description: 'The final outcome of this conversation',
         },
-        required: ['outcome'],
       },
+      required: ['outcome'],
     },
   },
 ];
 
-// ─── Model config ─────────────────────────────────────────────────────────────
+// ─── Anthropic model ──────────────────────────────────────────────────────────
 
-const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const OPENROUTER_MODEL   = 'deepseek/deepseek-chat-v3-0324';
+const ANTHROPIC_MODEL   = 'claude-sonnet-4-6';
+const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
+const ANTHROPIC_VERSION = '2023-06-01';
 
-// ─── Tool call leak patterns ──────────────────────────────────────────────────
-// DeepSeek sometimes bleeds internal tool call markup into msg.content.
-// These patterns identify contaminated content that must never reach patients.
-const TOOL_LEAK_PATTERNS = [
-  /<tool_calls_begin>/,
-  /<tool_call_begin>/,
-  /<tool_calls_end>/,
-  /<tool_sep>/,
-  /\(After logging.*?\)/i,
-  /\(Conversation closed\.\)/i,
-  /\(Note:.*?OPTED_OUT.*?\)/i,
-];
+// Retry config for transient failures
+const MAX_RETRIES = 2;
+const RETRY_DELAY = 1500;
 
 @Injectable()
 export class ConversationService {
   private readonly logger = new Logger(ConversationService.name);
-  private readonly apiKey: string;
+  private readonly anthropicApiKey: string | undefined;
+  private readonly isEnabled: boolean;
 
   constructor(
-    private readonly configService:   ConfigService,
-    private readonly prisma:          PrismaService,
+    private readonly configService:  ConfigService,
+    private readonly prisma:         PrismaService,
     private readonly sessionsService: SessionsService,
     private readonly whatsappService: WhatsAppService,
   ) {
-    const key = this.configService.get<string>('openrouter.apiKey');
+    const key = this.configService.get<string>('anthropic.apiKey');
     if (!key) {
-      throw new Error('OPENROUTER_API_KEY is not set');
+      this.logger.warn('ANTHROPIC_API_KEY not set — AI follow-up will use basic responses only');
+      this.anthropicApiKey = undefined;
+      this.isEnabled = false;
+    } else {
+      this.anthropicApiKey = key;
+      this.isEnabled = true;
     }
-    this.apiKey = key;
-    this.logger.log(`ConversationService initialized — model: ${OPENROUTER_MODEL}`);
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -203,10 +192,10 @@ export class ConversationService {
       return;
     }
 
-    // ── 2. Guard: session already closed ──────────────────────────────────
-    if (session.status === 'completed' || session.status === 'handed_off') {
+    // ── 2. Guard: session already closed or being handled by staff ────────
+    if (session.status === 'completed' || session.status === 'handed_off' || session.status === 'admin_handling') {
       this.logger.warn(
-        `Campaign session for ${phone} is already ${session.status} — ignoring reply`,
+        `Campaign session for ${phone} is ${session.status} — ignoring reply`,
       );
       return;
     }
@@ -214,31 +203,27 @@ export class ConversationService {
     // ── 3. Load CampaignPatient from DB ────────────────────────────────────
     const campaignPatient = await this.prisma.campaignPatient.findUnique({
       where: { id: session.campaignPatientId },
+      include: { campaign: true },
     });
 
     if (!campaignPatient) {
-      // ── Dead session — CampaignPatient was deleted (e.g. campaign deleted) ──
-      // Purge the Redis session so this phone can reach the reactive bot again.
       this.logger.error(
-        `CampaignPatient ${session.campaignPatientId} not found for phone ${phone} ` +
-        `— purging orphaned Redis session`,
+        `CampaignPatient ${session.campaignPatientId} not found for phone ${phone}`,
       );
-      await this.sessionsService.deleteCampaignSession(phone);
       return;
     }
 
-    // ── 4. Load clinic ─────────────────────────────────────────────────────
+    // ── 4. Load clinic ────────────────────────────────────────────────────
     const clinic = await this.prisma.clinic.findUnique({
       where: { id: session.clinicId },
     });
 
     if (!clinic) {
       this.logger.error(`Clinic ${session.clinicId} not found`);
-      await this.sessionsService.deleteCampaignSession(phone);
       return;
     }
 
-    // ── 5. Detect and persist language on first reply ─────────────────────
+    // ── 5. Detect and persist language on first reply (and re-detect if AI enabled) ──
     if (session.language === null) {
       const detected = this.detectLanguage(patientMessage);
       session.language = detected;
@@ -267,52 +252,81 @@ export class ConversationService {
       });
     }
 
-    // ── 7. Update session status to active ────────────────────────────────
-    session.status = 'active';
+    // ── 7. Duplicate guard — don't re-append if message already present ───
+    const alreadyPresent = session.messages.some(
+      m => m.role === 'user' && m.content === patientMessage && Date.now() - m.timestamp < 5000,
+    );
+    if (!alreadyPresent) {
+      const userMessage: CampaignMessage = {
+        role:      'user',
+        content:   patientMessage,
+        timestamp: Date.now(),
+      };
+      session.messages.push(userMessage);
+    }
 
-    // ── 8. Append patient message to session ──────────────────────────────
-    const userMessage: CampaignMessage = {
-      role:      'user',
-      content:   patientMessage,
-      timestamp: Date.now(),
-    };
-    session.messages.push(userMessage);
+    // ── 8. Resolve aiMaxTurns (cached in session after first lookup) ──────
+    let aiMaxTurns = (session as any).cachedAiMaxTurns as number | undefined;
+    if (!aiMaxTurns) {
+      aiMaxTurns = clinic.aiMaxTurns;
+      const campaign = campaignPatient.campaign;
+      if (campaign && campaign.aiMaxTurns !== null && campaign.aiMaxTurns !== undefined) {
+        aiMaxTurns = campaign.aiMaxTurns;
+      }
+      (session as any).cachedAiMaxTurns = aiMaxTurns;
+    }
 
-    // ── 9. Resolve aiMaxTurns ──────────────────────────────────────────────
-    const aiMaxTurns = await this.resolveAiMaxTurns(campaignPatient.campaignId, clinic.aiMaxTurns);
-
-    // ── 10. Auto-close if turn limit reached ──────────────────────────────
+    // ── 9. Auto-close if turn limit reached — send farewell first ─────────
     if (session.turnCount >= aiMaxTurns) {
       this.logger.warn(
-        `Turn limit (${aiMaxTurns}) reached for ${phone} — auto-closing conversation`,
+        `Turn limit (${aiMaxTurns}) reached for ${phone} — sending farewell and closing`,
       );
-      await this.closeConversation(
-        session,
-        campaignPatient.id,
-        campaignPatient.campaignId,
-        ConversationOutcome.COMPLETED,
-      );
+
+      const farewell = await this.fetchBotMessage(
+        clinic.id,
+        MessageKey.CAMPAIGN_URGENT_MESSAGE,
+        session.language ?? Language.FR,
+      ).catch(() => null);
+
+      if (farewell) {
+        await this.whatsappService.sendText(phone, farewell);
+      }
+
+      await this.closeConversation(session, campaignPatient.id, campaignPatient.campaignId, ConversationOutcome.COMPLETED);
       return;
     }
 
-    // ── 11. Build prompt and messages ──────────────────────────────────────
-    const systemPrompt = this.buildSystemPrompt(session, campaignPatient);
-    const messages     = this.buildMessages(session);
+    // ── 10. Send typing indicator ──────────────────────────────────────────
+    await this.whatsappService.sendText(phone, '⏳');
 
-    // ── 12. Call model ─────────────────────────────────────────────────────
-    const response = await this.callModel(systemPrompt, messages, aiMaxTurns);
+    // ── 11. Build Claude messages array (include tool_use blocks) ──────────
+    const systemPrompt = this.buildSystemPrompt(session, campaignPatient, clinic);
+    const claudeMessages = this.buildClaudeMessages(session);
 
-    // ── 13. Process response — execute tools, extract clean text reply ─────
-    const { textReply, conversationEnded } = await this.processResponse(
+    // ── 12. Call Claude (with retry) ──────────────────────────────────────
+    let response: AnthropicMessage;
+    try {
+      response = await this.callClaudeWithRetry(systemPrompt, claudeMessages);
+    } catch (err: any) {
+      this.logger.error(`Claude call failed after retries for ${phone}: ${err.message}`);
+      await this.whatsappService.sendText(phone, '⚠️ Désolé, je rencontre un problème technique. Veuillez réessayer dans quelques minutes.');
+      return;
+    }
+
+    // ── 13. Delete typing indicator by sending real reply (noop if same) ──
+    // The real reply will follow immediately.
+
+    // ── 14. Execute tool calls FIRST, collect text AFTER ──────────────────
+    const { textReply, conversationEnded } = await this.processClaudeResponse(
       response,
       session,
       campaignPatient.id,
       campaignPatient.campaignId,
-      clinic.notificationPhone ?? null,
+      clinic,
       patientMessage,
     );
 
-    // ── 14. Send text reply to patient ────────────────────────────────────
+    // ── 15. Send text reply to patient ────────────────────────────────────
     if (textReply) {
       await this.whatsappService.sendText(phone, textReply);
 
@@ -324,10 +338,28 @@ export class ConversationService {
       session.messages.push(assistantMessage);
     }
 
-    // ── 15. Increment turn count ───────────────────────────────────────────
+    // ── 16. Increment turn count ───────────────────────────────────────────
     session.turnCount += 1;
 
-    // ── 16. Persist messages and turn count to DB ─────────────────────────
+    // ── 17. Log token usage ────────────────────────────────────────────────
+    if (response.usage) {
+      try {
+        await this.prisma.aiUsage.create({
+          data: {
+            campaignPatientId: campaignPatient.id,
+            clinicId:          clinic.id,
+            campaignId:        campaignPatient.campaignId,
+            inputTokens:       response.usage.input_tokens,
+            outputTokens:      response.usage.output_tokens,
+            model:             ANTHROPIC_MODEL,
+          },
+        });
+      } catch (e: any) {
+        this.logger.warn(`Failed to log token usage: ${e.message}`);
+      }
+    }
+
+    // ── 18. Persist messages to DB ────────────────────────────────────────
     await this.prisma.campaignPatient.update({
       where: { id: campaignPatient.id },
       data: {
@@ -336,12 +368,14 @@ export class ConversationService {
       },
     });
 
-    // ── 17. Save updated session to Redis (unless conversation ended) ─────
+    // ── 19. Save updated session to Redis (unless conversation ended) ─────
     if (!conversationEnded) {
       await this.sessionsService.saveCampaignSession(session);
     }
 
-    this.logger.log(`Turn ${session.turnCount}/${aiMaxTurns} complete for ${phone}`);
+    this.logger.log(
+      `Turn ${session.turnCount}/${aiMaxTurns} complete for ${phone}`,
+    );
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -350,33 +384,28 @@ export class ConversationService {
 
   private buildSystemPrompt(
     session:         CampaignSession,
-    campaignPatient: {
-      patientSnapshot: any;
-      patientName:     string;
-      visitDate:       Date;
-      prestation:      string;
-      medecinTraitant: string;
-      ageYears:        number | null;
-      sexe:            string | null;
-      ville:           string | null;
-    },
+    campaignPatient: { patientSnapshot: any; patientName: string; visitDate: Date; prestation: string; medecinTraitant: string; ageYears: number | null; sexe: string | null; ville: string | null },
+    clinic:          { name: string; phone: string; address?: string | null; openingHours?: string | null },
   ): string {
-    const snapshot    = campaignPatient.patientSnapshot as Record<string, any>;
-    const historyData = snapshot?.history ?? null;
-    const language    = session.language ?? Language.FR;
+    const snapshot      = campaignPatient.patientSnapshot as Record<string, any>;
+    const patientData   = snapshot?.patient  ?? {};
+    const historyData   = snapshot?.history  ?? null;
+    const language      = session.language ?? Language.FR;
 
-    const languageInstruction =
-      language === Language.EN ? 'Always respond in English.' :
-      language === Language.AR ? 'Respond in Moroccan Darija (Arabic). Use simple, clear language.' :
-      'Always respond in French. Use polite, professional "vous" form.';
+    const languageInstruction = language === Language.EN
+      ? 'Always respond in English.'
+      : language === Language.AR
+        ? 'Respond in Moroccan Darija (Arabic). Use simple, clear language.'
+        : 'Always respond in French. Use polite, professional "vous" form.';
 
+    // Build admission history summary
     let historySection = 'No previous admission history available.';
     if (historyData?.admissions && Array.isArray(historyData.admissions) && historyData.admissions.length > 0) {
-      const lines = historyData.admissions
+      const admissions = historyData.admissions
         .slice(0, 10)
         .map((a: any, i: number) => {
           const date   = a.date_admission ? new Date(a.date_admission).toLocaleDateString('fr-FR') : 'Unknown date';
-          const motif  = a.motif_admission  ?? 'Unknown';
+          const motif  = a.motif_admission ?? 'Unknown';
           const doctor = a.medecin_traitant ?? 'Unknown';
           const actes  = Array.isArray(a.actes_realises) && a.actes_realises.length > 0
             ? a.actes_realises.join(', ')
@@ -386,12 +415,21 @@ export class ConversationService {
         .join('\n');
 
       const solde = historyData.solde_impaye ?? 0;
-      historySection = `Previous admissions (most recent first):\n${lines}\nOutstanding balance: ${solde} MAD`;
+      historySection = `Previous admissions (most recent first):\n${admissions}\nOutstanding balance: ${solde} MAD`;
     }
 
     const visitDate = new Date(campaignPatient.visitDate).toLocaleDateString('fr-FR');
 
-    return `You are a compassionate, professional medical follow-up assistant for Innova Smart Health clinic in Casablanca, Morocco.
+    // Build clinic info — include whatever is available
+    const clinicInfoParts: string[] = [];
+    if (clinic.phone) clinicInfoParts.push(`Clinic phone: ${clinic.phone}`);
+    if (clinic.address) clinicInfoParts.push(`Clinic address: ${clinic.address}`);
+    if (clinic.openingHours) clinicInfoParts.push(`Clinic hours: ${clinic.openingHours}`);
+    const clinicInfoSection = clinicInfoParts.length > 0
+      ? `CLINIC INFO:\n${clinicInfoParts.join('\n')}\n`
+      : '';
+
+    return `You are a compassionate, professional medical follow-up assistant for ${clinic.name}.
 
 ${languageInstruction}
 
@@ -407,38 +445,19 @@ PATIENT CONTEXT:
 PATIENT HISTORY:
 ${historySection}
 
+${clinicInfoSection}
 YOUR ROLE:
 - Follow up on the patient's wellbeing after their recent visit
 - Listen carefully to any concerns they express
+- If they have complaints or medical concerns, use the log_complaint tool
+- If they want to book a new appointment, use the request_booking tool
+- If the situation is urgent or complex, use the request_handoff tool
+- When the conversation reaches a natural conclusion, use the end_conversation tool
 - Be warm, empathetic, and concise — this is WhatsApp, not email
 - Never invent medical advice or diagnoses
 - Never share other patients' information
 - If the patient asks to stop receiving messages, respect their request and use end_conversation with outcome OPTED_OUT
-
-HOW TO HANDLE COMPLAINTS:
-- When the patient expresses dissatisfaction or complains, you MUST call the log_complaint tool. This is the ONLY way complaints get recorded in the system — saying "I've logged your complaint" in text without calling the tool does nothing.
-- After calling log_complaint, respond warmly acknowledging their concern.
-- If the patient clearly does NOT want to book or rebook (they say "no", "no booking", "stop asking", etc.), do NOT offer rebooking again. Respect their answer.
-- If the patient has complained and refuses further assistance, it is appropriate to call end_conversation with outcome COMPLAINED to close the conversation gracefully.
-- If the patient is very distressed, use request_handoff instead.
-
-HOW TO HANDLE BOOKING REQUESTS:
-- If they want to book a new appointment, use the request_booking tool AND THEN confirm to the patient that their request has been noted
-- If they want to see a specific doctor again, ask if they want to book
-- If the patient refuses rebooking multiple times, stop asking
-
-CRITICAL TOOL RULES:
-- log_complaint and request_booking are SILENT side effects — they must ALWAYS be followed by a warm, human text response to the patient
-- You MUST call the actual tool functions — just saying you logged something in text does NOT actually record anything
-- request_handoff CLOSES the conversation — only call it when you are done
-- end_conversation CLOSES the conversation — use it when the conversation has reached a natural end
-- It is OK to call end_conversation with COMPLAINED after the patient has complained and the conversation has run its course
-- NEVER include tool call syntax, XML tags, JSON, or internal notes in your text responses — patients only see your human message
-
-CONVERSATION ENDING GUIDELINES:
-- Conversation is complete when: the patient has no more concerns, or they've expressed their complaint and don't want anything else, or they've politely disengaged
-- Don't drag on the conversation — 2-3 turns is often enough for a simple follow-up
-- If the patient is rude or clearly done talking, end the conversation politely
+- For rebooking, direct them to call ${clinic.phone || 'the clinic'} or visit ${clinic.address || 'the clinic'}
 
 CONVERSATION RULES:
 - Keep messages short (2-4 sentences max for WhatsApp)
@@ -448,47 +467,46 @@ CONVERSATION RULES:
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // BUILD MESSAGES ARRAY
+  // BUILD CLAUDE MESSAGES ARRAY
   // ═══════════════════════════════════════════════════════════════════════════
 
-  private buildMessages(
+  private buildClaudeMessages(
     session: CampaignSession,
   ): { role: 'user' | 'assistant'; content: string }[] {
+    // Map session messages to Claude format.
+    // Include all non-empty messages; tool_use blocks are preserved as assistant content.
     return session.messages
       .filter(m => m.content?.trim())
-      .map(m => ({ role: m.role, content: m.content }));
+      .map(m => ({
+        role:    m.role,
+        content: m.content,
+      }));
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // CALL MODEL
+  // CALL CLAUDE API (with retry)
   // ═══════════════════════════════════════════════════════════════════════════
 
-  private async callModel(
+  private async callClaude(
     systemPrompt: string,
     messages:     { role: 'user' | 'assistant'; content: string }[],
-    aiMaxTurns:   number,
-  ): Promise<OAIResponse> {
-    const maxTokens = Math.max(1024, aiMaxTurns * 20);
+  ): Promise<AnthropicMessage> {
+    const maxTokens = 1024; // Fixed large enough for reply + tool call JSON
 
     const body = {
-      model:       OPENROUTER_MODEL,
-      max_tokens:  maxTokens,
-      temperature: 0.7,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        ...messages,
-      ],
-      tools:       TOOLS,
-      tool_choice: 'auto',
+      model:      ANTHROPIC_MODEL,
+      max_tokens: maxTokens,
+      system:     systemPrompt,
+      tools:      CLAUDE_TOOLS,
+      messages,
     };
 
-    const response = await fetch(OPENROUTER_API_URL, {
+    const response = await fetch(ANTHROPIC_API_URL, {
       method:  'POST',
       headers: {
-        'Content-Type':  'application/json',
-        'Authorization': `Bearer ${this.apiKey}`,
-        'HTTP-Referer':  'https://innova-smart-health.ma',
-        'X-Title':       'Innova Smart Health Bot',
+        'Content-Type':      'application/json',
+        'x-api-key':         this.anthropicApiKey!,
+        'anthropic-version': ANTHROPIC_VERSION,
       },
       body: JSON.stringify(body),
     });
@@ -500,185 +518,114 @@ CONVERSATION RULES:
       } catch {
         errorBody = await response.text().catch(() => '');
       }
-      const msg = `OpenRouter API error ${response.status}: ${errorBody}`;
+      const msg = `Anthropic API error ${response.status}: ${errorBody}`;
       this.logger.error(msg);
       throw new Error(msg);
     }
 
-    const result = await response.json() as OAIResponse;
-    this.logger.debug(
-      `Model response: finish_reason=${result.choices[0]?.finish_reason} ` +
-      `tool_calls=${result.choices[0]?.message.tool_calls?.length ?? 0}`,
-    );
-    return result;
+    return response.json() as Promise<AnthropicMessage>;
+  }
+
+  private async callClaudeWithRetry(
+    systemPrompt: string,
+    messages:     { role: 'user' | 'assistant'; content: string }[],
+  ): Promise<AnthropicMessage> {
+    let lastError: Error | null = null;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        return await this.callClaude(systemPrompt, messages);
+      } catch (err: any) {
+        lastError = err;
+        const status = err.message.match(/status (\d+)/)?.[1];
+        // Only retry on transient errors
+        if (status && (status === '529' || status.startsWith('5'))) {
+          this.logger.warn(`Anthropic API ${status} — retrying (${attempt + 1}/${MAX_RETRIES})`);
+          if (attempt < MAX_RETRIES) {
+            await new Delay(RETRY_DELAY * (attempt + 1));
+            continue;
+          }
+        }
+        throw err;
+      }
+    }
+    throw lastError;
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // PROCESS RESPONSE
+  // PROCESS CLAUDE RESPONSE — execute tools FIRST, extract text AFTER
   // ═══════════════════════════════════════════════════════════════════════════
 
-  private async processResponse(
-    response:          OAIResponse,
-    session:           CampaignSession,
-    campaignPatientId: string,
-    campaignId:        string,
-    notificationPhone: string | null,
-    rawPatientMessage: string,
+  private async processClaudeResponse(
+    response:            AnthropicMessage,
+    session:             CampaignSession,
+    campaignPatientId:   string,
+    campaignId:          string,
+    clinic:              { id: string; name: string; phone: string; notificationPhone?: string | null },
+    rawPatientMessage:   string,
   ): Promise<{ textReply: string | null; conversationEnded: boolean }> {
     let textReply:         string | null = null;
     let conversationEnded: boolean       = false;
 
-    const choice = response.choices[0];
-    if (!choice) {
-      this.logger.warn('Model returned no choices');
-      return { textReply: null, conversationEnded: false };
-    }
+    // First pass: collect all tool_use blocks and all text blocks
+    const toolBlocks: AnthropicToolUseBlock[] = [];
+    const textBlocks: AnthropicTextBlock[] = [];
 
-    const msg = choice.message;
-
-    // ── Extract text content — with tool leak sanitisation ─────────────────
-    if (msg.content?.trim()) {
-      const sanitised = this.sanitiseModelContent(msg.content);
-      if (sanitised) {
-        textReply = sanitised;
-      } else {
-        this.logger.warn(
-          `msg.content fully stripped by sanitiser — original: "${msg.content.slice(0, 200)}"`,
-        );
+    for (const block of response.content) {
+      if (block.type === 'text' && (block as AnthropicTextBlock).text.trim()) {
+        textBlocks.push(block as AnthropicTextBlock);
+      } else if (block.type === 'tool_use') {
+        toolBlocks.push(block as AnthropicToolUseBlock);
       }
-    } else if (choice.finish_reason === 'tool_calls') {
-      this.logger.debug(
-        `No text content on tool_calls finish_reason — model only called tools without text reply`,
-      );
     }
 
-    // ── Execute structured tool calls ──────────────────────────────────────
-    if (msg.tool_calls && msg.tool_calls.length > 0) {
-      for (const toolCall of msg.tool_calls) {
-        const name = toolCall.function.name;
+    // Execute ALL tool calls first — side effects happen before any text is shown
+    for (const toolBlock of toolBlocks) {
+      this.logger.log(`Tool called: ${toolBlock.name} — input: ${JSON.stringify(toolBlock.input)}`);
 
-        let args: Record<string, unknown>;
-        try {
-          args = JSON.parse(toolCall.function.arguments);
-        } catch {
-          this.logger.warn(
-            `Failed to parse tool arguments for "${name}": ${toolCall.function.arguments}`,
-          );
-          continue;
+      try {
+        switch (toolBlock.name) {
+          case 'log_complaint': {
+            const input = toolBlock.input as unknown as LogComplaintInput;
+            await this.executeLogComplaint(input, campaignPatientId, clinic.id, rawPatientMessage, campaignId, clinic);
+            break;
+          }
+          case 'request_booking': {
+            const input = toolBlock.input as unknown as RequestBookingInput;
+            await this.executeRequestBooking(input, campaignPatientId, clinic.id, rawPatientMessage);
+            break;
+          }
+          case 'request_handoff': {
+            const input = toolBlock.input as unknown as RequestHandoffInput;
+            await this.executeRequestHandoff(input, session, campaignPatientId, campaignId, clinic);
+            conversationEnded = true;
+            break;
+          }
+          case 'end_conversation': {
+            const input = toolBlock.input as unknown as EndConversationInput;
+            await this.closeConversation(session, campaignPatientId, campaignId, input.outcome);
+            conversationEnded = true;
+            break;
+          }
+          default:
+            this.logger.warn(`Unknown tool called: ${toolBlock.name}`);
         }
-
-        this.logger.log(`Tool called: ${name} — ${JSON.stringify(args)}`);
-
-        const result = await this.executeToolCall(
-          name,
-          args,
-          session,
-          campaignPatientId,
-          campaignId,
-          notificationPhone,
-          rawPatientMessage,
-        );
-
-        if (result.ended) conversationEnded = true;
+      } catch (err: any) {
+        this.logger.error(`Tool ${toolBlock.name} execution failed: ${err.message}`);
       }
+    }
+
+    // Now concatenate all text blocks into the reply (after tools are done)
+    for (const block of textBlocks) {
+      const trimmed = block.text.trim();
+      if (!trimmed) continue;
+      textReply = textReply ? `${textReply}\n\n${trimmed}` : trimmed;
     }
 
     return { textReply, conversationEnded };
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // TOOL CALL SANITISER
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  /**
-   * Strips tool call XML leakage and internal model commentary from content.
-   */
-  private sanitiseModelContent(content: string): string | null {
-    let cleaned = content;
-
-    // Remove full <tool_calls_begin>...</tool_calls_end> blocks
-    cleaned = cleaned.replace(/<tool_calls_begin>[\s\S]*?<tool_calls_end>/g, '');
-
-    // Remove any remaining tool call XML tags
-    cleaned = cleaned.replace(/<tool_calls_begin>|<tool_call_begin>|<tool_calls_end>|<tool_sep>/g, '');
-
-    // Remove parenthetical internal notes
-    cleaned = cleaned.replace(/\(After [^)]*\)/gi, '');
-    cleaned = cleaned.replace(/\(Conversation closed[^)]*\)/gi, '');
-    cleaned = cleaned.replace(/\(Note:[^)]*\)/gi, '');
-
-    // Remove lines that are ONLY tool call artifacts
-    cleaned = cleaned
-      .split('\n')
-      .filter(line => !TOOL_LEAK_PATTERNS.some(p => p.test(line.trim())))
-      .join('\n');
-
-    // Collapse multiple blank lines to one
-    cleaned = cleaned.replace(/\n{3,}/g, '\n\n').trim();
-
-    return cleaned.length > 0 ? cleaned : null;
-  }
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // TOOL CALL EXECUTOR
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  private async executeToolCall(
-    name:              string,
-    args:              Record<string, unknown>,
-    session:           CampaignSession,
-    campaignPatientId: string,
-    campaignId:        string,
-    notificationPhone: string | null,
-    rawPatientMessage: string,
-  ): Promise<{ ended: boolean }> {
-    switch (name) {
-      case 'log_complaint': {
-        await this.executeLogComplaint(
-          args as unknown as LogComplaintInput,
-          campaignPatientId,
-          session.clinicId,
-          rawPatientMessage,
-          campaignId,
-        );
-        return { ended: false };
-      }
-      case 'request_booking': {
-        await this.executeRequestBooking(
-          args as unknown as RequestBookingInput,
-          campaignPatientId,
-          session.clinicId,
-          rawPatientMessage,
-        );
-        return { ended: false };
-      }
-      case 'request_handoff': {
-        await this.executeRequestHandoff(
-          args as unknown as RequestHandoffInput,
-          session,
-          campaignPatientId,
-          campaignId,
-          notificationPhone,
-        );
-        return { ended: true };
-      }
-      case 'end_conversation': {
-        await this.closeConversation(
-          session,
-          campaignPatientId,
-          campaignId,
-          (args as unknown as EndConversationInput).outcome,
-        );
-        return { ended: true };
-      }
-      default:
-        this.logger.warn(`Unknown tool called: ${name}`);
-        return { ended: false };
-    }
-  }
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // TOOL IMPLEMENTATIONS
+  // TOOL EXECUTORS
   // ═══════════════════════════════════════════════════════════════════════════
 
   private async executeLogComplaint(
@@ -687,8 +634,9 @@ CONVERSATION RULES:
     clinicId:          string,
     triggeringMessage: string,
     campaignId:        string,
+    clinic:            { id: string; notificationPhone?: string | null },
   ): Promise<void> {
-    await this.prisma.complaint.create({
+    const complaint = await this.prisma.complaint.create({
       data: {
         campaignPatientId,
         clinicId,
@@ -705,8 +653,20 @@ CONVERSATION RULES:
     });
 
     this.logger.log(
-      `Complaint logged: ${input.type}/${input.severity} for patient ${campaignPatientId}`,
+      `Complaint logged: ${input.type} / ${input.severity} for patient ${campaignPatientId}`,
     );
+
+    // HIGH severity → immediate staff alert
+    if (input.severity === ComplaintSeverity.HIGH && clinic.notificationPhone) {
+      try {
+        await this.whatsappService.sendText(
+          clinic.notificationPhone,
+          `🔴 HIGH SEVERITY COMPLAINT\nPatient: ${campaignPatientId}\nType: ${input.type}\nSummary: ${input.summary}\n\nPlease review immediately.`,
+        );
+      } catch (err: any) {
+        this.logger.error(`Failed to send HIGH complaint alert to staff: ${err.message}`);
+      }
+    }
   }
 
   private async executeRequestBooking(
@@ -734,25 +694,47 @@ CONVERSATION RULES:
     session:           CampaignSession,
     campaignPatientId: string,
     campaignId:        string,
-    notificationPhone: string | null,
+    clinic:            { id: string; notificationPhone?: string | null },
   ): Promise<void> {
+    // Update session status FIRST so any concurrent callers see admin_handling
     session.status = 'handed_off';
 
     await this.prisma.campaignPatient.update({
       where: { id: campaignPatientId },
       data: {
+        status:      CampaignPatientStatus.COMPLETED,
         outcome:     ConversationOutcome.HANDED_OFF,
+        completedAt: new Date(),
       },
     });
 
-    await this.sessionsService.saveCampaignSession(session);
+    await this.prisma.campaign.update({
+      where: { id: campaignId },
+      data:  { completedCount: { increment: 1 } },
+    });
 
-    if (notificationPhone) {
+    // Send handoff acknowledgement to patient BEFORE deleting session
+    const handoffMsg = await this.fetchBotMessage(clinic.id, MessageKey.CAMPAIGN_HANDOFF_MESSAGE, session.language ?? Language.FR)
+      .catch(() => 'Un agent va vous contacter sous peu.');
+    if (handoffMsg) {
       try {
-        await this.whatsappService.sendText(
-          notificationPhone,
-          `🔴 Handoff Required\nPatient: ${session.phone}\nReason: ${input.reason}`,
-        );
+        await this.whatsappService.sendText(session.phone, handoffMsg);
+      } catch (err: any) {
+        this.logger.error(`Failed to send handoff message to patient: ${err.message}`);
+      }
+    }
+
+    // Now delete Redis session — conversation is over
+    await this.sessionsService.deleteCampaignSession(session.phone);
+
+    // Notify staff via WhatsApp if a notification phone is configured
+    if (clinic.notificationPhone) {
+      try {
+        const msg =
+          `🔴 Handoff Required\n` +
+          `Patient: ${session.phone}\n` +
+          `Reason: ${input.reason}`;
+        await this.whatsappService.sendText(clinic.notificationPhone, msg);
       } catch (err: any) {
         this.logger.error(`Failed to notify staff of handoff: ${err.message}`);
       }
@@ -796,28 +778,29 @@ CONVERSATION RULES:
   // PRIVATE HELPERS
   // ═══════════════════════════════════════════════════════════════════════════
 
+  /**
+   * Detects language from the first patient message.
+   * Simple heuristic — Arabic script detection + common French/English words.
+   */
   private detectLanguage(message: string): Language {
+    // Arabic script detection — covers Darija written in Arabic
     if (/[\u0600-\u06FF]/.test(message)) return Language.AR;
 
     const lower = message.toLowerCase();
 
-    const frenchWords  = ['bonjour', 'merci', 'oui', 'non', 'je', 'vous', 'comment', 'bien', 'bonsoir', 'salam'];
-    const englishWords = ['hello', 'hi', 'thanks', 'yes', 'no', 'good', 'how', 'please', 'fine'];
+    const frenchWords = ['bonjour', 'merci', 'oui', 'non', 'je', 'vous', 'comment', 'bien', 'bonsoir', 'salam'];
+    if (frenchWords.some(w => lower.includes(w))) return Language.FR;
 
-    if (frenchWords.some(w  => lower.includes(w))) return Language.FR;
+    const englishWords = ['hello', 'hi', 'thanks', 'yes', 'no', 'good', 'how', 'please', 'fine'];
     if (englishWords.some(w => lower.includes(w))) return Language.EN;
 
     return Language.FR;
   }
 
-  private async resolveAiMaxTurns(campaignId: string, clinicAiMaxTurns: number): Promise<number> {
-    const campaign = await this.prisma.campaign.findUnique({
-      where:  { id: campaignId },
-      select: { aiMaxTurns: true },
-    });
-    return campaign?.aiMaxTurns ?? clinicAiMaxTurns;
-  }
-
+  /**
+   * Fetches a single bot message body from the DB.
+   * Falls back to FR if the requested language has no record.
+   */
   async fetchBotMessage(
     clinicId: string,
     key:      MessageKey,
@@ -836,5 +819,12 @@ CONVERSATION RULES:
     }
 
     return null;
+  }
+}
+
+// ─── Delay helper for retry ────────────────────────────────────────────────────
+class Delay extends Promise<void> {
+  constructor(ms: number) {
+    super(resolve => setTimeout(resolve, ms));
   }
 }

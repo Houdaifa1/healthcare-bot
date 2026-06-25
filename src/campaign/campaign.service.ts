@@ -37,7 +37,7 @@ export class CampaignService {
   ) {}
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // CREATE — creates a DRAFT campaign, no patients loaded yet
+  // CREATE
   // ═══════════════════════════════════════════════════════════════════════════
 
   async create(clinicId: string, dto: CreateCampaignDto): Promise<Campaign> {
@@ -95,7 +95,7 @@ export class CampaignService {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // UPDATE — only allowed on DRAFT campaigns
+  // UPDATE
   // ═══════════════════════════════════════════════════════════════════════════
 
   async update(clinicId: string, id: string, dto: UpdateCampaignDto): Promise<Campaign> {
@@ -153,7 +153,6 @@ export class CampaignService {
   async launch(clinicId: string, id: string): Promise<Campaign> {
     const campaign = await this.findOneRaw(clinicId, id);
 
-    // Only DRAFT or SCHEDULED campaigns can be launched
     if (
       campaign.status !== CampaignStatus.DRAFT &&
       campaign.status !== CampaignStatus.SCHEDULED
@@ -163,7 +162,6 @@ export class CampaignService {
       );
     }
 
-    // ── If DRAFT with scheduledStartAt in the future, enter SCHEDULED status ──
     if (
       campaign.status === CampaignStatus.DRAFT &&
       campaign.scheduledStartAt &&
@@ -179,12 +177,11 @@ export class CampaignService {
       });
     }
 
-    // ── Immediate launch ──
     return this.executeLaunch(campaign);
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // CANCEL SCHEDULE — revert SCHEDULED campaign back to DRAFT
+  // CANCEL SCHEDULE
   // ═══════════════════════════════════════════════════════════════════════════
 
   async cancelSchedule(clinicId: string, id: string): Promise<Campaign> {
@@ -208,7 +205,7 @@ export class CampaignService {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // SCHEDULER — called every minute by cron, launches due campaigns
+  // SCHEDULER — called every minute by cron
   // ═══════════════════════════════════════════════════════════════════════════
 
   async executeScheduledCampaigns(): Promise<void> {
@@ -255,7 +252,7 @@ export class CampaignService {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // RESUME — re-queues all PARKED patients with a 1-minute delay
+  // RESUME
   // ═══════════════════════════════════════════════════════════════════════════
 
   async resume(clinicId: string, id: string): Promise<Campaign> {
@@ -267,13 +264,11 @@ export class CampaignService {
       );
     }
 
-    // Set campaign RUNNING first so the processor sees RUNNING when jobs fire
     await this.prisma.campaign.update({
       where: { id },
       data:  { status: CampaignStatus.RUNNING },
     });
 
-    // Find all patients that were parked while the campaign was paused
     const parkedPatients = await this.prisma.campaignPatient.findMany({
       where: {
         campaignId: id,
@@ -286,8 +281,6 @@ export class CampaignService {
       return this.findOneRaw(clinicId, id);
     }
 
-    // Re-queue all parked patients with a 1-minute delay
-    // Short delay gives the DB update time to propagate before jobs fire
     const RESUME_DELAY_MS = 60 * 1000;
 
     for (const patient of parkedPatients) {
@@ -336,7 +329,7 @@ export class CampaignService {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // DELETE — only allowed on DRAFT, STOPPED, COMPLETED, or SCHEDULED campaigns
+  // DELETE
   // ═══════════════════════════════════════════════════════════════════════════
 
   async remove(clinicId: string, id: string): Promise<void> {
@@ -354,7 +347,6 @@ export class CampaignService {
       );
     }
 
-    // Check for unresolved complaints — block deletion
     const unresolvedComplaints = await this.prisma.complaint.count({
       where: {
         clinicId,
@@ -369,7 +361,38 @@ export class CampaignService {
       );
     }
 
-    // Delete in order: complaints (resolved) → booking requests → campaign patients → campaign
+    // ── Purge all Redis campaign sessions for patients in this campaign ────
+    // MUST happen before DB deletion — we need the phone numbers from the DB.
+    // If this is skipped, orphaned Redis sessions keep routing inbound messages
+    // to dead CampaignPatient records and the patient can never reach the bot.
+    const patients = await this.prisma.campaignPatient.findMany({
+      where:  { campaignId: id },
+      select: { phone: true },
+    });
+
+    let purgedSessions = 0;
+    for (const patient of patients) {
+      try {
+        const session = await this.sessionsService.getCampaignSession(patient.phone);
+        if (session) {
+          await this.sessionsService.deleteCampaignSession(patient.phone);
+          purgedSessions++;
+        }
+      } catch (err: any) {
+        // Redis failure must not block DB deletion — log and continue
+        this.logger.warn(
+          `Failed to purge Redis session for ${patient.phone} during campaign delete: ${err.message}`,
+        );
+      }
+    }
+
+    if (purgedSessions > 0) {
+      this.logger.log(
+        `Purged ${purgedSessions} Redis session(s) before deleting campaign ${id}`,
+      );
+    }
+
+    // ── Delete DB records in FK order ──────────────────────────────────────
     await this.prisma.complaint.deleteMany({
       where: { campaignPatient: { campaignId: id } },
     });
@@ -390,7 +413,7 @@ export class CampaignService {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // STAFF TAKEOVER — admin takes over AI conversation
+  // STAFF TAKEOVER — kept for backward compat, TakeoverService is canonical
   // ═══════════════════════════════════════════════════════════════════════════
 
   async takeover(clinicId: string, phone: string): Promise<void> {
@@ -427,10 +450,8 @@ export class CampaignService {
       throw new NotFoundException(`No active campaign session for ${phone}`);
     }
 
-    // Send message via WhatsApp
     await this.whatsappService.sendText(phone, message);
 
-    // Add to session history
     session.messages.push({
       role:      'assistant',
       content:   message,
@@ -442,7 +463,7 @@ export class CampaignService {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // PRIVATE — EXECUTE LAUNCH (shared by launch() and scheduler)
+  // PRIVATE — EXECUTE LAUNCH
   // ═══════════════════════════════════════════════════════════════════════════
 
   private async executeLaunch(campaign: Campaign): Promise<Campaign> {
@@ -452,7 +473,6 @@ export class CampaignService {
     const clinopsPatients = await this.fetchPatientsFromClinOps(campaign);
 
     if (clinopsPatients.length === 0) {
-      // If scheduled and no patients, move to COMPLETED with 0 count
       if (campaign.status === CampaignStatus.SCHEDULED) {
         this.logger.warn(`Scheduled campaign "${campaign.name}" has no matching patients — marking COMPLETED`);
         return this.prisma.campaign.update({
@@ -564,13 +584,10 @@ export class CampaignService {
 
     if (campaign.filterMotif) filters.motif = campaign.filterMotif;
 
-    // Do NOT pass date_derniere_consultation to ClinOps search — it only matches
-    // exact dates. We do date range filtering post-search below.
     filters.OnlyVerifiedNumbers = true;
 
     let patients = await this.clinops.searchPatients(filters);
 
-    // Date range filtering — post-search
     if (campaign.filterDateFrom || campaign.filterDateTo) {
       const fromTs = campaign.filterDateFrom
         ? new Date(campaign.filterDateFrom.getFullYear(), campaign.filterDateFrom.getMonth(), campaign.filterDateFrom.getDate()).getTime()

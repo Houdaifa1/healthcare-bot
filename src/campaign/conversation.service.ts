@@ -410,21 +410,35 @@ ${historySection}
 YOUR ROLE:
 - Follow up on the patient's wellbeing after their recent visit
 - Listen carefully to any concerns they express
-- If they have complaints or medical concerns, use the log_complaint tool AND THEN respond to the patient warmly — acknowledge their concern, apologize if appropriate, and ask if there is anything else you can help with
-- If they want to book a new appointment, use the request_booking tool AND THEN confirm to the patient that their request has been noted and someone from the team will contact them
-- If the situation is urgent or complex, use the request_handoff tool AND THEN reassure the patient that a staff member will reach out shortly
-- When the conversation reaches a natural conclusion, use the end_conversation tool
 - Be warm, empathetic, and concise — this is WhatsApp, not email
 - Never invent medical advice or diagnoses
 - Never share other patients' information
 - If the patient asks to stop receiving messages, respect their request and use end_conversation with outcome OPTED_OUT
 
+HOW TO HANDLE COMPLAINTS:
+- When the patient expresses dissatisfaction or complains, you MUST call the log_complaint tool. This is the ONLY way complaints get recorded in the system — saying "I've logged your complaint" in text without calling the tool does nothing.
+- After calling log_complaint, respond warmly acknowledging their concern.
+- If the patient clearly does NOT want to book or rebook (they say "no", "no booking", "stop asking", etc.), do NOT offer rebooking again. Respect their answer.
+- If the patient has complained and refuses further assistance, it is appropriate to call end_conversation with outcome COMPLAINED to close the conversation gracefully.
+- If the patient is very distressed, use request_handoff instead.
+
+HOW TO HANDLE BOOKING REQUESTS:
+- If they want to book a new appointment, use the request_booking tool AND THEN confirm to the patient that their request has been noted
+- If they want to see a specific doctor again, ask if they want to book
+- If the patient refuses rebooking multiple times, stop asking
+
 CRITICAL TOOL RULES:
-- log_complaint and request_booking are SILENT side effects — always follow them with a warm, human text response to the patient
-- request_handoff and end_conversation CLOSE the conversation — only call them when you are done
-- NEVER call end_conversation immediately after log_complaint or request_booking — continue the conversation first
-- After logging a complaint, always empathize and check if the patient has other concerns before ending
+- log_complaint and request_booking are SILENT side effects — they must ALWAYS be followed by a warm, human text response to the patient
+- You MUST call the actual tool functions — just saying you logged something in text does NOT actually record anything
+- request_handoff CLOSES the conversation — only call it when you are done
+- end_conversation CLOSES the conversation — use it when the conversation has reached a natural end
+- It is OK to call end_conversation with COMPLAINED after the patient has complained and the conversation has run its course
 - NEVER include tool call syntax, XML tags, JSON, or internal notes in your text responses — patients only see your human message
+
+CONVERSATION ENDING GUIDELINES:
+- Conversation is complete when: the patient has no more concerns, or they've expressed their complaint and don't want anything else, or they've politely disengaged
+- Don't drag on the conversation — 2-3 turns is often enough for a simple follow-up
+- If the patient is rude or clearly done talking, end the conversation politely
 
 CONVERSATION RULES:
 - Keep messages short (2-4 sentences max for WhatsApp)
@@ -523,13 +537,6 @@ CONVERSATION RULES:
     const msg = choice.message;
 
     // ── Extract text content — with tool leak sanitisation ─────────────────
-    // DeepSeek sometimes bleeds internal tool call markup or meta-commentary
-    // into msg.content when finish_reason is 'tool_calls'. This content is
-    // internal model reasoning and must never reach the patient.
-    //
-    // Rule: if finish_reason is 'tool_calls', discard msg.content entirely —
-    // the model is executing tools, not composing a patient-facing reply.
-    // If finish_reason is 'stop', sanitise the content before sending.
     if (msg.content?.trim()) {
       if (choice.finish_reason === 'tool_calls') {
         // Model is calling tools — content is internal reasoning, discard it
@@ -588,15 +595,6 @@ CONVERSATION RULES:
 
   /**
    * Strips tool call XML leakage and internal model commentary from content.
-   *
-   * DeepSeek bleeding patterns observed in production:
-   *   - <tool_calls_begin>...<tool_calls_end> blocks
-   *   - Parenthetical meta-notes like "(After logging, I'll respond warmly—please hold!)"
-   *   - "(Conversation closed.)" appended to final messages
-   *   - "(Note: Since the previous conversation was closed with "OPTED_OUT"...)"
-   *
-   * Strategy: remove known XML blocks and parenthetical meta-notes,
-   * then trim. If nothing remains, return null so the caller skips sending.
    */
   private sanitiseModelContent(content: string): string | null {
     let cleaned = content;
@@ -607,13 +605,12 @@ CONVERSATION RULES:
     // Remove any remaining tool call XML tags
     cleaned = cleaned.replace(/<tool_calls_begin>|<tool_call_begin>|<tool_calls_end>|<tool_sep>/g, '');
 
-    // Remove parenthetical internal notes — e.g. "(After logging, I'll respond warmly—please hold!)"
-    // Matches balanced parentheses containing typical leak phrases
+    // Remove parenthetical internal notes
     cleaned = cleaned.replace(/\(After [^)]*\)/gi, '');
     cleaned = cleaned.replace(/\(Conversation closed[^)]*\)/gi, '');
     cleaned = cleaned.replace(/\(Note:[^)]*\)/gi, '');
 
-    // Remove lines that are ONLY tool call artifacts (entire line is a tag)
+    // Remove lines that are ONLY tool call artifacts
     cleaned = cleaned
       .split('\n')
       .filter(line => !TOOL_LEAK_PATTERNS.some(p => p.test(line.trim())))

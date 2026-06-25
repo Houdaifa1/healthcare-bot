@@ -346,6 +346,20 @@ enum BookingRequestStatus {
   REJECTED
 }
 
+// ─── AI Usage Tracking ────────────────────────────────────────────────────────
+model AiUsage {
+  id                 String    @id @default(cuid())
+  clinicId           String
+  campaignId         String
+  campaignPatientId  String
+  inputTokens        Int
+  outputTokens       Int
+  model              String
+  createdAt          DateTime  @default(now())
+
+  @@index([clinicId, campaignId, campaignPatientId])
+}
+
 enum MessageKey {
   WELCOME
   LANGUAGE_PROMPT
@@ -395,4 +409,5 @@ enum MessageKey {
   CAMPAIGN_URGENT_MESSAGE
   CAMPAIGN_HANDOFF_MESSAGE
   CAMPAIGN_REBOOK_CONFIRM
+  CAMPAIGN_FAREWELL_MESSAGE
 }

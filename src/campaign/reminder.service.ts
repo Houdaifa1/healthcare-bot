@@ -146,7 +146,7 @@ export class ReminderService {
   // ═══════════════════════════════════════════════════════════════════════════
 
   private async processOnePatient(
-    patient:              { id: string; phone: string; remindersSent: number; language: Language | null },
+    patient:              any,
     campaignId:           string,
     clinicId:             string,
     reminderCount:        number,
@@ -166,7 +166,7 @@ export class ReminderService {
   // ═══════════════════════════════════════════════════════════════════════════
 
   private async sendReminder(
-    patient:              { id: string; phone: string; remindersSent: number; language: Language | null },
+    patient:              any,
     clinicId:             string,
     campaignId:           string,
     reminderIntervalHours: number,
@@ -188,8 +188,15 @@ export class ReminderService {
       return;
     }
 
+    // Personalise reminder with patient-specific tokens
+    const visitDateStr = new Date(patient.visitDate || Date.now()).toLocaleDateString('fr-FR');
+    const personalised = reminderBody
+      .replace(/\{\{name\}\}/g, patient.patientName)
+      .replace(/\{\{doctor\}\}/g, patient.medecinTraitant || '')
+      .replace(/\{\{visitDate\}\}/g, visitDateStr);
+
     // Send WhatsApp message
-    await this.whatsappService.sendText(patient.phone, reminderBody);
+    await this.whatsappService.sendText(patient.phone, personalised);
 
     // Update patient record — bump remindersSent and touch updatedAt so the
     // interval resets correctly for the next reminder check

@@ -16,15 +16,15 @@ import {
 // ─── Tool input shapes ────────────────────────────────────────────────────────
 
 interface LogComplaintInput {
-  type:     ComplaintType;
+  type: ComplaintType;
   severity: ComplaintSeverity;
-  summary:  string;
+  summary: string;
 }
 
 interface RequestBookingInput {
-  preferredDoctor?:    string;
+  preferredDoctor?: string;
   preferredDateRange?: string;
-  reason?:             string;
+  reason?: string;
 }
 
 interface RequestHandoffInput {
@@ -41,7 +41,7 @@ const GROQ_TOOLS: any[] = [
   {
     type: 'function',
     function: {
-      name:        'log_complaint',
+      name: 'log_complaint',
       description: 'Log a patient complaint or medical concern detected in the conversation. Call this whenever the patient expresses dissatisfaction, reports a medical issue, or describes an urgent situation.',
       parameters: {
         type: 'object',
@@ -68,7 +68,7 @@ const GROQ_TOOLS: any[] = [
   {
     type: 'function',
     function: {
-      name:        'request_booking',
+      name: 'request_booking',
       description: 'Create a booking request when the patient expresses intent to schedule a new appointment or follow-up visit.',
       parameters: {
         type: 'object',
@@ -93,7 +93,7 @@ const GROQ_TOOLS: any[] = [
   {
     type: 'function',
     function: {
-      name:        'request_handoff',
+      name: 'request_handoff',
       description: 'Transfer the conversation to a human staff member. Use when the patient is very distressed, the situation is too complex for AI, the patient explicitly asks for a human, or there is an urgent medical situation.',
       parameters: {
         type: 'object',
@@ -110,7 +110,7 @@ const GROQ_TOOLS: any[] = [
   {
     type: 'function',
     function: {
-      name:        'end_conversation',
+      name: 'end_conversation',
       description: 'Close the conversation when the follow-up is complete. Call this when the patient has no more concerns, has been helped, or has clearly disengaged.',
       parameters: {
         type: 'object',
@@ -137,8 +137,8 @@ export class ConversationService {
   private client: Groq | null;
 
   constructor(
-    private readonly configService:  ConfigService,
-    private readonly prisma:         PrismaService,
+    private readonly configService: ConfigService,
+    private readonly prisma: PrismaService,
     private readonly sessionsService: SessionsService,
     private readonly whatsappService: WhatsAppService,
   ) {
@@ -208,7 +208,7 @@ export class ConversationService {
 
       await this.prisma.campaignPatient.update({
         where: { id: campaignPatient.id },
-        data:  { language: detected },
+        data: { language: detected },
       });
 
       this.logger.log(`Language detected for ${phone}: ${detected}`);
@@ -219,14 +219,14 @@ export class ConversationService {
       await this.prisma.campaignPatient.update({
         where: { id: campaignPatient.id },
         data: {
-          status:    CampaignPatientStatus.REPLIED,
+          status: CampaignPatientStatus.REPLIED,
           repliedAt: new Date(),
         },
       });
 
       await this.prisma.campaign.update({
         where: { id: campaignPatient.campaignId },
-        data:  { repliedCount: { increment: 1 } },
+        data: { repliedCount: { increment: 1 } },
       });
     }
 
@@ -235,8 +235,8 @@ export class ConversationService {
 
     // ── 8. Append patient message to session ──────────────────────────────
     const userMessage: CampaignMessage = {
-      role:      'user',
-      content:   patientMessage,
+      role: 'user',
+      content: patientMessage,
       timestamp: Date.now(),
     };
     session.messages.push(userMessage);
@@ -275,8 +275,8 @@ export class ConversationService {
       await this.whatsappService.sendText(phone, textReply);
 
       const assistantMessage: CampaignMessage = {
-        role:      'assistant',
-        content:   textReply,
+        role: 'assistant',
+        content: textReply,
         timestamp: Date.now(),
       };
       session.messages.push(assistantMessage);
@@ -289,7 +289,7 @@ export class ConversationService {
     await this.prisma.campaignPatient.update({
       where: { id: campaignPatient.id },
       data: {
-        messages:  session.messages as any,
+        messages: session.messages as any,
         turnCount: session.turnCount,
       },
     });
@@ -309,12 +309,12 @@ export class ConversationService {
   // ═══════════════════════════════════════════════════════════════════════════
 
   private buildSystemPrompt(
-    session:         CampaignSession,
+    session: CampaignSession,
     campaignPatient: { patientSnapshot: any; patientName: string; visitDate: Date; prestation: string; medecinTraitant: string; ageYears: number | null; sexe: string | null; ville: string | null },
   ): string {
-    const snapshot      = campaignPatient.patientSnapshot as Record<string, any>;
-    const historyData   = snapshot?.history  ?? null;
-    const language      = session.language ?? Language.FR;
+    const snapshot = campaignPatient.patientSnapshot as Record<string, any>;
+    const historyData = snapshot?.history ?? null;
+    const language = session.language ?? Language.FR;
 
     const languageInstruction = language === Language.EN
       ? 'Always respond in English.'
@@ -327,10 +327,10 @@ export class ConversationService {
       const admissions = historyData.admissions
         .slice(0, 10)
         .map((a: any, i: number) => {
-          const date   = a.date_admission ? new Date(a.date_admission).toLocaleDateString('fr-FR') : 'Unknown date';
-          const motif  = a.motif_admission ?? 'Unknown';
+          const date = a.date_admission ? new Date(a.date_admission).toLocaleDateString('fr-FR') : 'Unknown date';
+          const motif = a.motif_admission ?? 'Unknown';
           const doctor = a.medecin_traitant ?? 'Unknown';
-          const actes  = Array.isArray(a.actes_realises) && a.actes_realises.length > 0
+          const actes = Array.isArray(a.actes_realises) && a.actes_realises.length > 0
             ? a.actes_realises.join(', ')
             : 'None recorded';
           return `  ${i + 1}. ${date} — ${motif} (Dr. ${doctor}) | Actes: ${actes}`;
@@ -388,7 +388,7 @@ CONVERSATION RULES:
     return session.messages
       .filter(m => m.content?.trim())
       .map(m => ({
-        role:    m.role as 'user' | 'assistant',
+        role: m.role as 'user' | 'assistant',
         content: m.content,
       }));
   }
@@ -399,23 +399,25 @@ CONVERSATION RULES:
 
   private async callGroq(
     systemPrompt: string,
-    messages:     any[],
-    aiMaxTurns:   number,
+    messages: any[],
+    aiMaxTurns: number,
   ): Promise<any> {
     const maxTokens = Math.min(1024, Math.max(256, aiMaxTurns * 20));
 
     try {
-      return await this.client!.chat.completions.create({
-        model:       GROQ_MODEL,
-        max_tokens:  maxTokens,
+      const result = await this.client!.chat.completions.create({
+        model: GROQ_MODEL,
+        max_tokens: maxTokens,
         temperature: 0.7,
         messages: [
           { role: 'system', content: systemPrompt },
           ...messages,
         ],
-        tools:       GROQ_TOOLS,
+        tools: GROQ_TOOLS,
         tool_choice: 'auto',
       });
+      this.logger.debug(`Raw Groq response: ${JSON.stringify(result.choices[0]?.message)}`);
+      return result;
     } catch (err: any) {
       // Groq returns 400 when the model generates malformed tool calls
       // (e.g., <function=...> text format). Parse failed_generation and
@@ -448,15 +450,15 @@ CONVERSATION RULES:
   // ═══════════════════════════════════════════════════════════════════════════
 
   private async processResponse(
-    response:          any,
-    session:           CampaignSession,
+    response: any,
+    session: CampaignSession,
     campaignPatientId: string,
-    campaignId:        string,
+    campaignId: string,
     notificationPhone: string | null,
     rawPatientMessage: string,
   ): Promise<{ textReply: string | null; conversationEnded: boolean }> {
-    let textReply:         string | null = null;
-    let conversationEnded: boolean       = false;
+    let textReply: string | null = null;
+    let conversationEnded: boolean = false;
 
     const choice = response.choices[0];
     if (!choice) {
@@ -521,26 +523,26 @@ CONVERSATION RULES:
   // ═══════════════════════════════════════════════════════════════════════════
 
   private async executeLogComplaint(
-    input:             LogComplaintInput,
+    input: LogComplaintInput,
     campaignPatientId: string,
-    clinicId:          string,
+    clinicId: string,
     triggeringMessage: string,
-    campaignId:        string,
+    campaignId: string,
   ): Promise<void> {
     await this.prisma.complaint.create({
       data: {
         campaignPatientId,
         clinicId,
-        type:             input.type,
-        severity:         input.severity,
+        type: input.type,
+        severity: input.severity,
         triggeringMessage,
-        summary:          input.summary,
+        summary: input.summary,
       },
     });
 
     await this.prisma.campaign.update({
       where: { id: campaignId },
-      data:  { complainedCount: { increment: 1 } },
+      data: { complainedCount: { increment: 1 } },
     });
 
     this.logger.log(
@@ -549,19 +551,19 @@ CONVERSATION RULES:
   }
 
   private async executeRequestBooking(
-    input:             RequestBookingInput,
+    input: RequestBookingInput,
     campaignPatientId: string,
-    clinicId:          string,
+    clinicId: string,
     rawPatientMessage: string,
   ): Promise<void> {
     await this.prisma.bookingRequest.create({
       data: {
         campaignPatientId,
         clinicId,
-        preferredDoctor:    input.preferredDoctor    ?? null,
+        preferredDoctor: input.preferredDoctor ?? null,
         preferredDateRange: input.preferredDateRange ?? null,
-        reason:             input.reason             ?? null,
-        rawPatientRequest:  rawPatientMessage,
+        reason: input.reason ?? null,
+        rawPatientRequest: rawPatientMessage,
       },
     });
 
@@ -569,10 +571,10 @@ CONVERSATION RULES:
   }
 
   private async executeRequestHandoff(
-    input:             RequestHandoffInput,
-    session:           CampaignSession,
+    input: RequestHandoffInput,
+    session: CampaignSession,
     campaignPatientId: string,
-    campaignId:        string,
+    campaignId: string,
     notificationPhone: string | null,
   ): Promise<void> {
     session.status = 'handed_off';
@@ -580,15 +582,15 @@ CONVERSATION RULES:
     await this.prisma.campaignPatient.update({
       where: { id: campaignPatientId },
       data: {
-        status:      CampaignPatientStatus.COMPLETED,
-        outcome:     ConversationOutcome.HANDED_OFF,
+        status: CampaignPatientStatus.COMPLETED,
+        outcome: ConversationOutcome.HANDED_OFF,
         completedAt: new Date(),
       },
     });
 
     await this.prisma.campaign.update({
       where: { id: campaignId },
-      data:  { completedCount: { increment: 1 } },
+      data: { completedCount: { increment: 1 } },
     });
 
     await this.sessionsService.deleteCampaignSession(session.phone);
@@ -611,17 +613,17 @@ CONVERSATION RULES:
   }
 
   private async closeConversation(
-    session:           CampaignSession,
+    session: CampaignSession,
     campaignPatientId: string,
-    campaignId:        string,
-    outcome:           ConversationOutcome,
+    campaignId: string,
+    outcome: ConversationOutcome,
   ): Promise<void> {
     session.status = 'completed';
 
     await this.prisma.campaignPatient.update({
       where: { id: campaignPatientId },
       data: {
-        status:      CampaignPatientStatus.COMPLETED,
+        status: CampaignPatientStatus.COMPLETED,
         outcome,
         completedAt: new Date(),
       },
@@ -629,7 +631,7 @@ CONVERSATION RULES:
 
     await this.prisma.campaign.update({
       where: { id: campaignId },
-      data:  { completedCount: { increment: 1 } },
+      data: { completedCount: { increment: 1 } },
     });
 
     await this.sessionsService.deleteCampaignSession(session.phone);
@@ -737,7 +739,7 @@ CONVERSATION RULES:
 
   private async resolveAiMaxTurns(campaignId: string, clinicAiMaxTurns: number): Promise<number> {
     const campaign = await this.prisma.campaign.findUnique({
-      where:  { id: campaignId },
+      where: { id: campaignId },
       select: { aiMaxTurns: true },
     });
     return campaign?.aiMaxTurns ?? clinicAiMaxTurns;
@@ -745,7 +747,7 @@ CONVERSATION RULES:
 
   async fetchBotMessage(
     clinicId: string,
-    key:      MessageKey,
+    key: MessageKey,
     language: Language,
   ): Promise<string | null> {
     const record = await this.prisma.botMessage.findUnique({

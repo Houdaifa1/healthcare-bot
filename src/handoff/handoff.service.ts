@@ -39,7 +39,7 @@ export class HandoffService {
         if (!raw) continue;
 
         const session: CampaignSession = JSON.parse(raw);
-        if (session.status !== 'handed_off') continue;
+        if (session.status !== 'handed_off' && session.status !== 'admin_handling') continue;
 
         const patient = await this.prisma.campaignPatient.findUnique({
           where: { id: session.campaignPatientId },
@@ -86,7 +86,7 @@ export class HandoffService {
       throw new NotFoundException(`No campaign session found for ${phone}`);
     }
 
-    if (session.status !== 'handed_off') {
+    if (session.status !== 'handed_off' && session.status !== 'admin_handling') {
       throw new BadRequestException(
         `Session for ${phone} is in status "${session.status}" — not a handoff session`,
       );
@@ -120,7 +120,7 @@ export class HandoffService {
       return;
     }
 
-    if (session.status !== 'handed_off') {
+    if (session.status !== 'handed_off' && session.status !== 'admin_handling') {
       this.logger.warn(
         `resolveHandoff: session ${phone} is "${session.status}" — not handed_off`,
       );

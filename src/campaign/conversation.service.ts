@@ -322,7 +322,7 @@ export class ConversationService {
             let resultString = 'Success';
             try {
               if (toolBlock.name === 'log_complaint') {
-                await this.executeLogComplaint(toolBlock.input as any, campaignPatient.id, clinic.id, patientMessage, campaignPatient.campaignId, clinic, session.language);
+                await this.executeLogComplaint(toolBlock.input as any, campaignPatient.id, clinic.id, patientMessage, campaignPatient.campaignId, clinic);
                 resultString = 'Complaint logged successfully.';
               } else if (toolBlock.name === 'request_booking') {
                 await this.executeRequestBooking(toolBlock.input as any, campaignPatient.id, clinic.id, patientMessage);
@@ -604,7 +604,6 @@ CONVERSATION RULES:
     triggeringMessage: string,
     campaignId: string,
     clinic: { id: string; notificationPhone?: string | null },
-    currentLanguage: Language, // FIX: Injected active language tracking context
   ): Promise<void> {
     await this.prisma.complaint.create({
       data: {
@@ -614,8 +613,7 @@ CONVERSATION RULES:
         severity: input.severity,
         triggeringMessage,
         summary: input.summary,
-        language: currentLanguage, // FIX: Saving language directly to DB model for dashboard indexing
-      } as any, // Typecast safely in case your local client schema compilation is trailing behind
+      },
     });
 
     await this.prisma.campaign.update({
@@ -629,7 +627,7 @@ CONVERSATION RULES:
       try {
         await this.whatsappService.sendText(
           clinic.notificationPhone,
-          `🔴 HIGH SEVERITY COMPLAINT\nPatient: ${campaignPatientId}\nType: ${input.type}\nLanguage: ${currentLanguage}\nSummary: ${input.summary}\n\nPlease review immediately.`,
+          `🔴 HIGH SEVERITY COMPLAINT\nPatient: ${campaignPatientId}\nType: ${input.type}\nSummary: ${input.summary}\n\nPlease review immediately.`,
         );
       } catch (err: any) {
         this.logger.error(`Failed to send HIGH complaint alert to staff: ${err.message}`);
@@ -757,6 +755,6 @@ CONVERSATION RULES:
       where: { clinicId_key_language: { clinicId, key, language } },
     });
     if (record) return record.body;
-    return null;
+     return null;
   }
 }

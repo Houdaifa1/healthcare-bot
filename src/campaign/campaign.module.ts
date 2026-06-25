@@ -5,7 +5,6 @@ import { CampaignController } from './campaign.controller';
 import { OutboundProcessor } from './outbound.processor';
 import { ConversationService } from './conversation.service';
 import { ReminderService } from './reminder.service';
-import { TakeoverService } from './takeover.service';
 import { ClinOpsModule } from '../clinops/clinops.module';
 import { SessionsModule } from '../sessions/sessions.module';
 import { WhatsAppModule } from '../whatsapp/whatsapp.module';
@@ -28,8 +27,7 @@ import { QUEUES } from '../queue/queue.constants';
     OutboundProcessor,
     ConversationService,
     ReminderService,
-    TakeoverService,
   ],
-  exports: [CampaignService, ConversationService, TakeoverService],
+  exports: [CampaignService, ConversationService],
 })
 export class CampaignModule {}

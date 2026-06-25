@@ -744,18 +744,11 @@ CONVERSATION RULES:
     await this.prisma.campaignPatient.update({
       where: { id: campaignPatientId },
       data: {
-        status:      CampaignPatientStatus.COMPLETED,
         outcome:     ConversationOutcome.HANDED_OFF,
-        completedAt: new Date(),
       },
     });
 
-    await this.prisma.campaign.update({
-      where: { id: campaignId },
-      data:  { completedCount: { increment: 1 } },
-    });
-
-    await this.sessionsService.deleteCampaignSession(session.phone);
+    await this.sessionsService.saveCampaignSession(session);
 
     if (notificationPhone) {
       try {

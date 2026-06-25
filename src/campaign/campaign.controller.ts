@@ -12,35 +12,9 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { CampaignService } from './campaign.service';
-import { TakeoverService } from './takeover.service';
 import { CreateCampaignDto } from './dto/create-campaign.dto';
 import { UpdateCampaignDto } from './dto/update-campaign.dto';
 import { JwtAuthGuard } from '../admin/auth/jwt-auth.guard';
-import { IsString, MinLength, IsNotEmpty } from 'class-validator';
-
-// ─── Takeover DTOs ────────────────────────────────────────────────────────────
-
-class TakeoverDto {
-  @IsString()
-  @IsNotEmpty()
-  phone: string;
-}
-
-class StaffMessageDto {
-  @IsString()
-  @IsNotEmpty()
-  phone: string;
-
-  @IsString()
-  @MinLength(1)
-  message: string;
-}
-
-class ReleaseBotDto {
-  @IsString()
-  @IsNotEmpty()
-  phone: string;
-}
 
 // ─── Controller ───────────────────────────────────────────────────────────────
 
@@ -49,7 +23,6 @@ class ReleaseBotDto {
 export class CampaignController {
   constructor(
     private readonly campaignService: CampaignService,
-    private readonly takeoverService: TakeoverService,
   ) {}
 
   // ── Campaign CRUD ──────────────────────────────────────────────────────────
@@ -65,43 +38,6 @@ export class CampaignController {
   findAll(@Request() req: any) {
     return this.campaignService.findAll(req.user.clinicId);
   }
-
-  // ── Static routes MUST come before :id to avoid shadowing ────────────────
-  // NestJS matches top-to-bottom; 'handovers', 'takeover', etc. must be
-  // declared before ':id' routes, or NestJS will try to match them as IDs.
-
-  // GET /api/admin/v1/campaigns/handovers
-  @Get('handovers')
-  getHandovers(@Request() req: any) {
-    return this.takeoverService.getActiveHandovers(req.user.clinicId);
-  }
-
-  // POST /api/admin/v1/campaigns/takeover
-  @Post('takeover')
-  @HttpCode(HttpStatus.OK)
-  takeover(@Request() req: any, @Body() dto: TakeoverDto) {
-    return this.takeoverService.takeOver(req.user.clinicId, dto.phone);
-  }
-
-  // POST /api/admin/v1/campaigns/staff-message
-  @Post('staff-message')
-  @HttpCode(HttpStatus.OK)
-  sendStaffMessage(@Request() req: any, @Body() dto: StaffMessageDto) {
-    return this.takeoverService.sendStaffMessage(
-      req.user.clinicId,
-      dto.phone,
-      dto.message,
-    );
-  }
-
-  // POST /api/admin/v1/campaigns/release-bot
-  @Post('release-bot')
-  @HttpCode(HttpStatus.OK)
-  releaseBot(@Request() req: any, @Body() dto: ReleaseBotDto) {
-    return this.takeoverService.releaseToBot(req.user.clinicId, dto.phone);
-  }
-
-  // ── Parameterised routes ───────────────────────────────────────────────────
 
   // GET /api/admin/v1/campaigns/:id
   @Get(':id')

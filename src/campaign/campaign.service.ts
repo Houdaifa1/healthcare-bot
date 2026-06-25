@@ -413,56 +413,6 @@ export class CampaignService {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // STAFF TAKEOVER — kept for backward compat, TakeoverService is canonical
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  async takeover(clinicId: string, phone: string): Promise<void> {
-    const session = await this.sessionsService.getCampaignSession(phone);
-    if (!session || session.clinicId !== clinicId) {
-      throw new NotFoundException(`No active campaign session for ${phone}`);
-    }
-    if (session.status !== 'active' && session.status !== 'awaiting_reply') {
-      throw new ConflictException(`Session for ${phone} is ${session.status} — cannot take over`);
-    }
-
-    session.status = 'admin_handling';
-    await this.sessionsService.saveCampaignSession(session);
-    this.logger.log(`Staff took over conversation for ${phone}`);
-  }
-
-  async resumeBot(clinicId: string, phone: string): Promise<void> {
-    const session = await this.sessionsService.getCampaignSession(phone);
-    if (!session || session.clinicId !== clinicId) {
-      throw new NotFoundException(`No active campaign session for ${phone}`);
-    }
-    if (session.status !== 'admin_handling') {
-      throw new ConflictException(`Session for ${phone} is ${session.status} — cannot resume bot`);
-    }
-
-    session.status = 'active';
-    await this.sessionsService.saveCampaignSession(session);
-    this.logger.log(`Staff handed conversation back to AI for ${phone}`);
-  }
-
-  async sendStaffMessage(clinicId: string, phone: string, message: string): Promise<void> {
-    const session = await this.sessionsService.getCampaignSession(phone);
-    if (!session || session.clinicId !== clinicId) {
-      throw new NotFoundException(`No active campaign session for ${phone}`);
-    }
-
-    await this.whatsappService.sendText(phone, message);
-
-    session.messages.push({
-      role:      'assistant',
-      content:   message,
-      timestamp: Date.now(),
-    });
-
-    await this.sessionsService.saveCampaignSession(session);
-    this.logger.log(`Staff message sent to ${phone}`);
-  }
-
-  // ═══════════════════════════════════════════════════════════════════════════
   // PRIVATE — EXECUTE LAUNCH
   // ═══════════════════════════════════════════════════════════════════════════
 

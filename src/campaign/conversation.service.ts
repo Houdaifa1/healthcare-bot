@@ -538,21 +538,18 @@ CONVERSATION RULES:
 
     // ── Extract text content — with tool leak sanitisation ─────────────────
     if (msg.content?.trim()) {
-      if (choice.finish_reason === 'tool_calls') {
-        // Model is calling tools — content is internal reasoning, discard it
-        this.logger.debug(
-          `Discarding msg.content on tool_calls finish_reason: "${msg.content.slice(0, 100)}"`,
-        );
+      const sanitised = this.sanitiseModelContent(msg.content);
+      if (sanitised) {
+        textReply = sanitised;
       } else {
-        const sanitised = this.sanitiseModelContent(msg.content);
-        if (sanitised) {
-          textReply = sanitised;
-        } else {
-          this.logger.warn(
-            `msg.content fully stripped by sanitiser — original: "${msg.content.slice(0, 200)}"`,
-          );
-        }
+        this.logger.warn(
+          `msg.content fully stripped by sanitiser — original: "${msg.content.slice(0, 200)}"`,
+        );
       }
+    } else if (choice.finish_reason === 'tool_calls') {
+      this.logger.debug(
+        `No text content on tool_calls finish_reason — model only called tools without text reply`,
+      );
     }
 
     // ── Execute structured tool calls ──────────────────────────────────────

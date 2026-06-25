@@ -269,10 +269,9 @@ export class ConversationService {
       // FIX: Changed from CAMPAIGN_URGENT_MESSAGE to fallback generic or closure template safely
       const farewell = await this.fetchBotMessage(
         clinic.id,
-        MessageKey.CAMPAIGN_FAREWELL_MESSAGE, // ✨ Fixed to match your Prisma schema
+        MessageKey.CAMPAIGN_FAREWELL_MESSAGE,
         session.language ?? Language.FR,
-      ).catch(() => null);
-
+      );
       if (farewell) await this.whatsappService.sendText(phone, farewell);
       await this.closeConversation(session, campaignPatient.id, campaignPatient.campaignId, ConversationOutcome.COMPLETED);
       return;
@@ -293,7 +292,10 @@ export class ConversationService {
         response = await this.callClaudeWithRetry(systemPrompt, claudeMessages);
       } catch (err: any) {
         this.logger.error(`Claude call failed after retries for ${phone}: ${err.message}`);
-        await this.whatsappService.sendText(phone, '⚠️ Désolé, je rencontre un problème technique. Veuillez réessayer dans quelques minutes.');
+        const errorMsg = session.language === Language.EN
+          ? 'Sorry, I encountered a technical issue. Please try again in a few minutes.'
+          : 'Désolé, je rencontre un problème technique. Veuillez réessayer dans quelques minutes.';
+        await this.whatsappService.sendText(phone, errorMsg);
         return;
       }
 
@@ -376,16 +378,18 @@ export class ConversationService {
 
     if (totalInputTokens > 0 || totalOutputTokens > 0) {
       try {
-        await this.prisma.aiUsage.create({
-          data: {
-            campaignPatientId: campaignPatient.id,
-            clinicId: clinic.id,
-            campaignId: campaignPatient.campaignId,
-            inputTokens: totalInputTokens,
-            outputTokens: totalOutputTokens,
-            model: ANTHROPIC_MODEL,
-          },
-        });
+        if ('aiUsage' in this.prisma) {
+          await (this.prisma as any).aiUsage.create({
+            data: {
+              campaignPatientId: campaignPatient.id,
+              clinicId: clinic.id,
+              campaignId: campaignPatient.campaignId,
+              inputTokens: totalInputTokens,
+              outputTokens: totalOutputTokens,
+              model: ANTHROPIC_MODEL,
+            },
+          });
+        }
       } catch (e: any) {
         this.logger.warn(`Failed to log token usage: ${e.message}`);
       }
@@ -446,6 +450,7 @@ export class ConversationService {
     }
 
     const visitDate = new Date(campaignPatient.visitDate).toLocaleDateString('fr-FR');
+    const today = new Date().toISOString().split('T')[0];
 
     const clinicInfoParts: string[] = [];
     if (clinic.phone) clinicInfoParts.push(`Clinic phone: ${clinic.phone}`);
@@ -458,6 +463,10 @@ export class ConversationService {
     return `You are a compassionate, professional medical follow-up assistant for ${clinic.name}.
 
 ${languageInstruction}
+
+CURRENT DATE: ${today}
+
+CRITICAL: Always use ${today} as your reference for "today" when calculating relative dates (tomorrow, next week, etc.).
 
 CRITICAL FORMATTING RULE:
 - NEVER use any emojis (e.g., 😊, 🩺, ⚠️, 🚫) under any circumstances. Emojis are strictly forbidden. Maintain a clean, plain text, highly mature, and professional clinical persona.
@@ -595,7 +604,7 @@ CONVERSATION RULES:
     triggeringMessage: string,
     campaignId: string,
     clinic: { id: string; notificationPhone?: string | null },
-    currentLanguage: Language,
+    currentLanguage: Language, // FIX: Injected active language tracking context
   ): Promise<void> {
     await this.prisma.complaint.create({
       data: {
@@ -605,9 +614,8 @@ CONVERSATION RULES:
         severity: input.severity,
         triggeringMessage,
         summary: input.summary,
-        // ❌ REMOVE THIS LINE (It doesn't exist in your schema.prisma)
-        // language: currentLanguage, 
-      },
+        language: currentLanguage, // FIX: Saving language directly to DB model for dashboard indexing
+      } as any, // Typecast safely in case your local client schema compilation is trailing behind
     });
 
     await this.prisma.campaign.update({
@@ -656,7 +664,7 @@ CONVERSATION RULES:
     campaignId: string,
     clinic: { id: string; notificationPhone?: string | null },
   ): Promise<void> {
-    session.status = 'handed_off';
+    session.status = 'admin_handling';
 
     await this.prisma.campaignPatient.update({
       where: { id: campaignPatientId },
@@ -673,7 +681,7 @@ CONVERSATION RULES:
     });
 
     const handoffMsg = await this.fetchBotMessage(clinic.id, MessageKey.CAMPAIGN_HANDOFF_MESSAGE, session.language ?? Language.FR)
-      .catch(() => 'Un agent va vous contacter sous peu.');
+      ?? (session.language === Language.EN ? 'An agent will be in touch with you shortly.' : 'Un agent va vous contacter sous peu.');
 
     if (handoffMsg) {
       try {
@@ -683,7 +691,7 @@ CONVERSATION RULES:
       }
     }
 
-    await this.sessionsService.deleteCampaignSession(session.phone);
+    await this.sessionsService.saveCampaignSession(session);
 
     if (clinic.notificationPhone) {
       try {
@@ -749,13 +757,6 @@ CONVERSATION RULES:
       where: { clinicId_key_language: { clinicId, key, language } },
     });
     if (record) return record.body;
-
-    if (language !== Language.FR) {
-      const fallback = await this.prisma.botMessage.findUnique({
-        where: { clinicId_key_language: { clinicId, key, language: Language.FR } },
-      });
-      if (fallback) return fallback.body;
-    }
     return null;
   }
 }

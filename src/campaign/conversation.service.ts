@@ -12,14 +12,14 @@ import {
   MessageKey,
 } from '@prisma/client';
 
-// ─── OpenAI-compatible response types (OpenRouter uses this format) ───────────
+// ─── OpenAI-compatible response types ────────────────────────────────────────
 
 interface OAIToolCall {
   id:       string;
   type:     'function';
   function: {
     name:      string;
-    arguments: string; // JSON string
+    arguments: string;
   };
 }
 
@@ -60,7 +60,7 @@ interface EndConversationInput {
   outcome: ConversationOutcome;
 }
 
-// ─── Tool definitions (OpenAI function-calling format) ────────────────────────
+// ─── Tool definitions ─────────────────────────────────────────────────────────
 
 const TOOLS = [
   {
@@ -104,7 +104,7 @@ const TOOLS = [
           },
           preferredDateRange: {
             type:        'string',
-            description: 'Free text date preference as expressed by the patient, e.g. "semaine prochaine", "lundi matin", "next week"',
+            description: 'Free text date preference as expressed by the patient',
           },
           reason: {
             type:        'string',
@@ -136,7 +136,7 @@ const TOOLS = [
     type: 'function',
     function: {
       name:        'end_conversation',
-      description: 'Close the conversation when the follow-up is complete. Call this when the patient has no more concerns, has been helped, or has clearly disengaged.',
+      description: 'Close the conversation when the follow-up is complete.',
       parameters: {
         type: 'object',
         properties: {
@@ -156,6 +156,19 @@ const TOOLS = [
 
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const OPENROUTER_MODEL   = 'deepseek/deepseek-chat-v3-0324';
+
+// ─── Tool call leak patterns ──────────────────────────────────────────────────
+// DeepSeek sometimes bleeds internal tool call markup into msg.content.
+// These patterns identify contaminated content that must never reach patients.
+const TOOL_LEAK_PATTERNS = [
+  /<tool_calls_begin>/,
+  /<tool_call_begin>/,
+  /<tool_calls_end>/,
+  /<tool_sep>/,
+  /\(After logging.*?\)/i,
+  /\(Conversation closed\.\)/i,
+  /\(Note:.*?OPTED_OUT.*?\)/i,
+];
 
 @Injectable()
 export class ConversationService {
@@ -204,19 +217,24 @@ export class ConversationService {
     });
 
     if (!campaignPatient) {
+      // ── Dead session — CampaignPatient was deleted (e.g. campaign deleted) ──
+      // Purge the Redis session so this phone can reach the reactive bot again.
       this.logger.error(
-        `CampaignPatient ${session.campaignPatientId} not found for phone ${phone}`,
+        `CampaignPatient ${session.campaignPatientId} not found for phone ${phone} ` +
+        `— purging orphaned Redis session`,
       );
+      await this.sessionsService.deleteCampaignSession(phone);
       return;
     }
 
-    // ── 4. Load clinic for aiMaxTurns and notification settings ────────────
+    // ── 4. Load clinic ─────────────────────────────────────────────────────
     const clinic = await this.prisma.clinic.findUnique({
       where: { id: session.clinicId },
     });
 
     if (!clinic) {
       this.logger.error(`Clinic ${session.clinicId} not found`);
+      await this.sessionsService.deleteCampaignSession(phone);
       return;
     }
 
@@ -260,7 +278,7 @@ export class ConversationService {
     };
     session.messages.push(userMessage);
 
-    // ── 9. Resolve aiMaxTurns — campaign override takes precedence ─────────
+    // ── 9. Resolve aiMaxTurns ──────────────────────────────────────────────
     const aiMaxTurns = await this.resolveAiMaxTurns(campaignPatient.campaignId, clinic.aiMaxTurns);
 
     // ── 10. Auto-close if turn limit reached ──────────────────────────────
@@ -278,13 +296,13 @@ export class ConversationService {
     }
 
     // ── 11. Build prompt and messages ──────────────────────────────────────
-    const systemPrompt  = this.buildSystemPrompt(session, campaignPatient);
-    const messages      = this.buildMessages(session);
+    const systemPrompt = this.buildSystemPrompt(session, campaignPatient);
+    const messages     = this.buildMessages(session);
 
-    // ── 12. Call DeepSeek via OpenRouter ──────────────────────────────────
+    // ── 12. Call model ─────────────────────────────────────────────────────
     const response = await this.callModel(systemPrompt, messages, aiMaxTurns);
 
-    // ── 13. Process response — execute tools, extract text reply ──────────
+    // ── 13. Process response — execute tools, extract clean text reply ─────
     const { textReply, conversationEnded } = await this.processResponse(
       response,
       session,
@@ -395,7 +413,7 @@ YOUR ROLE:
 - If they have complaints or medical concerns, use the log_complaint tool AND THEN respond to the patient warmly — acknowledge their concern, apologize if appropriate, and ask if there is anything else you can help with
 - If they want to book a new appointment, use the request_booking tool AND THEN confirm to the patient that their request has been noted and someone from the team will contact them
 - If the situation is urgent or complex, use the request_handoff tool AND THEN reassure the patient that a staff member will reach out shortly
-- When the conversation reaches a natural conclusion, use the end_conversation tool with no text reply needed
+- When the conversation reaches a natural conclusion, use the end_conversation tool
 - Be warm, empathetic, and concise — this is WhatsApp, not email
 - Never invent medical advice or diagnoses
 - Never share other patients' information
@@ -406,6 +424,7 @@ CRITICAL TOOL RULES:
 - request_handoff and end_conversation CLOSE the conversation — only call them when you are done
 - NEVER call end_conversation immediately after log_complaint or request_booking — continue the conversation first
 - After logging a complaint, always empathize and check if the patient has other concerns before ending
+- NEVER include tool call syntax, XML tags, JSON, or internal notes in your text responses — patients only see your human message
 
 CONVERSATION RULES:
 - Keep messages short (2-4 sentences max for WhatsApp)
@@ -427,7 +446,7 @@ CONVERSATION RULES:
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // CALL MODEL — OpenRouter + DeepSeek via OpenAI-compatible REST API
+  // CALL MODEL
   // ═══════════════════════════════════════════════════════════════════════════
 
   private async callModel(
@@ -435,7 +454,6 @@ CONVERSATION RULES:
     messages:     { role: 'user' | 'assistant'; content: string }[],
     aiMaxTurns:   number,
   ): Promise<OAIResponse> {
-    // Always allow enough tokens for tool call JSON + text reply
     const maxTokens = Math.max(1024, aiMaxTurns * 20);
 
     const body = {
@@ -482,8 +500,7 @@ CONVERSATION RULES:
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // PROCESS RESPONSE — execute structured tool calls, extract text reply
-  // No regex, no text parsing — DeepSeek returns proper structured tool calls
+  // PROCESS RESPONSE
   // ═══════════════════════════════════════════════════════════════════════════
 
   private async processResponse(
@@ -505,9 +522,30 @@ CONVERSATION RULES:
 
     const msg = choice.message;
 
-    // ── Extract text content ───────────────────────────────────────────────
+    // ── Extract text content — with tool leak sanitisation ─────────────────
+    // DeepSeek sometimes bleeds internal tool call markup or meta-commentary
+    // into msg.content when finish_reason is 'tool_calls'. This content is
+    // internal model reasoning and must never reach the patient.
+    //
+    // Rule: if finish_reason is 'tool_calls', discard msg.content entirely —
+    // the model is executing tools, not composing a patient-facing reply.
+    // If finish_reason is 'stop', sanitise the content before sending.
     if (msg.content?.trim()) {
-      textReply = msg.content.trim();
+      if (choice.finish_reason === 'tool_calls') {
+        // Model is calling tools — content is internal reasoning, discard it
+        this.logger.debug(
+          `Discarding msg.content on tool_calls finish_reason: "${msg.content.slice(0, 100)}"`,
+        );
+      } else {
+        const sanitised = this.sanitiseModelContent(msg.content);
+        if (sanitised) {
+          textReply = sanitised;
+        } else {
+          this.logger.warn(
+            `msg.content fully stripped by sanitiser — original: "${msg.content.slice(0, 200)}"`,
+          );
+        }
+      }
     }
 
     // ── Execute structured tool calls ──────────────────────────────────────
@@ -542,6 +580,49 @@ CONVERSATION RULES:
     }
 
     return { textReply, conversationEnded };
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // TOOL CALL SANITISER
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Strips tool call XML leakage and internal model commentary from content.
+   *
+   * DeepSeek bleeding patterns observed in production:
+   *   - <tool_calls_begin>...<tool_calls_end> blocks
+   *   - Parenthetical meta-notes like "(After logging, I'll respond warmly—please hold!)"
+   *   - "(Conversation closed.)" appended to final messages
+   *   - "(Note: Since the previous conversation was closed with "OPTED_OUT"...)"
+   *
+   * Strategy: remove known XML blocks and parenthetical meta-notes,
+   * then trim. If nothing remains, return null so the caller skips sending.
+   */
+  private sanitiseModelContent(content: string): string | null {
+    let cleaned = content;
+
+    // Remove full <tool_calls_begin>...</tool_calls_end> blocks
+    cleaned = cleaned.replace(/<tool_calls_begin>[\s\S]*?<tool_calls_end>/g, '');
+
+    // Remove any remaining tool call XML tags
+    cleaned = cleaned.replace(/<tool_calls_begin>|<tool_call_begin>|<tool_calls_end>|<tool_sep>/g, '');
+
+    // Remove parenthetical internal notes — e.g. "(After logging, I'll respond warmly—please hold!)"
+    // Matches balanced parentheses containing typical leak phrases
+    cleaned = cleaned.replace(/\(After [^)]*\)/gi, '');
+    cleaned = cleaned.replace(/\(Conversation closed[^)]*\)/gi, '');
+    cleaned = cleaned.replace(/\(Note:[^)]*\)/gi, '');
+
+    // Remove lines that are ONLY tool call artifacts (entire line is a tag)
+    cleaned = cleaned
+      .split('\n')
+      .filter(line => !TOOL_LEAK_PATTERNS.some(p => p.test(line.trim())))
+      .join('\n');
+
+    // Collapse multiple blank lines to one
+    cleaned = cleaned.replace(/\n{3,}/g, '\n\n').trim();
+
+    return cleaned.length > 0 ? cleaned : null;
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -739,7 +820,7 @@ CONVERSATION RULES:
     if (frenchWords.some(w  => lower.includes(w))) return Language.FR;
     if (englishWords.some(w => lower.includes(w))) return Language.EN;
 
-    return Language.FR; // default to clinic language
+    return Language.FR;
   }
 
   private async resolveAiMaxTurns(campaignId: string, clinicAiMaxTurns: number): Promise<number> {

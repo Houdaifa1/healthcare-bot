@@ -155,7 +155,7 @@ const TOOLS = [
 // ─── Model config ─────────────────────────────────────────────────────────────
 
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const OPENROUTER_MODEL = 'openrouter/auto';
+const OPENROUTER_MODEL   = 'deepseek/deepseek-chat-v3-0324';
 
 @Injectable()
 export class ConversationService {
@@ -392,14 +392,20 @@ ${historySection}
 YOUR ROLE:
 - Follow up on the patient's wellbeing after their recent visit
 - Listen carefully to any concerns they express
-- If they have complaints or medical concerns, use the log_complaint tool
-- If they want to book a new appointment, use the request_booking tool
-- If the situation is urgent or complex, use the request_handoff tool
-- When the conversation reaches a natural conclusion, use the end_conversation tool
+- If they have complaints or medical concerns, use the log_complaint tool AND THEN respond to the patient warmly — acknowledge their concern, apologize if appropriate, and ask if there is anything else you can help with
+- If they want to book a new appointment, use the request_booking tool AND THEN confirm to the patient that their request has been noted and someone from the team will contact them
+- If the situation is urgent or complex, use the request_handoff tool AND THEN reassure the patient that a staff member will reach out shortly
+- When the conversation reaches a natural conclusion, use the end_conversation tool with no text reply needed
 - Be warm, empathetic, and concise — this is WhatsApp, not email
 - Never invent medical advice or diagnoses
 - Never share other patients' information
 - If the patient asks to stop receiving messages, respect their request and use end_conversation with outcome OPTED_OUT
+
+CRITICAL TOOL RULES:
+- log_complaint and request_booking are SILENT side effects — always follow them with a warm, human text response to the patient
+- request_handoff and end_conversation CLOSE the conversation — only call them when you are done
+- NEVER call end_conversation immediately after log_complaint or request_booking — continue the conversation first
+- After logging a complaint, always empathize and check if the patient has other concerns before ending
 
 CONVERSATION RULES:
 - Keep messages short (2-4 sentences max for WhatsApp)

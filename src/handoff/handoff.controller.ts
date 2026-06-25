@@ -3,12 +3,22 @@ import { HandoffService } from './handoff.service';
 import { JwtAuthGuard } from '../admin/auth/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { AuthUser } from '../common/types/auth-user.type';
-import { IsString, IsNotEmpty } from 'class-validator';
+import { IsString, IsNotEmpty, MinLength } from 'class-validator';
 
 export class ResolveHandoffDto {
   @IsString()
   @IsNotEmpty()
-  phone: string;
+  phone!: string;
+}
+
+export class SendMessageDto {
+  @IsString()
+  @IsNotEmpty()
+  phone!: string;
+
+  @IsString()
+  @MinLength(1)
+  message!: string;
 }
 
 @Controller('api/admin/v1/handoff')
@@ -21,6 +31,14 @@ export class HandoffController {
   @Get()
   async getHandoffSessions(@CurrentUser() user: AuthUser) {
     return this.handoffService.getHandoffSessions();
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('send-message')
+  async sendMessage(@Body() dto: SendMessageDto) {
+    this.logger.log(`Sending staff message to ${dto.phone}`);
+    await this.handoffService.sendMessage(dto.phone, dto.message);
+    return { message: 'Message sent successfully.' };
   }
 
   @UseGuards(JwtAuthGuard)

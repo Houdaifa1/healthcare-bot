@@ -1,10 +1,20 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { SessionsService } from '../sessions/sessions.service';
+import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
+import { SessionsService, CampaignSession } from '../sessions/sessions.service';
 import { WhatsAppService } from '../whatsapp/whatsapp.service';
-import { BotMessageService } from '../bot-content/bot-message.service';
-import { Session, SessionState } from '../sessions/sessions.service';
-import { MessageKey } from '@prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
+
+export interface HandoffSessionData {
+  campaignPatientId: string;
+  campaignId:        string;
+  patientName:       string;
+  phone:             string;
+  language:          string | null;
+  messages:          { role: string; content: string; timestamp: number }[];
+  turnCount:         number;
+  handoffReason:     string;
+  handedOffAt:       number;
+  lastActivityAt:    number;
+}
 
 @Injectable()
 export class HandoffService {
@@ -13,129 +23,113 @@ export class HandoffService {
   constructor(
     private readonly sessionsService: SessionsService,
     private readonly whatsappService: WhatsAppService,
-    private readonly botMessageService: BotMessageService,
-    private readonly configService: ConfigService,
+    private readonly prisma:         PrismaService,
   ) {}
 
-  async initiateHandoff(session: Session): Promise<void> {
-    this.logger.log(`Initiating handoff for session: ${session.phone}`);
-    session.state = SessionState.AWAITING_HANDOFF;
-    await this.sessionsService.save(session);
+  async getHandoffSessions(): Promise<HandoffSessionData[]> {
+    const keys = await this.sessionsService.scanCampaignKeys();
+    if (keys.length === 0) return [];
 
-    const handoffMessage = await this.botMessageService.get(
-      session.data.clinicId,
-      MessageKey.HANDOFF_TRIGGERED,
-      {},
-      session.data.language,
-    );
-    await this.whatsappService.sendText(session.phone, handoffMessage);
-
-    const bossPhone = this.configService.get<string>('whatsapp.bossPhone');
-    if (bossPhone) {
-      const alertMessage =
-        `🔔 Handoff Alert\nPatient: ${session.data.patientName ?? 'Unknown'}\n` +
-        `Phone: ${session.phone}\nTime: ${new Date().toISOString()}`;
-      await this.whatsappService.sendText(bossPhone, alertMessage);
-      this.logger.log(`Handoff alert sent to ${bossPhone}`);
-    }
-  }
-
-  async handleHandoffMessage(session: Session, message: string): Promise<void> {
-    this.logger.log(
-      `Handoff message from user ${session.phone}: "${message}". Awaiting agent response.`,
-    );
-  }
-
-  /**
-   * Returns all reactive sessions currently in AWAITING_HANDOFF state.
-   *
-   * Uses raw Redis GET via getClient() — never calls getOrCreate(), which
-   * would create phantom sessions with empty clinicId for non-existent phones.
-   */
-  async getHandoffSessions(): Promise<
-    { phone: string; state: string; patientName?: string; updatedAt: number }[]
-  > {
+    const results: HandoffSessionData[] = [];
     const redis = this.sessionsService.getClient();
-
-    let keys: string[];
-    try {
-      keys = await this.sessionsService.scanKeys();
-    } catch (error) {
-      this.logger.error('Failed to scan session keys', error);
-      return [];
-    }
-
-    const results: { phone: string; state: string; patientName?: string; updatedAt: number }[] = [];
 
     for (const key of keys) {
       try {
         const raw = await redis.get(key);
         if (!raw) continue;
 
-        const session = JSON.parse(raw) as Session;
-        if (session.state !== SessionState.AWAITING_HANDOFF) continue;
+        const session: CampaignSession = JSON.parse(raw);
+        if (session.status !== 'handed_off') continue;
 
-        // Derive phone from key — key format is "session:<phone>"
-        const phone = key.replace(/^session:/, '');
+        const patient = await this.prisma.campaignPatient.findUnique({
+          where: { id: session.campaignPatientId },
+          select: { id: true, patientName: true, campaignId: true },
+        });
+
+        if (!patient) continue;
+
+        // Get the last AI message that triggered the handoff
+        const lastAiMsg = [...session.messages]
+          .reverse()
+          .find(m => m.role === 'assistant');
 
         results.push({
-          phone,
-          state:       session.state,
-          patientName: session.data?.patientName,
-          updatedAt:   session.updatedAt,
+          campaignPatientId: session.campaignPatientId,
+          campaignId:        patient.campaignId,
+          patientName:       patient.patientName,
+          phone:             session.phone,
+          language:          session.language,
+          messages:          session.messages,
+          turnCount:         session.turnCount,
+          handoffReason:     lastAiMsg?.content ?? 'No reason recorded',
+          handedOffAt:       session.startedAt,
+          lastActivityAt:    session.lastActivityAt,
         });
-      } catch (err) {
-        this.logger.warn(`Failed to read session key "${key}"`, err);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.logger.warn(`Failed to parse campaign session key "${key}": ${msg}`);
       }
     }
 
+    results.sort((a, b) => b.handedOffAt - a.handedOffAt);
+    this.logger.log(`Found ${results.length} handoff session(s)`);
     return results;
   }
 
-  /**
-   * Resolves a handoff session back to IDLE and notifies the patient.
-   *
-   * Uses raw Redis GET via getClient() — never calls getOrCreate() so we
-   * cannot accidentally create or corrupt an existing session.
-   */
+  async sendMessage(phone: string, message: string): Promise<void> {
+    if (!message?.trim()) {
+      throw new BadRequestException('Message cannot be empty');
+    }
+
+    const session = await this.sessionsService.getCampaignSession(phone);
+    if (!session) {
+      throw new NotFoundException(`No campaign session found for ${phone}`);
+    }
+
+    if (session.status !== 'handed_off') {
+      throw new BadRequestException(
+        `Session for ${phone} is in status "${session.status}" — not a handoff session`,
+      );
+    }
+
+    await this.whatsappService.sendText(phone, message.trim());
+
+    session.messages.push({
+      role:      'assistant',
+      content:   message.trim(),
+      timestamp: Date.now(),
+    });
+
+    await this.sessionsService.saveCampaignSession(session);
+
+    // Also persist to DB
+    await this.prisma.campaignPatient.update({
+      where: { id: session.campaignPatientId },
+      data:  { messages: session.messages as any },
+    }).catch(() => {
+      this.logger.warn(`Failed to persist message to DB for ${phone}`);
+    });
+
+    this.logger.log(`Staff message sent to ${phone} via handoff`);
+  }
+
   async resolveHandoff(phone: string): Promise<void> {
-    const redis = this.sessionsService.getClient();
-    const key   = `session:${phone}`;
-
-    let session: Session;
-    try {
-      const raw = await redis.get(key);
-      if (!raw) {
-        this.logger.warn(`resolveHandoff: no session found for ${phone}`);
-        return;
-      }
-      session = JSON.parse(raw) as Session;
-    } catch (err) {
-      this.logger.error(`resolveHandoff: failed to read session for ${phone}`, err);
+    const session = await this.sessionsService.getCampaignSession(phone);
+    if (!session) {
+      this.logger.warn(`resolveHandoff: no campaign session found for ${phone}`);
       return;
     }
 
-    if (session.state !== SessionState.AWAITING_HANDOFF) {
+    if (session.status !== 'handed_off') {
       this.logger.warn(
-        `resolveHandoff: session ${phone} is in state "${session.state}", not AWAITING_HANDOFF — skipping`,
+        `resolveHandoff: session ${phone} is "${session.status}" — not handed_off`,
       );
       return;
     }
 
-    this.logger.log(`Resolving handoff for session: ${phone}`);
-    session.state = SessionState.IDLE;
-    await this.sessionsService.save(session);
+    session.status = 'completed';
+    await this.sessionsService.saveCampaignSession(session);
 
-    try {
-      const resolvedMessage = await this.botMessageService.get(
-        session.data.clinicId,
-        MessageKey.HANDOFF_RESOLVED,
-        {},
-        session.data.language,
-      );
-      await this.whatsappService.sendText(phone, resolvedMessage);
-    } catch (err) {
-      this.logger.warn(`resolveHandoff: failed to send resolution message to ${phone}`, err);
-    }
+    this.logger.log(`Handoff resolved for ${phone}`);
   }
 }

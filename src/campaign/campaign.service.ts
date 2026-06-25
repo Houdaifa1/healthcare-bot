@@ -528,7 +528,7 @@ export class CampaignService {
 
     const session = await this.sessionsService.getCampaignSession(patient.phone);
     if (!session) {
-      throw new NotFoundException(`No active session found for patient ${patientId}`);
+      throw new NotFoundException(`No session found for patient ${patientId}`);
     }
 
     await this.whatsappService.sendText(patient.phone, message);

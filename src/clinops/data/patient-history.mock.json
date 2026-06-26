@@ -168,5 +168,19 @@
         "avis_medicaux": []
       }
     ]
+  },
+  "CIN9219": {
+    "patient": "Houdaifa Drahm",
+    "solde_impaye": 0.00,
+    "admissions": [
+      {
+        "date_admission": "2026-06-22T14:30:00",
+        "motif_admission": "Consultation générale",
+        "medecin_traitant": "DR Miloud BAKOUCHE",
+        "actes_realises": ["Consultation", "Bilan sanguin"],
+        "produits_pharmaceutiques": ["Paracétamol 1000mg"],
+        "avis_medicaux": []
+      }
+    ]
   }
 }

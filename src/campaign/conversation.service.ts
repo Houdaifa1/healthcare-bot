@@ -623,14 +623,18 @@ TOOL USAGE RULES — READ CAREFULLY:
    - This ENDS the AI conversation permanently.
 
 CONVERSATION FLOW:
-- Turn 1-2: Warm greeting, ask how they are doing since their visit.
-- If they are fine: Acknowledge, offer rebooking if appropriate (once), close warmly.
-- If they have a concern: Listen, acknowledge, use tools, respond warmly.
-- If they want to stop: Respect it immediately. Use end_conversation with outcome OPTED_OUT after a polite farewell.
-- If they are rude or done talking: Close gracefully with end_conversation.
-- Do NOT drag the conversation. 2-4 turns is often enough.
+- Turn 1: Warm greeting, ask how they are doing since their visit.
+- Turn 2: If they say they are fine, acknowledge warmly and ask ONE follow-up question (e.g. any remaining questions about their treatment, or whether they need to rebook). Do NOT close yet.
+- Turn 3+: If they confirm everything is fine with no further needs, THEN close warmly with end_conversation.
+- If they have a concern at any point: Listen, acknowledge, use tools, respond warmly.
+- If they want to stop or say goodbye explicitly: Respect it immediately. Use end_conversation after a polite farewell.
+- If they are rude or clearly done talking: Close gracefully with end_conversation.
 
-Current turn: ${session.turnCount + 1} of ${session.turnCount + 1}`;
+IMPORTANT — DO NOT close the conversation after a single positive reply like "I'm fine" or "yeah all good".
+The patient may still have questions or need a follow-up appointment. Always ask one gentle follow-up before closing.
+Only use end_conversation when the patient has clearly indicated they have nothing more to discuss.
+
+Current turn: ${session.turnCount + 1}`;
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -812,6 +816,10 @@ Current turn: ${session.turnCount + 1} of ${session.turnCount + 1}`;
     // Staff needs this session to send messages to the patient from the dashboard
     await this.sessionsService.saveCampaignSession(session);
 
+    // Also purge any stale reactive bot session so the patient can't accidentally
+    // re-enter the reactive flow while staff is handling their campaign conversation
+    await this.sessionsService.delete(session.phone);
+
     // Notify staff
     if (clinic.notificationPhone) {
       try {
@@ -849,8 +857,12 @@ Current turn: ${session.turnCount + 1} of ${session.turnCount + 1}`;
       data: { completedCount: { increment: 1 } },
     });
 
-    // Delete Redis session — conversation is truly over
+    // Delete Redis campaign session — conversation is truly over
     await this.sessionsService.deleteCampaignSession(session.phone);
+
+    // Also purge the reactive bot session so the patient starts fresh if they
+    // text the clinic number again — no stale AWAITING_HANDOFF or booking state
+    await this.sessionsService.delete(session.phone);
 
     this.logger.log(`Conversation closed for patient ${campaignPatientId} — outcome: ${outcome}`);
   }

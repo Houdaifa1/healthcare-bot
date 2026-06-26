@@ -285,6 +285,12 @@ export class SessionsService implements OnModuleDestroy {
     return session.status === 'awaiting_reply' || session.status === 'active';
   }
 
+  async isHandoffCampaignSession(phone: string): Promise<boolean> {
+    const session = await this.getCampaignSession(phone);
+    if (!session) return false;
+    return session.status === 'handed_off' || session.status === 'admin_handling';
+  }
+
   async scanCampaignKeys(): Promise<string[]> {
     return new Promise((resolve, reject) => {
       const stream = this.redis.scanStream({ match: 'campaign:*', count: 100 });

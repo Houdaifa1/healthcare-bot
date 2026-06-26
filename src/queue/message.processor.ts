@@ -48,12 +48,16 @@ export class MessageProcessor extends WorkerHost {
     }
 
     // ── 3. Campaign routing ────────────────────────────────────────────────
-    // If this phone has an active AI campaign conversation, route there
-    // instead of the reactive orchestrator.
     const hasCampaign = await this.sessionsService.hasActiveCampaignSession(from);
     if (hasCampaign) {
       this.logger.log(`Phone ${from} has active campaign session — routing to ConversationService`);
       await this.conversationService.handleReply(from, text);
+      return;
+    }
+
+    const isHandoff = await this.sessionsService.isHandoffCampaignSession(from);
+    if (isHandoff) {
+      this.logger.log(`Phone ${from} is in handoff/admin_handling — dropping message, staff is handling`);
       return;
     }
 

@@ -514,7 +514,7 @@ export class CampaignService {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // AGEND SEND MESSAGE (handoff / live session)
+  // AGENT SEND MESSAGE (handoff / live session)
   // ═══════════════════════════════════════════════════════════════════════════
 
   async sendPatientMessage(clinicId: string, campaignId: string, patientId: string, message: string) {
@@ -526,9 +526,10 @@ export class CampaignService {
       throw new NotFoundException(`Patient ${patientId} not found in campaign ${campaignId}`);
     }
 
-    const session = await this.sessionsService.getCampaignSession(patient.phone);
+    const normalizedPhone = patient.phone.replace(/^\+/, '').replace(/\s/g, '');
+    const session = await this.sessionsService.getCampaignSession(normalizedPhone);
     if (!session) {
-      throw new NotFoundException(`No session found for patient ${patientId}`);
+      throw new NotFoundException(`No active session found for patient ${patientId}. The conversation may have already ended.`);
     }
 
     await this.whatsappService.sendText(patient.phone, message);
@@ -540,6 +541,7 @@ export class CampaignService {
     };
 
     session.messages.push(staffMsg);
+    session.phone = normalizedPhone;
     await this.sessionsService.saveCampaignSession(session);
 
     await this.prisma.campaignPatient.update({
@@ -577,7 +579,8 @@ export class CampaignService {
       data: { completedCount: { increment: 1 } },
     });
 
-    await this.sessionsService.deleteCampaignSession(patient.phone);
+    const normalizedPhone = patient.phone.replace(/^\+/, '').replace(/\s/g, '');
+    await this.sessionsService.deleteCampaignSession(normalizedPhone);
 
     return { success: true };
   }
@@ -658,7 +661,13 @@ export class CampaignService {
       throw new NotFoundException(`Patient ${patientId} not found in campaign ${campaignId}`);
     }
 
-    return patient;
+    const normalizedPhone = patient.phone.replace(/^\+/, '').replace(/\s/g, '');
+    const redisSession = await this.sessionsService.getCampaignSession(normalizedPhone);
+
+    return {
+      ...patient,
+      sessionStatus: redisSession?.status ?? null,
+    };
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -708,26 +717,26 @@ export class CampaignService {
       throw new NotFoundException(`Patient ${patientId} not found in campaign ${campaignId}`);
     }
 
-    // Update session status so bot stops replying
-    const session = await this.sessionsService.getCampaignSession(patient.phone);
-    if (session) {
-      session.status = 'admin_handling';
-      await this.sessionsService.saveCampaignSession(session);
+    const normalizedPhone = patient.phone.replace(/^\+/, '').replace(/\s/g, '');
+    const existingSession = await this.sessionsService.getCampaignSession(normalizedPhone);
+    if (existingSession) {
+      existingSession.status = 'admin_handling';
+      existingSession.phone = normalizedPhone;
+      await this.sessionsService.saveCampaignSession(existingSession);
     } else {
-      // Create a minimal session with admin_handling status
       await this.sessionsService.saveCampaignSession({
-        phone: patient.phone,
+        phone:             normalizedPhone,
         campaignPatientId: patient.id,
         clinicId,
-        patientSnapshot: {},
-        language: patient.language ?? undefined,
-        messages: [],
-        turnCount: patient.turnCount,
-        remindersSent: patient.remindersSent,
-        status: 'admin_handling',
-        startedAt: Date.now(),
-        lastActivityAt: Date.now(),
-      } as any);
+        patientSnapshot:   patient.patientSnapshot as Record<string, any>,
+        language:          patient.language ?? null,
+        messages:          (patient.messages as any[]) ?? [],
+        turnCount:         patient.turnCount,
+        remindersSent:     patient.remindersSent,
+        status:            'admin_handling',
+        startedAt:         Date.now(),
+        lastActivityAt:    Date.now(),
+      });
     }
 
     // Update patient status to COMPLETED to stop reminder cycle

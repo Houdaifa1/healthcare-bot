@@ -14,9 +14,6 @@ import {
 @Injectable()
 export class ReminderService {
   private readonly logger = new Logger(ReminderService.name);
-
-  // Guard against overlapping runs — if the previous cron tick is still
-  // processing when the next one fires, skip it entirely.
   private isRunning = false;
 
   constructor(
@@ -26,13 +23,13 @@ export class ReminderService {
   ) {}
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // CRON — runs every hour
+  // CRON — every hour
   // ═══════════════════════════════════════════════════════════════════════════
 
   @Cron(CronExpression.EVERY_HOUR)
   async runReminderCycle(): Promise<void> {
     if (this.isRunning) {
-      this.logger.warn('Reminder cycle already running — skipping this tick');
+      this.logger.warn('Reminder cycle already running — skipping tick');
       return;
     }
 
@@ -54,14 +51,12 @@ export class ReminderService {
   // ═══════════════════════════════════════════════════════════════════════════
 
   private async processReminders(): Promise<void> {
-    // Load all RUNNING campaigns so we can batch-resolve their settings.
-    // We only send reminders for patients whose campaign is still RUNNING.
     const runningCampaigns = await this.prisma.campaign.findMany({
       where:  { status: CampaignStatus.RUNNING },
       select: {
-        id:                   true,
-        clinicId:             true,
-        reminderCount:        true,
+        id:                    true,
+        clinicId:              true,
+        reminderCount:         true,
         reminderIntervalHours: true,
       },
     });
@@ -71,22 +66,19 @@ export class ReminderService {
       return;
     }
 
-    // Build a map of campaignId → resolved settings for fast lookup below.
-    // We need clinic defaults for campaigns that don't override them.
     const clinicIds = [...new Set(runningCampaigns.map(c => c.clinicId))];
     const clinics   = await this.prisma.clinic.findMany({
       where:  { id: { in: clinicIds } },
       select: {
-        id:                   true,
-        reminderCount:        true,
+        id:                    true,
+        name:                  true,
+        phone:                 true,
+        reminderCount:         true,
         reminderIntervalHours: true,
       },
     });
 
     const clinicMap = new Map(clinics.map(c => [c.id, c]));
-
-    // For each running campaign, find CONTACTED patients whose updatedAt is
-    // older than the campaign's reminderIntervalHours.
     let totalProcessed = 0;
 
     for (const campaign of runningCampaigns) {
@@ -96,20 +88,23 @@ export class ReminderService {
         continue;
       }
 
-      // Resolve settings — campaign override takes precedence
       const reminderCount         = campaign.reminderCount         ?? clinic.reminderCount;
       const reminderIntervalHours = campaign.reminderIntervalHours ?? clinic.reminderIntervalHours;
+      const cutoff                = new Date(Date.now() - reminderIntervalHours * 60 * 60 * 1000);
 
-      // Cutoff timestamp — patients not touched since before this time are eligible
-      const cutoff = new Date(Date.now() - reminderIntervalHours * 60 * 60 * 1000);
-
-      // Find all CONTACTED patients for this campaign that have been silent
-      // for at least reminderIntervalHours
       const eligiblePatients = await this.prisma.campaignPatient.findMany({
         where: {
           campaignId: campaign.id,
           status:     CampaignPatientStatus.CONTACTED,
           updatedAt:  { lt: cutoff },
+        },
+        select: {
+          id:            true,
+          phone:         true,
+          patientName:   true,
+          visitDate:     true,
+          remindersSent: true,
+          language:      true,
         },
       });
 
@@ -126,14 +121,10 @@ export class ReminderService {
             campaign.id,
             campaign.clinicId,
             reminderCount,
-            reminderIntervalHours,
           );
           totalProcessed++;
         } catch (err: any) {
-          // One patient failing must not stop the rest
-          this.logger.error(
-            `Failed to process reminder for patient ${patient.id}: ${err.message}`,
-          );
+          this.logger.error(`Reminder failed for patient ${patient.id}: ${err.message}`);
         }
       }
     }
@@ -146,17 +137,21 @@ export class ReminderService {
   // ═══════════════════════════════════════════════════════════════════════════
 
   private async processOnePatient(
-    patient:              any,
-    campaignId:           string,
-    clinicId:             string,
-    reminderCount:        number,
-    reminderIntervalHours: number,
+    patient: {
+      id:            string;
+      phone:         string;
+      patientName:   string;
+      visitDate:     Date;
+      remindersSent: number;
+      language:      Language | null;
+    },
+    campaignId:    string,
+    clinicId:      string,
+    reminderCount: number,
   ): Promise<void> {
     if (patient.remindersSent < reminderCount) {
-      // ── Still have reminders left — send one ──────────────────────────
-      await this.sendReminder(patient, clinicId, campaignId, reminderIntervalHours);
+      await this.sendReminder(patient, clinicId, campaignId);
     } else {
-      // ── All reminders exhausted — mark as NO_RESPONSE ─────────────────
       await this.markNoResponse(patient, campaignId);
     }
   }
@@ -166,19 +161,29 @@ export class ReminderService {
   // ═══════════════════════════════════════════════════════════════════════════
 
   private async sendReminder(
-    patient:              any,
-    clinicId:             string,
-    campaignId:           string,
-    reminderIntervalHours: number,
+    patient: {
+      id:            string;
+      phone:         string;
+      patientName:   string;
+      visitDate:     Date;
+      remindersSent: number;
+      language:      Language | null;
+    },
+    clinicId:   string,
+    campaignId: string,
   ): Promise<void> {
-    // Resolve language — fall back to FR if unknown
-    const language = patient.language ?? Language.FR;
+    const language  = patient.language ?? Language.FR;
+    const visitDate = new Date(patient.visitDate).toLocaleDateString('fr-FR');
 
-    // Fetch reminder message from DB
+    // Fetch reminder message with variable substitution
     const reminderBody = await this.fetchBotMessage(
       clinicId,
       MessageKey.CAMPAIGN_REMINDER_MESSAGE,
       language,
+      {
+        name:      patient.patientName,
+        visitDate,
+      },
     );
 
     if (!reminderBody) {
@@ -188,25 +193,14 @@ export class ReminderService {
       return;
     }
 
-    // Personalise reminder with patient-specific tokens
-    const visitDateStr = new Date(patient.visitDate || Date.now()).toLocaleDateString('fr-FR');
-    const personalised = reminderBody
-      .replace(/\{\{name\}\}/g, patient.patientName)
-      .replace(/\{\{doctor\}\}/g, patient.medecinTraitant || '')
-      .replace(/\{\{visitDate\}\}/g, visitDateStr);
+    await this.whatsappService.sendText(patient.phone, reminderBody);
 
-    // Send WhatsApp message
-    await this.whatsappService.sendText(patient.phone, personalised);
-
-    // Update patient record — bump remindersSent and touch updatedAt so the
-    // interval resets correctly for the next reminder check
     await this.prisma.campaignPatient.update({
       where: { id: patient.id },
       data:  { remindersSent: { increment: 1 } },
     });
 
-    // Update campaign Redis session remindersSent count so the AI engine
-    // has accurate state if the patient replies after this reminder
+    // Sync remindersSent to Redis session so AI has accurate state on reply
     const session = await this.sessionsService.getCampaignSession(patient.phone);
     if (session) {
       session.remindersSent = patient.remindersSent + 1;
@@ -226,7 +220,6 @@ export class ReminderService {
     patient:    { id: string; phone: string },
     campaignId: string,
   ): Promise<void> {
-    // Update patient record
     await this.prisma.campaignPatient.update({
       where: { id: patient.id },
       data: {
@@ -236,13 +229,11 @@ export class ReminderService {
       },
     });
 
-    // Increment campaign noResponseCount
     await this.prisma.campaign.update({
       where: { id: campaignId },
       data:  { noResponseCount: { increment: 1 } },
     });
 
-    // Clean up Redis session — no point keeping it alive
     await this.sessionsService.deleteCampaignSession(patient.phone);
 
     this.logger.log(
@@ -255,31 +246,34 @@ export class ReminderService {
   // ═══════════════════════════════════════════════════════════════════════════
 
   /**
-   * Fetches a single bot message body from the DB.
-   * Falls back to FR if the requested language has no record.
-   * Returns null if neither the requested language nor FR has a record.
+   * Fetches a bot message body from DB with FR fallback and variable substitution.
    */
   private async fetchBotMessage(
-    clinicId: string,
-    key:      MessageKey,
-    language: Language,
+    clinicId:   string,
+    key:        MessageKey,
+    language:   Language,
+    variables?: Record<string, string>,
   ): Promise<string | null> {
     const record = await this.prisma.botMessage.findUnique({
       where: { clinicId_key_language: { clinicId, key, language } },
     });
 
-    if (record) return record.body;
+    let body = record?.body ?? null;
 
-    if (language !== Language.FR) {
-      this.logger.warn(
-        `BotMessage ${key} not found for language ${language} — falling back to FR`,
-      );
+    if (!body && language !== Language.FR) {
+      this.logger.warn(`BotMessage ${key} not found for ${language} — falling back to FR`);
       const fallback = await this.prisma.botMessage.findUnique({
         where: { clinicId_key_language: { clinicId, key, language: Language.FR } },
       });
-      if (fallback) return fallback.body;
+      body = fallback?.body ?? null;
     }
 
-    return null;
+    if (body && variables) {
+      for (const [k, v] of Object.entries(variables)) {
+        body = body.replace(new RegExp(`\\{\\{${k}\\}\\}`, 'g'), v);
+      }
+    }
+
+    return body;
   }
 }

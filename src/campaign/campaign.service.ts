@@ -99,7 +99,22 @@ export class CampaignService {
       throw new NotFoundException(`Campaign ${id} not found`);
     }
 
-    return campaign as Campaign & { patients: any[] };
+    // Enrich each patient with their live Redis session status
+    const enrichedPatients = await Promise.all(
+      campaign.patients.map(async (patient) => {
+        const normalizedPhone = patient.phone.replace(/^\+/, '').replace(/\s/g, '');
+        const redisSession = await this.sessionsService.getCampaignSession(normalizedPhone);
+        return {
+          ...patient,
+          sessionStatus: redisSession?.status ?? null,
+        };
+      }),
+    );
+
+    return {
+      ...campaign,
+      patients: enrichedPatients,
+    } as Campaign & { patients: any[] };
   }
 
   // ═══════════════════════════════════════════════════════════════════════════

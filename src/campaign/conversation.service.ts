@@ -239,30 +239,22 @@ export class ConversationService {
       return;
     }
 
-    // ── 5. Language detection — lock after first confident detection ───────
+    // ── 5. Language detection — detect on EVERY message for flexibility ───────
     // Rules:
     // - Arabic script is always definitive — update immediately
-    // - If language is already confirmed (not null and not clinic default), keep it
-    // - Only detect on first message (language === null) or Arabic override
+    // - Allow language switching mid-conversation if patient clearly uses another language
+    // - Re-detect on every turn to respect patient's language preference
     const detectedLang = this.detectLanguage(patientMessage);
-    if (session.language === null) {
-      // First reply — set whatever we detect, default to clinic language
+    
+    // Always update to detected language (respects patient switching languages)
+    if (session.language !== detectedLang) {
       session.language = detectedLang;
       await this.prisma.campaignPatient.update({
         where: { id: campaignPatient.id },
         data: { language: detectedLang },
       });
-      this.logger.log(`Language set for ${phone}: ${detectedLang}`);
-    } else if (detectedLang === Language.AR && session.language !== Language.AR) {
-      // Arabic script is definitive — always override
-      session.language = Language.AR;
-      await this.prisma.campaignPatient.update({
-        where: { id: campaignPatient.id },
-        data: { language: Language.AR },
-      });
-      this.logger.log(`Language updated to AR for ${phone} (Arabic script detected)`);
+      this.logger.log(`Language updated for ${phone}: ${detectedLang}`);
     }
-    // Otherwise keep existing language — don't flip between FR and EN mid-conversation
 
     // ── 6. Mark REPLIED on first reply ────────────────────────────────────
     if (campaignPatient.status === CampaignPatientStatus.CONTACTED) {
@@ -518,24 +510,18 @@ export class ConversationService {
 
     // ── Language instruction — explicit and directive ──────────────────────
     let languageInstruction: string;
-    if (language === Language.AR) {
-      languageInstruction =
-        'LANGUAGE: You MUST respond exclusively in Moroccan Darija using Arabic script. ' +
-        'Every single message you send must be in Arabic. ' +
-        'Do not switch to French or English under any circumstances. ' +
-        'Tool call summaries must also be written in Arabic.';
-    } else if (language === Language.EN) {
+    if (language === Language.EN) {
       languageInstruction =
         'LANGUAGE: You MUST respond exclusively in English. ' +
         'Every single message you send must be in English. ' +
-        'Do not switch to French or Arabic under any circumstances. ' +
+        'Do not switch to French under any circumstances. ' +
         'Tool call summaries must also be written in English.';
     } else {
       languageInstruction =
         'LANGUAGE: You MUST respond exclusively in French. ' +
         'Every single message you send must be in French. ' +
         'Use the polite "vous" form at all times. ' +
-        'Do not switch to English or Arabic under any circumstances. ' +
+        'Do not switch to English under any circumstances. ' +
         'Tool call summaries must also be written in French.';
     }
 
@@ -580,6 +566,8 @@ FORMATTING RULES:
 - Never ask more than one question per message.
 - Never invent medical advice or diagnoses.
 - Never mention other patients.
+- DO NOT use time-specific greetings like "Bonjour" (morning), "Bonsoir" (evening), "Good morning", "Good evening". Use time-neutral greetings like "Salut" (French) or "Hello" (English).
+- ALWAYS match the patient's language. If they write in English, respond in English. If they write in French, respond in French.
 
 PATIENT INFORMATION:
 - Name: ${campaignPatient.patientName}
@@ -877,23 +865,19 @@ Current turn: ${session.turnCount + 1}`;
    * Short ambiguous messages (single words, numbers, "ok") return FR as default.
    */
   private detectLanguage(message: string): Language {
-    // Arabic script — definitive
-    if (/[\u0600-\u06FF]/.test(message)) return Language.AR;
-
     const lower = message.toLowerCase().trim();
 
     // Ignore very short messages for language detection — too ambiguous
     if (lower.length < 3) return Language.FR;
 
-    const frenchIndicators = ['bonjour', 'bonsoir', 'merci', 'oui', 'non', 'je ', 'vous ', 'nous ', 'comment', 'bien', 'salam', 'ca va', 'ça va', 'pas ', 'très', 'est-ce', 'est ce', "j'ai", "c'est", 'pour ', 'avec ', 'dans '];
-    const englishIndicators = ['hello', 'hi ', 'thanks', 'thank you', 'yes', 'no ', 'good', 'how are', 'please', 'fine', "i'm", 'i am', 'can you', 'what', 'when', 'where', 'help'];
+    const frenchIndicators = ['bonjour', 'bonsoir', 'merci', 'oui', 'non', 'je ', 'vous ', 'nous ', 'comment', 'bien', 'salam', 'ca va', 'ça va', 'pas ', 'très', 'est-ce', 'est ce', "j'ai", "c'est", 'pour ', 'avec ', 'dans ', 'salut'];
+    const englishIndicators = ['hello', 'hi ', 'thanks', 'thank you', 'yes', 'no ', 'good', 'how are', 'please', 'fine', "i'm", 'i am', 'can you', 'what', 'when', 'where', 'help', 'hey'];
 
     const frScore = frenchIndicators.filter(w => lower.includes(w)).length;
     const enScore = englishIndicators.filter(w => lower.includes(w)).length;
 
     if (enScore > frScore) return Language.EN;
-    if (frScore > 0) return Language.FR;
-
+    
     // Default to FR — Moroccan clinic context
     return Language.FR;
   }

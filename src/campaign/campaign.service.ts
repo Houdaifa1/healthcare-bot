@@ -43,7 +43,7 @@ export class CampaignService {
   async create(clinicId: string, dto: CreateCampaignDto): Promise<Campaign> {
     this.validateFilters(dto);
 
-    return this.prisma.campaign.create({
+    const campaign = await this.prisma.campaign.create({
       data: {
         clinicId,
         name:                  dto.name,
@@ -60,6 +60,14 @@ export class CampaignService {
         aiMaxTurns:            dto.aiMaxTurns,
       },
     });
+
+    // "Send now" — no scheduledStartAt, auto-launch immediately
+    if (!dto.scheduledStartAt) {
+      this.logger.log(`Campaign "${campaign.name}" created with "Send now" — auto-launching`);
+      return this.executeLaunch(campaign);
+    }
+
+    return campaign;
   }
 
   // ═══════════════════════════════════════════════════════════════════════════

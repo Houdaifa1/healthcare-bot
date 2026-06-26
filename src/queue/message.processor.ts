@@ -55,9 +55,27 @@ export class MessageProcessor extends WorkerHost {
       return;
     }
 
+    // ── 3b. Handoff routing — store patient message so staff can see it ────
     const isHandoff = await this.sessionsService.isHandoffCampaignSession(from);
     if (isHandoff) {
-      this.logger.log(`Phone ${from} is in handoff/admin_handling — dropping message, staff is handling`);
+      this.logger.log(`Phone ${from} is in handoff/admin_handling — storing patient reply for staff`);
+      
+      const session = await this.sessionsService.getCampaignSession(from);
+      if (session) {
+        session.messages.push({ role: 'user', content: text, timestamp: Date.now() });
+        session.lastActivityAt = Date.now();
+        await this.sessionsService.saveCampaignSession(session);
+
+        // Also persist to DB so it shows up in the campaign patient history
+        await this.prisma.campaignPatient.update({
+          where: { id: session.campaignPatientId },
+          data: { messages: session.messages as any },
+        }).catch(() => {
+          this.logger.warn(`Failed to persist handoff message to DB for ${from}`);
+        });
+
+        this.logger.log(`Handoff message from ${from} stored in session — staff will see it`);
+      }
       return;
     }
 
@@ -70,10 +88,6 @@ export class MessageProcessor extends WorkerHost {
     );
 
     // ── 4a. Stale-state guard ──────────────────────────────────────────────
-    // If the reactive session is stuck in AWAITING_HANDOFF it means a previous
-    // reactive handoff was never resolved — or the patient just came out of a
-    // completed campaign conversation. Either way the patient is now texting
-    // freely, so reset to IDLE so the orchestrator greets them normally.
     if (session.state === SessionState.AWAITING_HANDOFF) {
       this.logger.log(`Reactive session for ${from} stuck in AWAITING_HANDOFF — resetting to IDLE`);
       await this.sessionsService.reset(from);
@@ -83,7 +97,6 @@ export class MessageProcessor extends WorkerHost {
         clinic.defaultLanguage,
         clinic.timezone,
       );
-      // Re-assign so the orchestrator call below uses the fresh session
       Object.assign(session, freshSession);
     }
 

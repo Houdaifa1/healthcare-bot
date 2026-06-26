@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import { CampaignService } from './campaign.service';
+import { CampaignSchedulerService } from './campaign-scheduler.service';
 import { CampaignController } from './campaign.controller';
 import { OutboundProcessor } from './outbound.processor';
 import { ConversationService } from './conversation.service';
@@ -24,6 +25,7 @@ import { QUEUES } from '../queue/queue.constants';
   controllers: [CampaignController],
   providers: [
     CampaignService,
+    CampaignSchedulerService,
     OutboundProcessor,
     ConversationService,
     ReminderService,

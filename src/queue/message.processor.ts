@@ -2,7 +2,7 @@ import { Processor, WorkerHost, OnWorkerEvent } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
 import { OrchestratorService } from '../orchestrator/orchestrator.service';
-import { SessionsService } from '../sessions/sessions.service';
+import { SessionsService, SessionState } from '../sessions/sessions.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ConversationService } from '../campaign/conversation.service';
 
@@ -68,6 +68,24 @@ export class MessageProcessor extends WorkerHost {
       clinic.defaultLanguage,
       clinic.timezone,
     );
+
+    // ── 4a. Stale-state guard ──────────────────────────────────────────────
+    // If the reactive session is stuck in AWAITING_HANDOFF it means a previous
+    // reactive handoff was never resolved — or the patient just came out of a
+    // completed campaign conversation. Either way the patient is now texting
+    // freely, so reset to IDLE so the orchestrator greets them normally.
+    if (session.state === SessionState.AWAITING_HANDOFF) {
+      this.logger.log(`Reactive session for ${from} stuck in AWAITING_HANDOFF — resetting to IDLE`);
+      await this.sessionsService.reset(from);
+      const { session: freshSession } = await this.sessionsService.getOrCreate(
+        from,
+        clinic.id,
+        clinic.defaultLanguage,
+        clinic.timezone,
+      );
+      // Re-assign so the orchestrator call below uses the fresh session
+      Object.assign(session, freshSession);
+    }
 
     // ── 5. Route to reactive orchestrator ─────────────────────────────────
     try {

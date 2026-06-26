@@ -163,5 +163,20 @@
     "solde_impaye": "0.00",
     "numeroTelephonePrincipale": "+212666544877",
     "numeroTelephoneSecondaire": null
+  },
+  {
+    "patient_id": 9219,
+    "patient": "Houdaifa Drahm",
+    "cin": "CIN9219",
+    "sexe": "M",
+    "age_years": 28,
+    "ville": "Casablanca",
+    "pays": "Maroc",
+    "date_derniere_admission": "2026-06-22T14:30:00.000000+00:00",
+    "prestation": "Consultation",
+    "medecin_traitant": "DR Miloud BAKOUCHE",
+    "solde_impaye": "0.00",
+    "numeroTelephonePrincipale": "+212644645877",
+    "numeroTelephoneSecondaire": null
   }
 ]

@@ -7,6 +7,7 @@ import {
   IsPositive,
   MinLength,
   MaxLength,
+  Min,
 } from 'class-validator';
 
 // All fields are optional — only provided fields are updated.
@@ -44,7 +45,7 @@ export class UpdateCampaignDto {
 
   @IsOptional()
   @IsInt()
-  @IsPositive()
+  @Min(0)
   delayHours?: number;
 
   @IsOptional()

@@ -19,8 +19,8 @@ import { Campaign, CampaignStatus, CampaignPatientStatus, ConversationOutcome } 
 
 export interface CampaignOutboundJob {
   campaignPatientId: string;
-  campaignId:        string;
-  clinicId:          string;
+  campaignId: string;
+  clinicId: string;
 }
 
 @Injectable()
@@ -28,13 +28,13 @@ export class CampaignService {
   private readonly logger = new Logger(CampaignService.name);
 
   constructor(
-    private readonly prisma:            PrismaService,
-    private readonly clinops:           ClinOpsService,
-    private readonly sessionsService:   SessionsService,
-    private readonly whatsappService:   WhatsAppService,
+    private readonly prisma: PrismaService,
+    private readonly clinops: ClinOpsService,
+    private readonly sessionsService: SessionsService,
+    private readonly whatsappService: WhatsAppService,
     @InjectQueue(QUEUES.CAMPAIGN_OUTBOUND)
-    private readonly outboundQueue:     Queue,
-  ) {}
+    private readonly outboundQueue: Queue,
+  ) { }
 
   // ═══════════════════════════════════════════════════════════════════════════
   // CREATE
@@ -46,18 +46,18 @@ export class CampaignService {
     const campaign = await this.prisma.campaign.create({
       data: {
         clinicId,
-        name:                  dto.name,
-        status:                CampaignStatus.DRAFT,
-        scheduledStartAt:      dto.scheduledStartAt ? new Date(dto.scheduledStartAt) : undefined,
-        filterDateFrom:        dto.filterDateFrom ? new Date(dto.filterDateFrom) : undefined,
-        filterDateTo:          dto.filterDateTo   ? new Date(dto.filterDateTo)   : undefined,
-        filterDoctor:          dto.filterDoctor,
-        filterMotif:           dto.filterMotif,
-        notificationPhone:     dto.notificationPhone,
-        delayHours:            dto.delayHours,
-        reminderCount:         dto.reminderCount,
+        name: dto.name,
+        status: CampaignStatus.DRAFT,
+        scheduledStartAt: dto.scheduledStartAt ? new Date(dto.scheduledStartAt) : undefined,
+        filterDateFrom: dto.filterDateFrom ? new Date(dto.filterDateFrom) : undefined,
+        filterDateTo: dto.filterDateTo ? new Date(dto.filterDateTo) : undefined,
+        filterDoctor: dto.filterDoctor,
+        filterMotif: dto.filterMotif,
+        notificationPhone: dto.notificationPhone,
+        delayHours: dto.delayHours,
+        reminderCount: dto.reminderCount,
         reminderIntervalHours: dto.reminderIntervalHours,
-        aiMaxTurns:            dto.aiMaxTurns,
+        aiMaxTurns: dto.aiMaxTurns,
       },
     });
 
@@ -76,7 +76,7 @@ export class CampaignService {
 
   async findAll(clinicId: string): Promise<Campaign[]> {
     return this.prisma.campaign.findMany({
-      where:   { clinicId },
+      where: { clinicId },
       orderBy: { createdAt: 'desc' },
     });
   }
@@ -87,7 +87,7 @@ export class CampaignService {
 
   async findOne(clinicId: string, id: string): Promise<Campaign & { patients: any[] }> {
     const campaign = await this.prisma.campaign.findFirst({
-      where:   { id, clinicId },
+      where: { id, clinicId },
       include: {
         patients: {
           orderBy: { createdAt: 'asc' },
@@ -129,17 +129,17 @@ export class CampaignService {
     return this.prisma.campaign.update({
       where: { id },
       data: {
-        ...(dto.name                  !== undefined && { name: dto.name }),
-        ...(dto.scheduledStartAt      !== undefined && { scheduledStartAt: dto.scheduledStartAt ? new Date(dto.scheduledStartAt) : null }),
-        ...(dto.filterDateFrom        !== undefined && { filterDateFrom: dto.filterDateFrom ? new Date(dto.filterDateFrom) : null }),
-        ...(dto.filterDateTo          !== undefined && { filterDateTo:   dto.filterDateTo   ? new Date(dto.filterDateTo)   : null }),
-        ...(dto.filterDoctor          !== undefined && { filterDoctor:   dto.filterDoctor   ?? null }),
-        ...(dto.filterMotif           !== undefined && { filterMotif:    dto.filterMotif    ?? null }),
-        ...(dto.notificationPhone     !== undefined && { notificationPhone:    dto.notificationPhone    ?? null }),
-        ...(dto.delayHours            !== undefined && { delayHours:           dto.delayHours           ?? null }),
-        ...(dto.reminderCount         !== undefined && { reminderCount:        dto.reminderCount        ?? null }),
+        ...(dto.name !== undefined && { name: dto.name }),
+        ...(dto.scheduledStartAt !== undefined && { scheduledStartAt: dto.scheduledStartAt ? new Date(dto.scheduledStartAt) : null }),
+        ...(dto.filterDateFrom !== undefined && { filterDateFrom: dto.filterDateFrom ? new Date(dto.filterDateFrom) : null }),
+        ...(dto.filterDateTo !== undefined && { filterDateTo: dto.filterDateTo ? new Date(dto.filterDateTo) : null }),
+        ...(dto.filterDoctor !== undefined && { filterDoctor: dto.filterDoctor ?? null }),
+        ...(dto.filterMotif !== undefined && { filterMotif: dto.filterMotif ?? null }),
+        ...(dto.notificationPhone !== undefined && { notificationPhone: dto.notificationPhone ?? null }),
+        ...(dto.delayHours !== undefined && { delayHours: dto.delayHours ?? null }),
+        ...(dto.reminderCount !== undefined && { reminderCount: dto.reminderCount ?? null }),
         ...(dto.reminderIntervalHours !== undefined && { reminderIntervalHours: dto.reminderIntervalHours ?? null }),
-        ...(dto.aiMaxTurns            !== undefined && { aiMaxTurns:           dto.aiMaxTurns           ?? null }),
+        ...(dto.aiMaxTurns !== undefined && { aiMaxTurns: dto.aiMaxTurns ?? null }),
       },
     });
   }
@@ -181,7 +181,7 @@ export class CampaignService {
 
       return this.prisma.campaign.update({
         where: { id },
-        data:  { status: CampaignStatus.SCHEDULED },
+        data: { status: CampaignStatus.SCHEDULED },
       });
     }
 
@@ -206,7 +206,7 @@ export class CampaignService {
     return this.prisma.campaign.update({
       where: { id },
       data: {
-        status:           CampaignStatus.DRAFT,
+        status: CampaignStatus.DRAFT,
         scheduledStartAt: null,
       },
     });
@@ -219,7 +219,7 @@ export class CampaignService {
   async executeScheduledCampaigns(): Promise<void> {
     const dueCampaigns = await this.prisma.campaign.findMany({
       where: {
-        status:           CampaignStatus.SCHEDULED,
+        status: CampaignStatus.SCHEDULED,
         scheduledStartAt: { lte: new Date() },
       },
     });
@@ -255,7 +255,7 @@ export class CampaignService {
 
     return this.prisma.campaign.update({
       where: { id },
-      data:  { status: CampaignStatus.PAUSED },
+      data: { status: CampaignStatus.PAUSED },
     });
   }
 
@@ -274,13 +274,13 @@ export class CampaignService {
 
     await this.prisma.campaign.update({
       where: { id },
-      data:  { status: CampaignStatus.RUNNING },
+      data: { status: CampaignStatus.RUNNING },
     });
 
     const parkedPatients = await this.prisma.campaignPatient.findMany({
       where: {
         campaignId: id,
-        status:     CampaignPatientStatus.PARKED,
+        status: CampaignPatientStatus.PARKED,
       },
     });
 
@@ -294,16 +294,16 @@ export class CampaignService {
     for (const patient of parkedPatients) {
       const jobData: CampaignOutboundJob = {
         campaignPatientId: patient.id,
-        campaignId:        id,
+        campaignId: id,
         clinicId,
       };
 
       await this.outboundQueue.add(JOBS.SEND_CAMPAIGN_OUTBOUND, jobData, {
-        delay:            RESUME_DELAY_MS,
-        attempts:         3,
-        backoff:          { type: 'exponential', delay: 10_000 },
+        delay: RESUME_DELAY_MS,
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 10_000 },
         removeOnComplete: 50,
-        removeOnFail:     20,
+        removeOnFail: 20,
       });
     }
 
@@ -332,7 +332,7 @@ export class CampaignService {
 
     return this.prisma.campaign.update({
       where: { id },
-      data:  { status: CampaignStatus.STOPPED, completedAt: new Date() },
+      data: { status: CampaignStatus.STOPPED, completedAt: new Date() },
     });
   }
 
@@ -374,7 +374,7 @@ export class CampaignService {
     // If this is skipped, orphaned Redis sessions keep routing inbound messages
     // to dead CampaignPatient records and the patient can never reach the bot.
     const patients = await this.prisma.campaignPatient.findMany({
-      where:  { campaignId: id },
+      where: { campaignId: id },
       select: { phone: true },
     });
 
@@ -436,7 +436,7 @@ export class CampaignService {
         return this.prisma.campaign.update({
           where: { id: campaign.id },
           data: {
-            status:      CampaignStatus.COMPLETED,
+            status: CampaignStatus.COMPLETED,
             completedAt: new Date(),
           },
         });
@@ -446,8 +446,11 @@ export class CampaignService {
       );
     }
 
-    const delayHours = campaign.delayHours ?? clinic.campaignDelayHours;
-    const delayMs    = delayHours * 60 * 60 * 1000;
+    const delayHours = campaign.delayHours !== null && campaign.delayHours !== undefined
+      ? campaign.delayHours
+      : clinic.campaignDelayHours;
+
+    const delayMs = delayHours * 60 * 60 * 1000;
 
     await this.prisma.$transaction(async (tx) => {
       for (const patient of clinopsPatients) {
@@ -470,37 +473,37 @@ export class CampaignService {
 
         const record = await tx.campaignPatient.create({
           data: {
-            campaignId:       campaign.id,
-            clinicId:         campaign.clinicId,
+            campaignId: campaign.id,
+            clinicId: campaign.clinicId,
             clinopsPatientId: patient.patient_id,
-            patientName:      patient.patient,
-            cin:              patient.cin,
-            sexe:             patient.sexe,
-            ageYears:         patient.age_years,
-            ville:            patient.ville,
-            pays:             patient.pays,
-            phone:            patient.numeroTelephonePrincipale,
-            phoneSecondaire:  patient.numeroTelephoneSecondaire,
-            soldeImpaye:      patient.solde_impaye,
-            visitDate:        new Date(patient.date_derniere_admission),
-            prestation:       patient.prestation,
-            medecinTraitant:  patient.medecin_traitant,
-            patientSnapshot:  { patient, history } as any,
+            patientName: patient.patient,
+            cin: patient.cin,
+            sexe: patient.sexe,
+            ageYears: patient.age_years,
+            ville: patient.ville,
+            pays: patient.pays,
+            phone: patient.numeroTelephonePrincipale,
+            phoneSecondaire: patient.numeroTelephoneSecondaire,
+            soldeImpaye: patient.solde_impaye,
+            visitDate: new Date(patient.date_derniere_admission),
+            prestation: patient.prestation,
+            medecinTraitant: patient.medecin_traitant,
+            patientSnapshot: { patient, history } as any,
           },
         });
 
         const jobData: CampaignOutboundJob = {
           campaignPatientId: record.id,
-          campaignId:        campaign.id,
-          clinicId:          campaign.clinicId,
+          campaignId: campaign.id,
+          clinicId: campaign.clinicId,
         };
 
         await this.outboundQueue.add(JOBS.SEND_CAMPAIGN_OUTBOUND, jobData, {
-          delay:            delayMs,
-          attempts:         3,
-          backoff:          { type: 'exponential', delay: 10_000 },
+          delay: delayMs,
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 10_000 },
           removeOnComplete: 50,
-          removeOnFail:     20,
+          removeOnFail: 20,
         });
 
         this.logger.log(
@@ -511,8 +514,8 @@ export class CampaignService {
       await tx.campaign.update({
         where: { id: campaign.id },
         data: {
-          status:        CampaignStatus.RUNNING,
-          launchedAt:    new Date(),
+          status: CampaignStatus.RUNNING,
+          launchedAt: new Date(),
           targetedCount: clinopsPatients.length,
         },
       });
@@ -555,7 +558,7 @@ export class CampaignService {
     await this.prisma.campaignPatient.update({
       where: { id: patientId },
       data: { messages: session.messages as any },
-    }).catch(() => {});
+    }).catch(() => { });
 
     return { success: true };
   }
@@ -576,8 +579,8 @@ export class CampaignService {
     await this.prisma.campaignPatient.update({
       where: { id: patientId },
       data: {
-        status:      CampaignPatientStatus.COMPLETED,
-        outcome:     ConversationOutcome.HANDED_OFF,
+        status: CampaignPatientStatus.COMPLETED,
+        outcome: ConversationOutcome.HANDED_OFF,
         completedAt: new Date(),
       },
     });
@@ -620,10 +623,10 @@ export class CampaignService {
 
     if (campaign.filterDateFrom || campaign.filterDateTo) {
       const fromTs = campaign.filterDateFrom
-        ? new Date(campaign.filterDateFrom.getFullYear(), campaign.filterDateFrom.getMonth(), campaign.filterDateFrom.getDate()).getTime()
+        ? new Date(campaign.filterDateFrom).setHours(0, 0, 0, 0)
         : 0;
       const toTs = campaign.filterDateTo
-        ? new Date(campaign.filterDateTo.getFullYear(), campaign.filterDateTo.getMonth(), campaign.filterDateTo.getDate(), 23, 59, 59).getTime()
+        ? new Date(campaign.filterDateTo).setHours(23, 59, 59, 999)
         : Infinity;
 
       patients = patients.filter((p) => {
@@ -650,18 +653,18 @@ export class CampaignService {
     const patient = await this.prisma.campaignPatient.findFirst({
       where: { id: patientId, campaignId, clinicId },
       select: {
-        id:               true,
-        patientName:      true,
-        phone:            true,
-        messages:         true,
-        turnCount:        true,
-        language:         true,
-        status:           true,
-        outcome:          true,
-        createdAt:        true,
-        updatedAt:        true,
-        complaints:       true,
-        bookingRequests:  true,
+        id: true,
+        patientName: true,
+        phone: true,
+        messages: true,
+        turnCount: true,
+        language: true,
+        status: true,
+        outcome: true,
+        createdAt: true,
+        updatedAt: true,
+        complaints: true,
+        bookingRequests: true,
       },
     });
 
@@ -695,8 +698,8 @@ export class CampaignService {
     await this.prisma.campaignPatient.update({
       where: { id: patientId },
       data: {
-        status:      CampaignPatientStatus.COMPLETED,
-        outcome:     ConversationOutcome.COMPLETED,
+        status: CampaignPatientStatus.COMPLETED,
+        outcome: ConversationOutcome.COMPLETED,
         completedAt: new Date(),
       },
     });
@@ -733,17 +736,17 @@ export class CampaignService {
       await this.sessionsService.saveCampaignSession(existingSession);
     } else {
       await this.sessionsService.saveCampaignSession({
-        phone:             normalizedPhone,
+        phone: normalizedPhone,
         campaignPatientId: patient.id,
         clinicId,
-        patientSnapshot:   patient.patientSnapshot as Record<string, any>,
-        language:          patient.language ?? null,
-        messages:          (patient.messages as any[]) ?? [],
-        turnCount:         patient.turnCount,
-        remindersSent:     patient.remindersSent,
-        status:            'admin_handling',
-        startedAt:         Date.now(),
-        lastActivityAt:    Date.now(),
+        patientSnapshot: patient.patientSnapshot as Record<string, any>,
+        language: patient.language ?? null,
+        messages: (patient.messages as any[]) ?? [],
+        turnCount: patient.turnCount,
+        remindersSent: patient.remindersSent,
+        status: 'admin_handling',
+        startedAt: Date.now(),
+        lastActivityAt: Date.now(),
       });
     }
 

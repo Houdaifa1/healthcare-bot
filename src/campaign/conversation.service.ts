@@ -5,14 +5,14 @@ import { SessionsService, CampaignSession, CampaignMessage } from '../sessions/s
 import { WhatsAppService } from '../whatsapp/whatsapp.service';
 import {
   CampaignPatientStatus,
-  ComplaintType,
   ComplaintSeverity,
+  ComplaintType,
   ConversationOutcome,
   Language,
   MessageKey,
 } from '@prisma/client';
 
-// ─── Anthropic API types ───────────────────────────────────────────────────────
+// ─── Anthropic API shapes ─────────────────────────────────────────────────────
 
 interface AnthropicTextBlock {
   type: 'text';
@@ -26,13 +26,7 @@ interface AnthropicToolUseBlock {
   input: Record<string, unknown>;
 }
 
-interface AnthropicToolResultBlock {
-  type: 'tool_result';
-  tool_use_id: string;
-  content: string;
-}
-
-type AnthropicContentBlock = AnthropicTextBlock | AnthropicToolUseBlock | AnthropicToolResultBlock;
+type AnthropicContentBlock = AnthropicTextBlock | AnthropicToolUseBlock;
 
 interface AnthropicMessage {
   id: string;
@@ -65,28 +59,38 @@ interface EndConversationInput {
   outcome: ConversationOutcome;
 }
 
-// ─── Claude tool definitions ──────────────────────────────────────────────────
+// ─── Tool definitions ─────────────────────────────────────────────────────────
 
 const CLAUDE_TOOLS = [
   {
     name: 'log_complaint',
-    description: 'Log a patient complaint or medical concern detected in the conversation. Call this whenever the patient expresses dissatisfaction, reports a medical issue, or describes an urgent situation.',
+    description:
+      'Log a patient complaint or medical concern. ' +
+      'Call this whenever the patient expresses dissatisfaction, criticises the service, ' +
+      'reports a health problem, or describes an urgent situation. ' +
+      'This is a silent side effect — always follow it with a warm human text response.',
     input_schema: {
       type: 'object',
       properties: {
         type: {
           type: 'string',
           enum: ['COMPLAINT', 'MEDICAL_CONCERN', 'URGENT'],
-          description: 'COMPLAINT = service/experience complaint, MEDICAL_CONCERN = health issue, URGENT = emergency requiring immediate attention',
+          description:
+            'COMPLAINT = service/experience complaint. ' +
+            'MEDICAL_CONCERN = health issue the patient is reporting. ' +
+            'URGENT = emergency that needs immediate staff attention.',
         },
         severity: {
           type: 'string',
           enum: ['LOW', 'MEDIUM', 'HIGH'],
-          description: 'LOW = minor inconvenience, MEDIUM = significant issue, HIGH = serious concern requiring urgent staff attention',
+          description:
+            'LOW = minor issue. MEDIUM = significant concern. ' +
+            'HIGH = serious situation requiring urgent staff action.',
         },
         summary: {
           type: 'string',
-          description: 'A clear 1-2 sentence summary of the complaint written in the exact same language the patient used to express it (e.g. Arabic, French, or English).',
+          description:
+            'A clear 1-2 sentence summary written in the same language the patient used.',
         },
       },
       required: ['type', 'severity', 'summary'],
@@ -94,21 +98,23 @@ const CLAUDE_TOOLS = [
   },
   {
     name: 'request_booking',
-    description: 'Create a booking request when the patient expresses intent to schedule a new appointment or follow-up visit.',
+    description:
+      'Create a booking request when the patient wants to schedule a new appointment. ' +
+      'This is a silent side effect — always follow it with a warm confirmation to the patient.',
     input_schema: {
       type: 'object',
       properties: {
         preferredDoctor: {
           type: 'string',
-          description: 'Doctor name if the patient mentioned a preference',
+          description: 'Doctor name if the patient mentioned one.',
         },
         preferredDateRange: {
           type: 'string',
-          description: 'Free text date preference as expressed by the patient, e.g. "semaine prochaine", "lundi matin", "next week"',
+          description: 'Date preference as the patient expressed it, e.g. "semaine prochaine", "next Monday".',
         },
         reason: {
           type: 'string',
-          description: 'Reason for the new appointment as expressed by the patient',
+          description: 'Reason for the new appointment as the patient expressed it.',
         },
       },
       required: [],
@@ -116,13 +122,18 @@ const CLAUDE_TOOLS = [
   },
   {
     name: 'request_handoff',
-    description: 'Transfer the conversation to a human staff member. Use when the patient is very distressed, the situation is too complex for AI, the patient explicitly asks for a human, or there is an urgent medical situation.',
+    description:
+      'Transfer the conversation to a human staff member. ' +
+      'Use when: the patient explicitly asks for a human, the patient is very distressed, ' +
+      'the situation is medically complex, or severity is HIGH. ' +
+      'IMPORTANT: If the patient complained AND wants a human, call log_complaint first, then request_handoff. ' +
+      'This ends the AI conversation — always send a warm farewell text before calling this.',
     input_schema: {
       type: 'object',
       properties: {
         reason: {
           type: 'string',
-          description: 'Clear explanation of why handoff is needed, for the staff member who will take over',
+          description: 'Clear explanation for the staff member who will take over.',
         },
       },
       required: ['reason'],
@@ -130,14 +141,17 @@ const CLAUDE_TOOLS = [
   },
   {
     name: 'end_conversation',
-    description: 'Close the conversation when the follow-up is complete. Call this when the patient has no more concerns, has been helped, or has clearly disengaged.',
+    description:
+      'Close the conversation when the follow-up is complete. ' +
+      'Use when: the patient has no more concerns, they have been helped, or they have disengaged. ' +
+      'Always send a warm farewell text to the patient before calling this tool.',
     input_schema: {
       type: 'object',
       properties: {
         outcome: {
           type: 'string',
           enum: ['COMPLETED', 'COMPLAINED', 'REBOOKED', 'HANDED_OFF', 'URGENT', 'OPTED_OUT', 'NO_RESPONSE'],
-          description: 'The final outcome of this conversation',
+          description: 'The final outcome of this conversation.',
         },
       },
       required: ['outcome'],
@@ -145,22 +159,21 @@ const CLAUDE_TOOLS = [
   },
 ];
 
-// ─── Anthropic model ──────────────────────────────────────────────────────────
+// ─── Constants ────────────────────────────────────────────────────────────────
 
 const ANTHROPIC_MODEL = 'claude-haiku-4-5';
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
-
 const MAX_RETRIES = 2;
-const RETRY_DELAY = 1500;
+const RETRY_DELAY_MS = 1500;
+const MAX_TOOL_LOOPS = 6;
 
-const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
 @Injectable()
 export class ConversationService {
   private readonly logger = new Logger(ConversationService.name);
-  private readonly anthropicApiKey: string | undefined;
-  private readonly isEnabled: boolean;
+  private readonly anthropicApiKey: string;
 
   constructor(
     private readonly configService: ConfigService,
@@ -169,14 +182,9 @@ export class ConversationService {
     private readonly whatsappService: WhatsAppService,
   ) {
     const key = this.configService.get<string>('anthropic.apiKey');
-    if (!key) {
-      this.logger.warn('ANTHROPIC_API_KEY not set — AI follow-up will use basic responses only');
-      this.anthropicApiKey = undefined;
-      this.isEnabled = false;
-    } else {
-      this.anthropicApiKey = key;
-      this.isEnabled = true;
-    }
+    if (!key) throw new Error('ANTHROPIC_API_KEY is not set');
+    this.anthropicApiKey = key;
+    this.logger.log(`ConversationService initialized — model: ${ANTHROPIC_MODEL}`);
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -186,27 +194,42 @@ export class ConversationService {
   async handleReply(phone: string, patientMessage: string): Promise<void> {
     this.logger.log(`Campaign reply from ${phone}: "${patientMessage}"`);
 
+    // ── 1. Load Redis session ──────────────────────────────────────────────
     const session = await this.sessionsService.getCampaignSession(phone);
     if (!session) {
-      this.logger.error(`No campaign session found for ${phone} — cannot handle reply`);
+      this.logger.error(`No campaign session found for ${phone}`);
       return;
     }
 
-    if (session.status === 'completed' || session.status === 'handed_off' || session.status === 'admin_handling') {
-      this.logger.warn(`Campaign session for ${phone} is ${session.status} — ignoring reply`);
+    // ── 2. Session status guard ────────────────────────────────────────────
+    // completed = fully closed, do nothing
+    // handed_off = staff is handling, keep session alive but stop AI replies
+    if (session.status === 'completed') {
+      this.logger.warn(`Session for ${phone} is completed — ignoring`);
       return;
     }
 
+    if (session.status === 'handed_off') {
+      // Session stays alive for staff to use — just log and ignore AI processing
+      this.logger.log(`Session for ${phone} is handed off to staff — AI ignoring reply`);
+      return;
+    }
+
+    // ── 3. Load CampaignPatient ────────────────────────────────────────────
     const campaignPatient = await this.prisma.campaignPatient.findUnique({
       where: { id: session.campaignPatientId },
       include: { campaign: true },
     });
 
     if (!campaignPatient) {
-      this.logger.error(`CampaignPatient ${session.campaignPatientId} not found for phone ${phone}`);
+      this.logger.error(
+        `CampaignPatient ${session.campaignPatientId} not found — purging orphaned session`,
+      );
+      await this.sessionsService.deleteCampaignSession(phone);
       return;
     }
 
+    // ── 4. Load clinic ─────────────────────────────────────────────────────
     const clinic = await this.prisma.clinic.findUnique({
       where: { id: session.clinicId },
     });
@@ -216,24 +239,36 @@ export class ConversationService {
       return;
     }
 
-    // FIX: Dynamic language evaluation per turn if user switches from greeting (e.g. French "Bonjour" to Arabic body text)
-    const detected = this.detectLanguage(patientMessage);
-    if (session.language !== detected) {
-      session.language = detected;
+    // ── 5. Language detection — lock after first confident detection ───────
+    // Rules:
+    // - Arabic script is always definitive — update immediately
+    // - If language is already confirmed (not null and not clinic default), keep it
+    // - Only detect on first message (language === null) or Arabic override
+    const detectedLang = this.detectLanguage(patientMessage);
+    if (session.language === null) {
+      // First reply — set whatever we detect, default to clinic language
+      session.language = detectedLang;
       await this.prisma.campaignPatient.update({
         where: { id: campaignPatient.id },
-        data: { language: detected },
+        data: { language: detectedLang },
       });
-      this.logger.log(`Language dynamically updated/set for ${phone}: ${detected}`);
+      this.logger.log(`Language set for ${phone}: ${detectedLang}`);
+    } else if (detectedLang === Language.AR && session.language !== Language.AR) {
+      // Arabic script is definitive — always override
+      session.language = Language.AR;
+      await this.prisma.campaignPatient.update({
+        where: { id: campaignPatient.id },
+        data: { language: Language.AR },
+      });
+      this.logger.log(`Language updated to AR for ${phone} (Arabic script detected)`);
     }
+    // Otherwise keep existing language — don't flip between FR and EN mid-conversation
 
+    // ── 6. Mark REPLIED on first reply ────────────────────────────────────
     if (campaignPatient.status === CampaignPatientStatus.CONTACTED) {
       await this.prisma.campaignPatient.update({
         where: { id: campaignPatient.id },
-        data: {
-          status: CampaignPatientStatus.REPLIED,
-          repliedAt: new Date(),
-        },
+        data: { status: CampaignPatientStatus.REPLIED, repliedAt: new Date() },
       });
       await this.prisma.campaign.update({
         where: { id: campaignPatient.campaignId },
@@ -241,61 +276,68 @@ export class ConversationService {
       });
     }
 
-    const alreadyPresent = session.messages.some(
-      m => m.role === 'user' && m.content === patientMessage && Date.now() - m.timestamp < 5000,
+    // ── 7. Activate session ────────────────────────────────────────────────
+    session.status = 'active';
+
+    // ── 8. Append patient message ──────────────────────────────────────────
+    // Dedup guard — prevent double-appending on BullMQ retry
+    const isDuplicate = session.messages.some(
+      m => m.role === 'user' && m.content === patientMessage && Date.now() - m.timestamp < 10_000,
     );
-
-    if (!alreadyPresent) {
-      session.messages.push({
-        role: 'user',
-        content: patientMessage,
-        timestamp: Date.now(),
-      });
+    if (!isDuplicate) {
+      session.messages.push({ role: 'user', content: patientMessage, timestamp: Date.now() });
     }
 
-    let aiMaxTurns = (session as any).cachedAiMaxTurns as number | undefined;
-    if (!aiMaxTurns) {
-      aiMaxTurns = clinic.aiMaxTurns;
-      const campaign = campaignPatient.campaign;
-      if (campaign && campaign.aiMaxTurns !== null && campaign.aiMaxTurns !== undefined) {
-        aiMaxTurns = campaign.aiMaxTurns;
-      }
-      (session as any).cachedAiMaxTurns = aiMaxTurns;
-    }
+    // ── 9. Resolve aiMaxTurns ──────────────────────────────────────────────
+    const aiMaxTurns = campaignPatient.campaign?.aiMaxTurns ?? clinic.aiMaxTurns;
 
+    // ── 10. Auto-close on turn limit ───────────────────────────────────────
     if (session.turnCount >= aiMaxTurns) {
-      this.logger.warn(`Turn limit (${aiMaxTurns}) reached for ${phone} — sending farewell and closing`);
-
-      // FIX: Changed from CAMPAIGN_URGENT_MESSAGE to fallback generic or closure template safely
-      const farewell = await this.fetchBotMessage(
-        clinic.id,
-        MessageKey.CAMPAIGN_FAREWELL_MESSAGE,
-        session.language ?? Language.FR,
-      );
+      this.logger.warn(`Turn limit (${aiMaxTurns}) reached for ${phone} — closing`);
+      const farewell = await this.fetchBotMessage(clinic.id, MessageKey.CAMPAIGN_FAREWELL_MESSAGE, session.language ?? Language.FR);
       if (farewell) await this.whatsappService.sendText(phone, farewell);
       await this.closeConversation(session, campaignPatient.id, campaignPatient.campaignId, ConversationOutcome.COMPLETED);
       return;
     }
 
+    // ── 11. Build prompt and run Claude tool loop ──────────────────────────
     const systemPrompt = this.buildSystemPrompt(session, campaignPatient, clinic);
     const claudeMessages = this.buildClaudeMessages(session);
 
+    let conversationEnded = false;
     let loopCount = 0;
-    const maxLoops = 5;
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
-    let conversationEnded = false;
 
-    while (loopCount < maxLoops && !conversationEnded) {
+    while (loopCount < MAX_TOOL_LOOPS && !conversationEnded) {
       let response: AnthropicMessage;
+
       try {
         response = await this.callClaudeWithRetry(systemPrompt, claudeMessages);
       } catch (err: any) {
-        this.logger.error(`Claude call failed after retries for ${phone}: ${err.message}`);
-        const errorMsg = session.language === Language.EN
+        this.logger.error(`Claude call failed for ${phone}: ${err.message}`);
+        const errMsg = (session.language ?? Language.FR) === Language.EN
           ? 'Sorry, I encountered a technical issue. Please try again in a few minutes.'
           : 'Désolé, je rencontre un problème technique. Veuillez réessayer dans quelques minutes.';
-        await this.whatsappService.sendText(phone, errorMsg);
+        await this.whatsappService.sendText(phone, errMsg);
+        return;
+      }
+      if (response.stop_reason === 'max_tokens') {
+        this.logger.warn(`Claude response truncated (max_tokens) for ${phone}`);
+        const partial = response.content
+          .filter((b): b is AnthropicTextBlock => b.type === 'text' && b.text.trim().length > 0)
+          .map(b => b.text)
+          .join('\n\n')
+          .trim();
+
+        const msg = partial.length > 20
+          ? partial
+          : (session.language ?? Language.FR) === Language.EN
+            ? 'Sorry, something went wrong. Please try again.'
+            : 'Désolé, une erreur est survenue. Veuillez réessayer.';
+
+        await this.whatsappService.sendText(phone, msg);
+        await this.sessionsService.saveCampaignSession(session);
         return;
       }
 
@@ -304,97 +346,133 @@ export class ConversationService {
         totalOutputTokens += response.usage.output_tokens;
       }
 
+      // ── Extract text blocks first — always send text regardless of tool calls ──
+      const textBlocks = response.content
+        .filter((b): b is AnthropicTextBlock => b.type === 'text' && b.text.trim().length > 0);
+
+      const toolUseBlocks = response.content
+        .filter((b): b is AnthropicToolUseBlock => b.type === 'tool_use');
+
+      // ── Execute tool calls ─────────────────────────────────────────────
+      const toolResults: { type: 'tool_result'; tool_use_id: string; content: string }[] = [];
+
+      for (const toolBlock of toolUseBlocks) {
+        this.logger.log(`Tool: ${toolBlock.name} — ${JSON.stringify(toolBlock.input)}`);
+
+        let resultContent = 'Success';
+        try {
+          if (toolBlock.name === 'log_complaint') {
+            await this.executeLogComplaint(
+              toolBlock.input as unknown as LogComplaintInput,
+              campaignPatient.id,
+              clinic.id,
+              patientMessage,
+              campaignPatient.campaignId,
+              clinic,
+            );
+            resultContent = 'Complaint logged successfully.';
+
+          } else if (toolBlock.name === 'request_booking') {
+            await this.executeRequestBooking(
+              toolBlock.input as unknown as RequestBookingInput,
+              campaignPatient.id,
+              clinic.id,
+              patientMessage,
+            );
+            resultContent = 'Booking request recorded.';
+
+          } else if (toolBlock.name === 'request_handoff') {
+            // Send text reply first (Claude's farewell) before ending
+            if (textBlocks.length > 0) {
+              const textReply = textBlocks.map(b => b.text).join('\n\n').trim();
+              await this.whatsappService.sendText(phone, textReply);
+              session.messages.push({ role: 'assistant', content: textReply, timestamp: Date.now() });
+            }
+            await this.executeRequestHandoff(
+              toolBlock.input as unknown as RequestHandoffInput,
+              session,
+              campaignPatient.id,
+              campaignPatient.campaignId,
+              clinic,
+            );
+            resultContent = 'Handoff executed.';
+            conversationEnded = true;
+
+          } else if (toolBlock.name === 'end_conversation') {
+            // Send text reply first (Claude's farewell) before ending
+            if (textBlocks.length > 0) {
+              const textReply = textBlocks.map(b => b.text).join('\n\n').trim();
+              await this.whatsappService.sendText(phone, textReply);
+              session.messages.push({ role: 'assistant', content: textReply, timestamp: Date.now() });
+            }
+            await this.closeConversation(
+              session,
+              campaignPatient.id,
+              campaignPatient.campaignId,
+              (toolBlock.input as unknown as EndConversationInput).outcome,
+            );
+            resultContent = 'Conversation closed.';
+            conversationEnded = true;
+          }
+        } catch (err: any) {
+          this.logger.error(`Tool ${toolBlock.name} failed: ${err.message}`);
+          resultContent = `Error: ${err.message}`;
+        }
+
+        toolResults.push({ type: 'tool_result', tool_use_id: toolBlock.id, content: resultContent });
+      }
+
+      // ── If no tool calls or conversation ended — send text and break ───
+      if (toolUseBlocks.length === 0 || conversationEnded) {
+        if (!conversationEnded && textBlocks.length > 0) {
+          const textReply = textBlocks.map(b => b.text).join('\n\n').trim();
+          await this.whatsappService.sendText(phone, textReply);
+          session.messages.push({ role: 'assistant', content: textReply, timestamp: Date.now() });
+        }
+        break;
+      }
+
+      // ── Append assistant turn + tool results for next loop iteration ───
       claudeMessages.push({ role: 'assistant', content: response.content as any });
+      claudeMessages.push({ role: 'user', content: toolResults as any });
+
+      // Track in session messages
       session.messages.push({
         role: 'assistant',
         content: JSON.stringify(response.content),
         timestamp: Date.now(),
       });
+      session.messages.push({
+        role: 'user',
+        content: JSON.stringify(toolResults),
+        timestamp: Date.now(),
+      });
 
-      if (response.stop_reason === 'tool_use' || response.content.some(b => b.type === 'tool_use')) {
-        const toolResultsContent = [];
-
-        for (const block of response.content) {
-          if (block.type === 'tool_use') {
-            const toolBlock = block as AnthropicToolUseBlock;
-            this.logger.log(`Executing tool: ${toolBlock.name} — input: ${JSON.stringify(toolBlock.input)}`);
-
-            let resultString = 'Success';
-            try {
-              if (toolBlock.name === 'log_complaint') {
-                await this.executeLogComplaint(toolBlock.input as any, campaignPatient.id, clinic.id, patientMessage, campaignPatient.campaignId, clinic);
-                resultString = 'Complaint logged successfully.';
-              } else if (toolBlock.name === 'request_booking') {
-                await this.executeRequestBooking(toolBlock.input as any, campaignPatient.id, clinic.id, patientMessage);
-                resultString = 'Booking request recorded successfully.';
-              } else if (toolBlock.name === 'request_handoff') {
-                await this.executeRequestHandoff(toolBlock.input as any, session, campaignPatient.id, campaignPatient.campaignId, clinic);
-                resultString = 'Handoff executed. Do not reply to the user anymore.';
-                conversationEnded = true;
-              } else if (toolBlock.name === 'end_conversation') {
-                await this.closeConversation(session, campaignPatient.id, campaignPatient.campaignId, (toolBlock.input as any).outcome);
-                resultString = 'Conversation closed. Do not reply to the user anymore.';
-                conversationEnded = true;
-              }
-            } catch (err: any) {
-              this.logger.error(`Tool ${toolBlock.name} execution failed: ${err.message}`);
-              resultString = `Error executing tool: ${err.message}`;
-            }
-
-            toolResultsContent.push({
-              type: 'tool_result',
-              tool_use_id: toolBlock.id,
-              content: resultString,
-            });
-          }
-        }
-
-        claudeMessages.push({ role: 'user', content: toolResultsContent as any });
-        session.messages.push({
-          role: 'user',
-          content: JSON.stringify(toolResultsContent),
-          timestamp: Date.now(),
-        });
-
-        if (conversationEnded) break;
-
-        loopCount++;
-        continue;
-      }
-
-      const finalResponseText = response.content
-        .filter(b => b.type === 'text')
-        .map(b => (b as AnthropicTextBlock).text)
-        .join('\n\n')
-        .trim();
-
-      if (finalResponseText) {
-        await this.whatsappService.sendText(phone, finalResponseText);
-      }
-      break;
+      loopCount++;
     }
 
+    // ── 12. Increment turn count ───────────────────────────────────────────
     session.turnCount += 1;
 
+    // ── 13. Log token usage ────────────────────────────────────────────────
     if (totalInputTokens > 0 || totalOutputTokens > 0) {
       try {
-        if ('aiUsage' in this.prisma) {
-          await (this.prisma as any).aiUsage.create({
-            data: {
-              campaignPatientId: campaignPatient.id,
-              clinicId: clinic.id,
-              campaignId: campaignPatient.campaignId,
-              inputTokens: totalInputTokens,
-              outputTokens: totalOutputTokens,
-              model: ANTHROPIC_MODEL,
-            },
-          });
-        }
-      } catch (e: any) {
-        this.logger.warn(`Failed to log token usage: ${e.message}`);
+        await this.prisma.aiUsage.create({
+          data: {
+            campaignPatientId: campaignPatient.id,
+            clinicId: clinic.id,
+            campaignId: campaignPatient.campaignId,
+            inputTokens: totalInputTokens,
+            outputTokens: totalOutputTokens,
+            model: ANTHROPIC_MODEL,
+          },
+        });
+      } catch (err: any) {
+        this.logger.warn(`Failed to log token usage: ${err.message}`);
       }
     }
 
+    // ── 14. Persist to DB ──────────────────────────────────────────────────
     await this.prisma.campaignPatient.update({
       where: { id: campaignPatient.id },
       data: {
@@ -403,6 +481,7 @@ export class ConversationService {
       },
     });
 
+    // ── 15. Save session to Redis unless ended ─────────────────────────────
     if (!conversationEnded) {
       await this.sessionsService.saveCampaignSession(session);
     }
@@ -411,102 +490,151 @@ export class ConversationService {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // SYSTEM PROMPT BUILDER
+  // SYSTEM PROMPT
   // ═══════════════════════════════════════════════════════════════════════════
 
   private buildSystemPrompt(
     session: CampaignSession,
-    campaignPatient: { patientSnapshot: any; patientName: string; visitDate: Date; prestation: string; medecinTraitant: string; ageYears: number | null; sexe: string | null; ville: string | null },
-    clinic: { name: string; phone: string; address?: string | null; openingHours?: string | null },
+    campaignPatient: {
+      patientSnapshot: any;
+      patientName: string;
+      visitDate: Date;
+      prestation: string;
+      medecinTraitant: string;
+      ageYears: number | null;
+      sexe: string | null;
+      ville: string | null;
+    },
+    clinic: {
+      name: string;
+      phone: string;
+      address?: string | null;
+      notificationPhone?: string | null;
+    },
   ): string {
+    const language = session.language ?? Language.FR;
     const snapshot = campaignPatient.patientSnapshot as Record<string, any>;
     const historyData = snapshot?.history ?? null;
-    const language = session.language ?? Language.FR;
 
-    // FIX: Optimized explicit instructions ensuring tool parameters mirror the conversation's active tongue
-    const languageInstruction = language === Language.EN
-      ? 'Always respond in English. Ensure your log_complaint text summaries are written cleanly in English.'
-      : language === Language.AR
-        ? 'Respond natively in Moroccan Darija (using Arabic script). Use simple, clear, and direct phrasing. Ensure the log_complaint tool summaries are rendered in clear Arabic matching the context.'
-        : 'Always respond in French. Use polite, professional "vous" form. Ensure tool summaries are saved in French.';
+    // ── Language instruction — explicit and directive ──────────────────────
+    let languageInstruction: string;
+    if (language === Language.AR) {
+      languageInstruction =
+        'LANGUAGE: You MUST respond exclusively in Moroccan Darija using Arabic script. ' +
+        'Every single message you send must be in Arabic. ' +
+        'Do not switch to French or English under any circumstances. ' +
+        'Tool call summaries must also be written in Arabic.';
+    } else if (language === Language.EN) {
+      languageInstruction =
+        'LANGUAGE: You MUST respond exclusively in English. ' +
+        'Every single message you send must be in English. ' +
+        'Do not switch to French or Arabic under any circumstances. ' +
+        'Tool call summaries must also be written in English.';
+    } else {
+      languageInstruction =
+        'LANGUAGE: You MUST respond exclusively in French. ' +
+        'Every single message you send must be in French. ' +
+        'Use the polite "vous" form at all times. ' +
+        'Do not switch to English or Arabic under any circumstances. ' +
+        'Tool call summaries must also be written in French.';
+    }
 
-    let historySection = 'No previous admission history available.';
-    if (historyData?.admissions && Array.isArray(historyData.admissions) && historyData.admissions.length > 0) {
-      const admissions = historyData.admissions
+    // ── Patient history ────────────────────────────────────────────────────
+    let historySection = 'Aucun historique disponible.';
+    if (
+      historyData?.admissions &&
+      Array.isArray(historyData.admissions) &&
+      historyData.admissions.length > 0
+    ) {
+      const lines = historyData.admissions
         .slice(0, 10)
         .map((a: any, i: number) => {
-          const date = a.date_admission ? new Date(a.date_admission).toLocaleDateString('fr-FR') : 'Unknown date';
-          const motif = a.motif_admission ?? 'Unknown';
-          const doctor = a.medecin_traitant ?? 'Unknown';
-          const actes = Array.isArray(a.actes_realises) && a.actes_realises.length > 0
-            ? a.actes_realises.join(', ')
-            : 'None recorded';
+          const date = a.date_admission
+            ? new Date(a.date_admission).toLocaleDateString('fr-FR')
+            : 'Date inconnue';
+          const motif = a.motif_admission ?? 'Inconnu';
+          const doctor = a.medecin_traitant ?? 'Inconnu';
+          const actes =
+            Array.isArray(a.actes_realises) && a.actes_realises.length > 0
+              ? a.actes_realises.join(', ')
+              : 'Aucun acte enregistré';
           return `  ${i + 1}. ${date} — ${motif} (Dr. ${doctor}) | Actes: ${actes}`;
         })
         .join('\n');
-
       const solde = historyData.solde_impaye ?? 0;
-      historySection = `Previous admissions (most recent first):\n${admissions}\nOutstanding balance: ${solde} MAD`;
+      historySection = `Admissions précédentes :\n${lines}\nSolde impayé : ${solde} MAD`;
     }
 
     const visitDate = new Date(campaignPatient.visitDate).toLocaleDateString('fr-FR');
-    const today = new Date().toISOString().split('T')[0];
-
-    const clinicInfoParts: string[] = [];
-    if (clinic.phone) clinicInfoParts.push(`Clinic phone: ${clinic.phone}`);
-    if (clinic.address) clinicInfoParts.push(`Clinic address: ${clinic.address}`);
-    if (clinic.openingHours) clinicInfoParts.push(`Clinic hours: ${clinic.openingHours}`);
-    const clinicInfoSection = clinicInfoParts.length > 0
-      ? `CLINIC INFO:\n${clinicInfoParts.join('\n')}\n`
-      : '';
+    const today = new Date().toLocaleDateString('fr-FR');
 
     return `You are a compassionate, professional medical follow-up assistant for ${clinic.name}.
 
 ${languageInstruction}
 
-CURRENT DATE: ${today}
+TODAY: ${today}
 
-CRITICAL: Always use ${today} as your reference for "today" when calculating relative dates (tomorrow, next week, etc.).
+FORMATTING RULES:
+- Never use emojis.
+- Keep every message to 2-4 sentences maximum. This is WhatsApp, not email.
+- Never ask more than one question per message.
+- Never invent medical advice or diagnoses.
+- Never mention other patients.
 
-CRITICAL FORMATTING RULE:
-- NEVER use any emojis (e.g., 😊, 🩺, ⚠️, 🚫) under any circumstances. Emojis are strictly forbidden. Maintain a clean, plain text, highly mature, and professional clinical persona.
-
-CRITICAL TOOL-CALLING RULES (IDEMPOTENCY):
-- Look closely at the conversation history below. If you have already invoked a tool (like 'log_complaint' or 'request_booking') for the patient's current issue and received a successful response from the system, DO NOT call that tool again.
-- Only call a tool if the patient brings up a brand-new, unrecorded problem or explicitly requests a completely new action. Do not repeat tool execution when a patient simply says "ok", "thank you", or "what now".
-
-PATIENT CONTEXT:
+PATIENT INFORMATION:
 - Name: ${campaignPatient.patientName}
-- Age: ${campaignPatient.ageYears ?? 'Unknown'} years old
+- Age: ${campaignPatient.ageYears ?? 'Unknown'}
 - Sex: ${campaignPatient.sexe ?? 'Unknown'}
 - City: ${campaignPatient.ville ?? 'Unknown'}
-- Last visit: ${visitDate}
+- Last visit date: ${visitDate}
 - Reason for last visit: ${campaignPatient.prestation}
 - Treating doctor: ${campaignPatient.medecinTraitant}
 
 PATIENT HISTORY:
 ${historySection}
 
-${clinicInfoSection}
-YOUR ROLE:
-- Follow up on the patient's wellbeing after their recent visit.
-- Listen carefully to any concerns they express.
-- If they have a new complaint or medical concern, use the log_complaint tool (once).
-- If they want to book a new appointment, use the request_booking tool (once).
-- If the situation is urgent or complex, use the request_handoff tool.
-- When the conversation reaches a natural conclusion, use the end_conversation tool.
-- Be warm, empathetic, and concise — this is WhatsApp, not email.
-- Never invent medical advice or diagnoses.
-- For rebooking, direct them to call ${clinic.phone || 'the clinic'} or visit ${clinic.address || 'the clinic'}.
+CLINIC CONTACT:
+- Phone: ${clinic.phone}${clinic.address ? `\n- Address: ${clinic.address}` : ''}
 
-CONVERSATION RULES:
-- Keep messages short (2-4 sentences max for WhatsApp).
-- Never ask more than one question at a time.
-- Current turn: ${session.turnCount + 1}`;
+YOUR GOAL:
+Follow up on the patient's wellbeing after their recent visit. Listen to their concerns, acknowledge them warmly, and take appropriate action using the tools available.
+
+TOOL USAGE RULES — READ CAREFULLY:
+
+1. log_complaint
+   - Call this when the patient expresses ANY dissatisfaction, complaint, health concern, or urgency.
+   - This is a SILENT side effect. After calling it, you MUST send a warm, empathetic text response to the patient acknowledging their concern. Do NOT tell the patient you "logged" anything.
+   - IDEMPOTENCY: Only call this once per distinct issue. If you already called it for this issue and received a success response, do NOT call it again.
+
+2. request_booking
+   - Call this when the patient wants to book a new appointment.
+   - This is a SILENT side effect. After calling it, confirm warmly in text that their request has been noted and that the team will follow up.
+   - IDEMPOTENCY: Only call this once per booking request.
+
+3. request_handoff
+   - Call this when the patient explicitly asks for a human, is very distressed, or the situation is HIGH severity.
+   - IMPORTANT: If the patient also complained, call log_complaint FIRST, then request_handoff.
+   - Before calling this tool, send a warm farewell text to the patient telling them a staff member will be in touch.
+   - This ENDS the AI conversation permanently.
+
+4. end_conversation
+   - Call this when the conversation has reached a natural end.
+   - Before calling this tool, send a warm farewell text to the patient.
+   - This ENDS the AI conversation permanently.
+
+CONVERSATION FLOW:
+- Turn 1-2: Warm greeting, ask how they are doing since their visit.
+- If they are fine: Acknowledge, offer rebooking if appropriate (once), close warmly.
+- If they have a concern: Listen, acknowledge, use tools, respond warmly.
+- If they want to stop: Respect it immediately. Use end_conversation with outcome OPTED_OUT after a polite farewell.
+- If they are rude or done talking: Close gracefully with end_conversation.
+- Do NOT drag the conversation. 2-4 turns is often enough.
+
+Current turn: ${session.turnCount + 1} of ${session.turnCount + 1}`;
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // BUILD CLAUDE MESSAGES ARRAY (With Serialization Fix)
+  // BUILD CLAUDE MESSAGES ARRAY
   // ═══════════════════════════════════════════════════════════════════════════
 
   private buildClaudeMessages(
@@ -515,24 +643,53 @@ CONVERSATION RULES:
     return session.messages
       .filter(m => m.content?.trim())
       .map(m => {
-        let parsedContent: any = m.content;
-        try {
-          if (m.content.trim().startsWith('[') || m.content.trim().startsWith('{')) {
-            parsedContent = JSON.parse(m.content);
+        // Messages stored as JSON strings (tool call turns) need to be parsed back
+        let content: any = m.content;
+        if (
+          typeof m.content === 'string' &&
+          (m.content.trim().startsWith('[') || m.content.trim().startsWith('{'))
+        ) {
+          try {
+            content = JSON.parse(m.content);
+          } catch {
+            // Keep as string if parse fails
           }
-        } catch (e) {
-          // Fallback to raw string
         }
-        return {
-          role: m.role,
-          content: parsedContent,
-        };
+        return { role: m.role, content };
       });
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // CALL CLAUDE API
+  // CALL CLAUDE WITH RETRY
   // ═══════════════════════════════════════════════════════════════════════════
+
+  private async callClaudeWithRetry(
+    systemPrompt: string,
+    messages: { role: 'user' | 'assistant'; content: any }[],
+  ): Promise<AnthropicMessage> {
+    let lastError: Error | null = null;
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        return await this.callClaude(systemPrompt, messages);
+      } catch (err: any) {
+        lastError = err;
+        const isRetryable =
+          err.message.includes('529') ||
+          err.message.includes('500') ||
+          err.message.includes('503');
+
+        if (isRetryable && attempt < MAX_RETRIES) {
+          this.logger.warn(`Anthropic API error — retrying (${attempt + 1}/${MAX_RETRIES}): ${err.message}`);
+          await sleep(RETRY_DELAY_MS * (attempt + 1));
+          continue;
+        }
+        throw err;
+      }
+    }
+
+    throw lastError!;
+  }
 
   private async callClaude(
     systemPrompt: string,
@@ -542,7 +699,7 @@ CONVERSATION RULES:
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': this.anthropicApiKey!,
+        'x-api-key': this.anthropicApiKey,
         'anthropic-version': ANTHROPIC_VERSION,
       },
       body: JSON.stringify({
@@ -556,41 +713,12 @@ CONVERSATION RULES:
 
     if (!response.ok) {
       let errorBody = '';
-      try {
-        errorBody = JSON.stringify(await response.json());
-      } catch {
-        errorBody = await response.text().catch(() => '');
-      }
-      const msg = `Anthropic API error ${response.status}: ${errorBody}`;
-      this.logger.error(msg);
-      throw new Error(msg);
+      try { errorBody = JSON.stringify(await response.json()); }
+      catch { errorBody = await response.text().catch(() => ''); }
+      throw new Error(`Anthropic API error ${response.status}: ${errorBody}`);
     }
 
     return response.json() as Promise<AnthropicMessage>;
-  }
-
-  private async callClaudeWithRetry(
-    systemPrompt: string,
-    messages: { role: 'user' | 'assistant'; content: any }[],
-  ): Promise<AnthropicMessage> {
-    let lastError: Error | null = null;
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-      try {
-        return await this.callClaude(systemPrompt, messages);
-      } catch (err: any) {
-        lastError = err;
-        const status = err.message.match(/status (\d+)/)?.[1];
-        if (status && (status === '529' || status.startsWith('5'))) {
-          this.logger.warn(`Anthropic API ${status} — retrying (${attempt + 1}/${MAX_RETRIES})`);
-          if (attempt < MAX_RETRIES) {
-            await delay(RETRY_DELAY * (attempt + 1));
-            continue;
-          }
-        }
-        throw err;
-      }
-    }
-    throw lastError!;
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -621,18 +749,19 @@ CONVERSATION RULES:
       data: { complainedCount: { increment: 1 } },
     });
 
-    this.logger.log(`Complaint logged: ${input.type} / ${input.severity} for patient ${campaignPatientId}`);
-
+    // Alert staff immediately for HIGH severity
     if (input.severity === ComplaintSeverity.HIGH && clinic.notificationPhone) {
       try {
         await this.whatsappService.sendText(
           clinic.notificationPhone,
-          `🔴 HIGH SEVERITY COMPLAINT\nPatient: ${campaignPatientId}\nType: ${input.type}\nSummary: ${input.summary}\n\nPlease review immediately.`,
+          `ALERTE PLAINTE GRAVE\nPatient: ${campaignPatientId}\nType: ${input.type}\nRésumé: ${input.summary}\nAction requise immédiatement.`,
         );
       } catch (err: any) {
-        this.logger.error(`Failed to send HIGH complaint alert to staff: ${err.message}`);
+        this.logger.error(`Failed to send HIGH complaint alert: ${err.message}`);
       }
     }
+
+    this.logger.log(`Complaint logged: ${input.type}/${input.severity} for patient ${campaignPatientId}`);
   }
 
   private async executeRequestBooking(
@@ -662,7 +791,8 @@ CONVERSATION RULES:
     campaignId: string,
     clinic: { id: string; notificationPhone?: string | null },
   ): Promise<void> {
-    session.status = 'admin_handling';
+    // Mark handed_off — session stays alive for staff to send messages
+    session.status = 'handed_off';
 
     await this.prisma.campaignPatient.update({
       where: { id: campaignPatientId },
@@ -678,31 +808,23 @@ CONVERSATION RULES:
       data: { completedCount: { increment: 1 } },
     });
 
-    const handoffMsg = await this.fetchBotMessage(clinic.id, MessageKey.CAMPAIGN_HANDOFF_MESSAGE, session.language ?? Language.FR)
-      ?? (session.language === Language.EN ? 'An agent will be in touch with you shortly.' : 'Un agent va vous contacter sous peu.');
-
-    if (handoffMsg) {
-      try {
-        await this.whatsappService.sendText(session.phone, handoffMsg);
-      } catch (err: any) {
-        this.logger.error(`Failed to send handoff message to patient: ${err.message}`);
-      }
-    }
-
+    // Save session with handed_off status — NOT deleted
+    // Staff needs this session to send messages to the patient from the dashboard
     await this.sessionsService.saveCampaignSession(session);
 
+    // Notify staff
     if (clinic.notificationPhone) {
       try {
         await this.whatsappService.sendText(
           clinic.notificationPhone,
-          `🔴 Handoff Required\nPatient: ${session.phone}\nReason: ${input.reason}`
+          `TRANSFERT REQUIS\nPatient: ${session.phone}\nRaison: ${input.reason}\nPrenez en charge ce patient.`,
         );
       } catch (err: any) {
         this.logger.error(`Failed to notify staff of handoff: ${err.message}`);
       }
     }
 
-    this.logger.log(`Handoff executed for patient ${campaignPatientId} — reason: ${input.reason}`);
+    this.logger.log(`Handoff executed for patient ${campaignPatientId} — session kept alive for staff`);
   }
 
   private async closeConversation(
@@ -727,6 +849,7 @@ CONVERSATION RULES:
       data: { completedCount: { increment: 1 } },
     });
 
+    // Delete Redis session — conversation is truly over
     await this.sessionsService.deleteCampaignSession(session.phone);
 
     this.logger.log(`Conversation closed for patient ${campaignPatientId} — outcome: ${outcome}`);
@@ -736,25 +859,62 @@ CONVERSATION RULES:
   // PRIVATE HELPERS
   // ═══════════════════════════════════════════════════════════════════════════
 
+  /**
+   * Detects language from message content.
+   * Arabic script is definitive. French/English use keyword matching.
+   * Short ambiguous messages (single words, numbers, "ok") return FR as default.
+   */
   private detectLanguage(message: string): Language {
+    // Arabic script — definitive
     if (/[\u0600-\u06FF]/.test(message)) return Language.AR;
-    const lower = message.toLowerCase();
-    const frenchWords = ['bonjour', 'merci', 'oui', 'non', 'je', 'vous', 'comment', 'bien', 'bonsoir', 'salam', 'ca va', 'ça va'];
-    if (frenchWords.some(w => lower.includes(w))) return Language.FR;
-    const englishWords = ['hello', 'hi', 'thanks', 'yes', 'no', 'good', 'how', 'please', 'fine'];
-    if (englishWords.some(w => lower.includes(w))) return Language.EN;
+
+    const lower = message.toLowerCase().trim();
+
+    // Ignore very short messages for language detection — too ambiguous
+    if (lower.length < 3) return Language.FR;
+
+    const frenchIndicators = ['bonjour', 'bonsoir', 'merci', 'oui', 'non', 'je ', 'vous ', 'nous ', 'comment', 'bien', 'salam', 'ca va', 'ça va', 'pas ', 'très', 'est-ce', 'est ce', "j'ai", "c'est", 'pour ', 'avec ', 'dans '];
+    const englishIndicators = ['hello', 'hi ', 'thanks', 'thank you', 'yes', 'no ', 'good', 'how are', 'please', 'fine', "i'm", 'i am', 'can you', 'what', 'when', 'where', 'help'];
+
+    const frScore = frenchIndicators.filter(w => lower.includes(w)).length;
+    const enScore = englishIndicators.filter(w => lower.includes(w)).length;
+
+    if (enScore > frScore) return Language.EN;
+    if (frScore > 0) return Language.FR;
+
+    // Default to FR — Moroccan clinic context
     return Language.FR;
   }
 
+  /**
+   * Fetches a bot message body from DB with FR fallback.
+   * Replaces common template variables.
+   */
   async fetchBotMessage(
     clinicId: string,
     key: MessageKey,
     language: Language,
+    variables?: Record<string, string>,
   ): Promise<string | null> {
     const record = await this.prisma.botMessage.findUnique({
       where: { clinicId_key_language: { clinicId, key, language } },
     });
-    if (record) return record.body;
-     return null;
+
+    let body = record?.body ?? null;
+
+    if (!body && language !== Language.FR) {
+      const fallback = await this.prisma.botMessage.findUnique({
+        where: { clinicId_key_language: { clinicId, key, language: Language.FR } },
+      });
+      body = fallback?.body ?? null;
+    }
+
+    if (body && variables) {
+      for (const [k, v] of Object.entries(variables)) {
+        body = body.replace(new RegExp(`\\{\\{${k}\\}\\}`, 'g'), v);
+      }
+    }
+
+    return body;
   }
 }

@@ -30,4 +30,8 @@ export class UpdateClinicDto {
   @IsBoolean()
   @IsOptional()
   isActive?: boolean;
+
+  @IsString()
+  @IsOptional()
+  notificationPhone?: string;
 }

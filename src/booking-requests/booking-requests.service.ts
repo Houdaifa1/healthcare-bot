@@ -11,12 +11,17 @@ import {
   AppointmentStatus,
 } from '@prisma/client';
 import { ConfirmBookingRequestDto } from './dto/confirm-booking-request.dto';
+import { RejectBookingRequestDto } from './dto/reject-booking-request.dto';
+import { WhatsAppService } from '../whatsapp/whatsapp.service';
 
 @Injectable()
 export class BookingRequestsService {
   private readonly logger = new Logger(BookingRequestsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly whatsappService: WhatsAppService,
+  ) {}
 
   // ═══════════════════════════════════════════════════════════════════════════
   // FIND ALL — filtered by clinicId + optional campaignId / status
@@ -157,7 +162,7 @@ export class BookingRequestsService {
     );
 
     // Link appointment to booking request and update status
-    return this.prisma.bookingRequest.update({
+    const updated = await this.prisma.bookingRequest.update({
       where: { id },
       data: {
         status:      BookingRequestStatus.CONFIRMED,
@@ -165,13 +170,30 @@ export class BookingRequestsService {
         confirmedAt: new Date(),
       },
     });
+
+    // Send WhatsApp notification if a message was provided
+    if (dto.message?.trim()) {
+      try {
+        await this.whatsappService.sendText(campaignPatient.phone, dto.message.trim());
+        this.logger.log(`Confirmation message sent to ${campaignPatient.phone}`);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.logger.error(`Failed to send confirmation message to ${campaignPatient.phone}: ${msg}`);
+      }
+    }
+
+    return updated;
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
   // REJECT
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async reject(clinicId: string, id: string): Promise<BookingRequest> {
+  async reject(
+    clinicId: string,
+    id: string,
+    dto?: RejectBookingRequestDto,
+  ): Promise<BookingRequest> {
     const bookingRequest = await this.findOneRaw(clinicId, id);
 
     if (bookingRequest.status !== BookingRequestStatus.PENDING) {
@@ -180,14 +202,31 @@ export class BookingRequestsService {
       );
     }
 
+    const campaignPatient = await this.prisma.campaignPatient.findUnique({
+      where: { id: bookingRequest.campaignPatientId },
+    });
+
     this.logger.log(
       `Rejecting booking request ${id} for clinic ${clinicId}`,
     );
 
-    return this.prisma.bookingRequest.update({
+    const updated = await this.prisma.bookingRequest.update({
       where: { id },
       data:  { status: BookingRequestStatus.REJECTED },
     });
+
+    // Send WhatsApp notification if a message was provided and not silent
+    if (dto?.message?.trim() && !dto?.silent && campaignPatient?.phone) {
+      try {
+        await this.whatsappService.sendText(campaignPatient.phone, dto.message.trim());
+        this.logger.log(`Rejection message sent to ${campaignPatient.phone}`);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.logger.error(`Failed to send rejection message to ${campaignPatient.phone}: ${msg}`);
+      }
+    }
+
+    return updated;
   }
 
   // ═══════════════════════════════════════════════════════════════════════════

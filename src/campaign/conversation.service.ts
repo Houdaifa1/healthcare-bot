@@ -202,15 +202,12 @@ export class ConversationService {
     }
 
     // ── 2. Session status guard ────────────────────────────────────────────
-    // completed = fully closed, do nothing
-    // handed_off = staff is handling, keep session alive but stop AI replies
     if (session.status === 'completed') {
       this.logger.warn(`Session for ${phone} is completed — ignoring`);
       return;
     }
 
     if (session.status === 'handed_off') {
-      // Session stays alive for staff to use — just log and ignore AI processing
       this.logger.log(`Session for ${phone} is handed off to staff — AI ignoring reply`);
       return;
     }
@@ -239,21 +236,20 @@ export class ConversationService {
       return;
     }
 
-    // ── 5. Language detection — detect on EVERY message for flexibility ───────
-    // Rules:
-    // - Arabic script is always definitive — update immediately
-    // - Allow language switching mid-conversation if patient clearly uses another language
-    // - Re-detect on every turn to respect patient's language preference
+    // ── 5. Language detection ──────────────────────────────────────────────
+    // Re-detect on every message so the patient can switch languages at any time.
+    // Explicit switch phrases ("speak english", "parle en français") always win.
+    // Short ambiguous messages fall back to the current session language.
     const detectedLang = this.detectLanguage(patientMessage);
-    
-    // Always update to detected language (respects patient switching languages)
-    if (session.language !== detectedLang) {
-      session.language = detectedLang;
+    const resolvedLang = detectedLang ?? session.language ?? Language.FR;
+
+    if (session.language !== resolvedLang) {
+      session.language = resolvedLang;
       await this.prisma.campaignPatient.update({
         where: { id: campaignPatient.id },
-        data: { language: detectedLang },
+        data: { language: resolvedLang },
       });
-      this.logger.log(`Language updated for ${phone}: ${detectedLang}`);
+      this.logger.log(`Language updated for ${phone}: ${resolvedLang}`);
     }
 
     // ── 6. Mark REPLIED on first reply ────────────────────────────────────
@@ -272,7 +268,6 @@ export class ConversationService {
     session.status = 'active';
 
     // ── 8. Append patient message ──────────────────────────────────────────
-    // Dedup guard — prevent double-appending on BullMQ retry
     const isDuplicate = session.messages.some(
       m => m.role === 'user' && m.content === patientMessage && Date.now() - m.timestamp < 10_000,
     );
@@ -314,6 +309,7 @@ export class ConversationService {
         await this.whatsappService.sendText(phone, errMsg);
         return;
       }
+
       if (response.stop_reason === 'max_tokens') {
         this.logger.warn(`Claude response truncated (max_tokens) for ${phone}`);
         const partial = response.content
@@ -338,14 +334,12 @@ export class ConversationService {
         totalOutputTokens += response.usage.output_tokens;
       }
 
-      // ── Extract text blocks first — always send text regardless of tool calls ──
       const textBlocks = response.content
         .filter((b): b is AnthropicTextBlock => b.type === 'text' && b.text.trim().length > 0);
 
       const toolUseBlocks = response.content
         .filter((b): b is AnthropicToolUseBlock => b.type === 'tool_use');
 
-      // ── Execute tool calls ─────────────────────────────────────────────
       const toolResults: { type: 'tool_result'; tool_use_id: string; content: string }[] = [];
 
       for (const toolBlock of toolUseBlocks) {
@@ -374,7 +368,6 @@ export class ConversationService {
             resultContent = 'Booking request recorded.';
 
           } else if (toolBlock.name === 'request_handoff') {
-            // Send text reply first (Claude's farewell) before ending
             if (textBlocks.length > 0) {
               const textReply = textBlocks.map(b => b.text).join('\n\n').trim();
               await this.whatsappService.sendText(phone, textReply);
@@ -391,7 +384,6 @@ export class ConversationService {
             conversationEnded = true;
 
           } else if (toolBlock.name === 'end_conversation') {
-            // Send text reply first (Claude's farewell) before ending
             if (textBlocks.length > 0) {
               const textReply = textBlocks.map(b => b.text).join('\n\n').trim();
               await this.whatsappService.sendText(phone, textReply);
@@ -414,7 +406,6 @@ export class ConversationService {
         toolResults.push({ type: 'tool_result', tool_use_id: toolBlock.id, content: resultContent });
       }
 
-      // ── If no tool calls or conversation ended — send text and break ───
       if (toolUseBlocks.length === 0 || conversationEnded) {
         if (!conversationEnded && textBlocks.length > 0) {
           const textReply = textBlocks.map(b => b.text).join('\n\n').trim();
@@ -424,11 +415,9 @@ export class ConversationService {
         break;
       }
 
-      // ── Append assistant turn + tool results for next loop iteration ───
       claudeMessages.push({ role: 'assistant', content: response.content as any });
       claudeMessages.push({ role: 'user', content: toolResults as any });
 
-      // Track in session messages
       session.messages.push({
         role: 'assistant',
         content: JSON.stringify(response.content),
@@ -508,22 +497,18 @@ export class ConversationService {
     const snapshot = campaignPatient.patientSnapshot as Record<string, any>;
     const historyData = snapshot?.history ?? null;
 
-    // ── Language instruction — explicit and directive ──────────────────────
-    let languageInstruction: string;
-    if (language === Language.EN) {
-      languageInstruction =
-        'LANGUAGE: You MUST respond exclusively in English. ' +
-        'Every single message you send must be in English. ' +
-        'Do not switch to French under any circumstances. ' +
-        'Tool call summaries must also be written in English.';
-    } else {
-      languageInstruction =
-        'LANGUAGE: You MUST respond exclusively in French. ' +
-        'Every single message you send must be in French. ' +
-        'Use the polite "vous" form at all times. ' +
-        'Do not switch to English under any circumstances. ' +
-        'Tool call summaries must also be written in French.';
-    }
+    // ── Language instruction ───────────────────────────────────────────────
+    // Single clear rule: match the patient's detected language.
+    // No contradictory lock — the patient owns the language choice.
+    const languageInstruction = language === Language.EN
+      ? 'LANGUAGE: The patient is communicating in English. Respond in English.\n' +
+        'If the patient switches to French at any point, switch to French immediately.\n' +
+        'If the patient explicitly asks you to speak a specific language, switch immediately and confirm it.\n' +
+        'Only French (FR) and English (EN) are supported. If the patient writes in any other language, respond in French.'
+      : 'LANGUE: Le patient communique en français. Répondez en français.\n' +
+        'Si le patient passe à l\'anglais à tout moment, passez immédiatement à l\'anglais.\n' +
+        'Si le patient vous demande explicitement de parler dans une langue spécifique, changez immédiatement et confirmez-le.\n' +
+        'Seuls le français (FR) et l\'anglais (EN) sont pris en charge. Si le patient écrit dans une autre langue, répondez en français.';
 
     // ── Patient history ────────────────────────────────────────────────────
     let historySection = 'Aucun historique disponible.';
@@ -567,7 +552,6 @@ FORMATTING RULES:
 - Never invent medical advice or diagnoses.
 - Never mention other patients.
 - DO NOT use time-specific greetings like "Bonjour" (morning), "Bonsoir" (evening), "Good morning", "Good evening". Use time-neutral greetings like "Salut" (French) or "Hello" (English).
-- ALWAYS match the patient's language. If they write in English, respond in English. If they write in French, respond in French.
 
 PATIENT INFORMATION:
 - Name: ${campaignPatient.patientName}
@@ -635,7 +619,6 @@ Current turn: ${session.turnCount + 1}`;
     return session.messages
       .filter(m => m.content?.trim())
       .map(m => {
-        // Messages stored as JSON strings (tool call turns) need to be parsed back
         let content: any = m.content;
         if (
           typeof m.content === 'string' &&
@@ -741,7 +724,6 @@ Current turn: ${session.turnCount + 1}`;
       data: { complainedCount: { increment: 1 } },
     });
 
-    // Alert staff immediately for HIGH severity
     if (input.severity === ComplaintSeverity.HIGH && clinic.notificationPhone) {
       try {
         await this.whatsappService.sendText(
@@ -783,7 +765,6 @@ Current turn: ${session.turnCount + 1}`;
     campaignId: string,
     clinic: { id: string; notificationPhone?: string | null },
   ): Promise<void> {
-    // Mark handed_off — session stays alive for staff to send messages
     session.status = 'handed_off';
 
     await this.prisma.campaignPatient.update({
@@ -800,15 +781,9 @@ Current turn: ${session.turnCount + 1}`;
       data: { completedCount: { increment: 1 } },
     });
 
-    // Save session with handed_off status — NOT deleted
-    // Staff needs this session to send messages to the patient from the dashboard
     await this.sessionsService.saveCampaignSession(session);
-
-    // Also purge any stale reactive bot session so the patient can't accidentally
-    // re-enter the reactive flow while staff is handling their campaign conversation
     await this.sessionsService.delete(session.phone);
 
-    // Notify staff
     if (clinic.notificationPhone) {
       try {
         await this.whatsappService.sendText(
@@ -845,11 +820,7 @@ Current turn: ${session.turnCount + 1}`;
       data: { completedCount: { increment: 1 } },
     });
 
-    // Delete Redis campaign session — conversation is truly over
     await this.sessionsService.deleteCampaignSession(session.phone);
-
-    // Also purge the reactive bot session so the patient starts fresh if they
-    // text the clinic number again — no stale AWAITING_HANDOFF or booking state
     await this.sessionsService.delete(session.phone);
 
     this.logger.log(`Conversation closed for patient ${campaignPatientId} — outcome: ${outcome}`);
@@ -860,25 +831,66 @@ Current turn: ${session.turnCount + 1}`;
   // ═══════════════════════════════════════════════════════════════════════════
 
   /**
-   * Detects language from message content.
-   * Arabic script is definitive. French/English use keyword matching.
-   * Short ambiguous messages (single words, numbers, "ok") return FR as default.
+   * Detects language from a patient message.
+   *
+   * Priority:
+   *   1. Explicit switch phrases ("speak english", "parle en français") — always wins
+   *   2. Whole-word keyword scoring — word-boundary regex avoids false matches
+   *      e.g. "hi" won't match inside "jehilal", "no" won't match inside "bonjour"
+   *   3. Returns FR on tie or zero score (Moroccan clinic default)
+   *
+   * Short messages (< 3 chars) are returned as FR — caller uses current session
+   * language in that case so the response stays consistent.
    */
   private detectLanguage(message: string): Language {
     const lower = message.toLowerCase().trim();
 
-    // Ignore very short messages for language detection — too ambiguous
+    // ── 1. Explicit language-switch phrases — highest priority ─────────────
+    const explicitEN = [
+      'speak english', 'in english', 'switch to english', 'respond in english',
+      'reply in english', 'english please', 'please english', 'en anglais',
+      'talk to me in english', 'write in english',
+    ];
+    const explicitFR = [
+      'parle français', 'parle en français', 'en français', 'réponds en français',
+      'switch to french', 'respond in french', 'reply in french', 'french please',
+      'parle en francais', 'en francais', 'réponds en francais',
+    ];
+
+    if (explicitEN.some(p => lower.includes(p))) return Language.EN;
+    if (explicitFR.some(p => lower.includes(p))) return Language.FR;
+
+    // ── 2. Very short messages — fall back to FR default ───────────────────
     if (lower.length < 3) return Language.FR;
 
-    const frenchIndicators = ['bonjour', 'bonsoir', 'merci', 'oui', 'non', 'je ', 'vous ', 'nous ', 'comment', 'bien', 'salam', 'ca va', 'ça va', 'pas ', 'très', 'est-ce', 'est ce', "j'ai", "c'est", 'pour ', 'avec ', 'dans ', 'salut'];
-    const englishIndicators = ['hello', 'hi ', 'thanks', 'thank you', 'yes', 'no ', 'good', 'how are', 'please', 'fine', "i'm", 'i am', 'can you', 'what', 'when', 'where', 'help', 'hey'];
+    // ── 3. Whole-word keyword scoring ──────────────────────────────────────
+    const frWords = [
+      'bonjour', 'bonsoir', 'salut', 'merci', 'oui', 'non', 'bien',
+      'comment', 'ça va', 'ca va', 'salam', 'très', 'pour', 'avec',
+      'dans', 'vous', 'nous', 'est-ce', "j'ai", "c'est", 'pas', 'je',
+      'quoi', 'rien', 'tout', 'encore', 'maintenant', 'vraiment',
+    ];
+    const enWords = [
+      'hello', 'hi', 'hey', 'thanks', 'thank you', 'thank', 'yes', 'yeah',
+      'good', 'fine', 'okay', 'ok', 'please', 'help', 'what', 'when',
+      'where', 'how', "i'm", 'i am', 'i have', 'i need',
+      'great', 'sure', 'no', 'not', 'done', 'right', 'got it',
+    ];
 
-    const frScore = frenchIndicators.filter(w => lower.includes(w)).length;
-    const enScore = englishIndicators.filter(w => lower.includes(w)).length;
+    // Word-boundary matcher — escapes special regex chars in the keyword
+    const wb = (word: string) =>
+      new RegExp(
+        `(?<![a-zàâçéèêëîïôûùüÿæœ])${word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![a-zàâçéèêëîïôûùüÿæœ])`,
+        'i',
+      );
+
+    const frScore = frWords.filter(w => wb(w).test(lower)).length;
+    const enScore = enWords.filter(w => wb(w).test(lower)).length;
 
     if (enScore > frScore) return Language.EN;
-    
-    // Default to FR — Moroccan clinic context
+    if (frScore > enScore) return Language.FR;
+
+    // ── 4. Tie or zero score — default FR ──────────────────────────────────
     return Language.FR;
   }
 

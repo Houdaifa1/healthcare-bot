@@ -8,6 +8,14 @@ import { WhatsAppService } from '../whatsapp/whatsapp.service';
 import { CampaignOutboundJob } from './campaign.service';
 import { QUEUES } from '../queue/queue.constants';
 
+// ─── Template config ───────────────────────────────────────────────────────
+// patient_followup template approved by Meta.
+// Body: "Bonjour {{1}}, nous faisons suite à votre visite du {{2}}. Comment vous sentez-vous depuis ?"
+// {{1}} = patient name
+// {{2}} = visit date (dd/MM/yyyy)
+const OPENING_TEMPLATE_NAME = 'patient_followup';
+const OPENING_TEMPLATE_LANG = 'fr'; // matches the language the template was approved in
+
 @Processor(QUEUES.CAMPAIGN_OUTBOUND)
 export class OutboundProcessor extends WorkerHost {
   private readonly logger = new Logger(OutboundProcessor.name);
@@ -62,14 +70,11 @@ export class OutboundProcessor extends WorkerHost {
     }
 
     // ── 4. PAUSED — park the patient, resume() will re-queue ───────────────
-    // No polling. No re-queue here. resume() finds all PARKED patients and
-    // re-queues them with a fresh delay in one shot.
     if (campaign.status === CampaignStatus.PAUSED) {
       this.logger.warn(
         `Campaign ${campaignId} is PAUSED — parking patient ${campaignPatientId}`,
       );
 
-      // Only park if still PENDING — idempotency guard
       if (campaignPatient.status === CampaignPatientStatus.PENDING) {
         await this.prisma.campaignPatient.update({
           where: { id: campaignPatientId },
@@ -94,8 +99,6 @@ export class OutboundProcessor extends WorkerHost {
     }
 
     // ── 6. Idempotency guard — already processed ───────────────────────────
-    // PENDING and PARKED are both valid entry states for this processor.
-    // Any other status means the job already ran successfully.
     if (
       campaignPatient.status !== CampaignPatientStatus.PENDING &&
       campaignPatient.status !== CampaignPatientStatus.PARKED
@@ -106,7 +109,7 @@ export class OutboundProcessor extends WorkerHost {
       return;
     }
 
-    // ── 7. Load clinic for language + message fallback ─────────────────────
+    // ── 7. Load clinic ─────────────────────────────────────────────────────
     const clinic = await this.prisma.clinic.findUnique({
       where: { id: clinicId },
     });
@@ -117,36 +120,36 @@ export class OutboundProcessor extends WorkerHost {
     }
 
     // ── 8. Resolve language ────────────────────────────────────────────────
-    // Patient language unknown until they reply — default to clinic language.
-    // The AI conversation engine will adapt once the patient replies.
+    // Patient language is unknown until they reply — default to clinic language.
+    // The AI conversation engine adapts once the patient replies.
     const language: Language = clinic.defaultLanguage;
 
-    // ── 9. Fetch CAMPAIGN_OPENING_MESSAGE from DB ──────────────────────────
-    const openingMessage = await this.fetchBotMessage(
-      clinicId,
-      MessageKey.CAMPAIGN_OPENING_MESSAGE,
-      language,
+    // ── 9. Build template variables ────────────────────────────────────────
+    // {{1}} = patient name, {{2}} = visit date formatted as dd/MM/yyyy
+    const visitDate = new Date(campaignPatient.visitDate).toLocaleDateString('fr-FR');
+
+    // ── 10. Send approved Meta template — works for new contacts ──────────
+    // sendText() fails for contacts who have never messaged the clinic before
+    // (outside the 24-hour customer-initiated window).
+    // sendTemplate() uses the approved patient_followup template which bypasses
+    // this restriction and is delivered regardless of prior contact history.
+    await this.whatsappService.sendTemplate(
+      campaignPatient.phone,
+      OPENING_TEMPLATE_NAME,
+      OPENING_TEMPLATE_LANG,
+      [
+        {
+          type: 'body',
+          parameters: [
+            { type: 'text', text: campaignPatient.patientName },
+            { type: 'text', text: visitDate },
+          ],
+        },
+      ],
     );
 
-    if (!openingMessage) {
-      this.logger.error(
-        `CAMPAIGN_OPENING_MESSAGE not found for clinic ${clinicId} language ${language} — skipping patient ${campaignPatientId}`,
-      );
-      return;
-    }
-
-    // ── 10. Substitute template variables and send ─────────────────────────
-    const visitDate = new Date(campaignPatient.visitDate).toLocaleDateString('fr-FR');
-    const personalized = openingMessage
-      .replace(/\{\{name\}\}/g, campaignPatient.patientName)
-      .replace(/\{\{visitDate\}\}/g, visitDate)
-      .replace(/\{\{doctor\}\}/g, campaignPatient.medecinTraitant)
-      .replace(/\{\{clinicName\}\}/g, clinic.name);
-
-    await this.whatsappService.sendText(campaignPatient.phone, personalized);
-
     this.logger.log(
-      `Opening message sent to ${campaignPatient.phone} (${campaignPatient.patientName})`,
+      `Opening template sent to ${campaignPatient.phone} (${campaignPatient.patientName})`,
     );
 
     // ── 11. Create campaign Redis session ──────────────────────────────────
@@ -179,7 +182,7 @@ export class OutboundProcessor extends WorkerHost {
       data: {
         status:      CampaignPatientStatus.CONTACTED,
         contactedAt: new Date(),
-        parkedAt:    null, // clear parkedAt if this patient was previously parked
+        parkedAt:    null,
       },
     });
 

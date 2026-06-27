@@ -134,6 +134,45 @@ export class WhatsAppService {
   }
 
   /**
+   * Sends an approved Meta template message.
+   * Used for the campaign opening message so new contacts (24h window not open)
+   * can receive it without being blocked by Meta.
+   *
+   * @param to           - Recipient phone in any format (normalised internally)
+   * @param templateName - Exact name of the approved template in Meta Business Manager
+   * @param languageCode - BCP-47 code matching the approved template language, e.g. 'fr' or 'en'
+   * @param components   - Array of component objects (body parameters, header, etc.)
+   *
+   * Example for patient_followup template with {{1}} and {{2}}:
+   *   components: [{
+   *     type: 'body',
+   *     parameters: [
+   *       { type: 'text', text: 'Mohammed' },
+   *       { type: 'text', text: '15/06/2025' },
+   *     ],
+   *   }]
+   */
+  async sendTemplate(
+    to:           string,
+    templateName: string,
+    languageCode: string,
+    components:   Record<string, unknown>[],
+  ): Promise<void> {
+    await this.sendRaw({
+      messaging_product: 'whatsapp',
+      recipient_type:    'individual',
+      to:                this.normalisePhone(to),
+      type:              'template',
+      template: {
+        name:     templateName,
+        language: { code: languageCode },
+        components,
+      },
+    });
+    this.logger.log(`Template "${templateName}" sent to ${to}`);
+  }
+
+  /**
    * Sends up to 3 quick-reply buttons.
    * Meta only supports 1–3 buttons per message.
    * If more than 3 are passed, excess buttons are silently dropped and a

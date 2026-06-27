@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import { BookingRequestsService } from './booking-requests.service';
 import { ConfirmBookingRequestDto } from './dto/confirm-booking-request.dto';
+import { RejectBookingRequestDto } from './dto/reject-booking-request.dto';
 import { JwtAuthGuard } from '../admin/auth/jwt-auth.guard';
 import { BookingRequestStatus } from '@prisma/client';
 
@@ -49,7 +50,11 @@ export class BookingRequestsController {
 
   // POST /api/admin/v1/booking-requests/:id/reject
   @Post(':id/reject')
-  reject(@Request() req: any, @Param('id') id: string) {
-    return this.bookingRequestsService.reject(req.user.clinicId, id);
+  reject(
+    @Request() req: any,
+    @Param('id') id: string,
+    @Body() dto?: RejectBookingRequestDto,
+  ) {
+    return this.bookingRequestsService.reject(req.user.clinicId, id, dto);
   }
 }

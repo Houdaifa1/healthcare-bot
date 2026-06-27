@@ -46,6 +46,7 @@ interface LogComplaintInput {
 }
 
 interface RequestBookingInput {
+  preferredSpecialty?: string;
   preferredDoctor?: string;
   preferredDateRange?: string;
   reason?: string;
@@ -100,24 +101,34 @@ const CLAUDE_TOOLS = [
     name: 'request_booking',
     description:
       'Create a booking request when the patient wants to schedule a new appointment. ' +
+      'IMPORTANT: Before calling this tool you MUST have collected ALL of the following through conversation: ' +
+      '(1) the reason for the appointment, ' +
+      '(2) a preferred doctor or specialty (ask if not mentioned), ' +
+      '(3) a preferred date or date range. ' +
+      'Ask for each missing piece one at a time — one question per message. ' +
+      'Do NOT call this tool until reason and preferredDateRange are known. ' +
       'This is a silent side effect — always follow it with a warm confirmation to the patient.',
     input_schema: {
       type: 'object',
       properties: {
+        preferredSpecialty: {
+          type: 'string',
+          description: 'Specialty or department the patient wants, e.g. "cardiologie", "généraliste".',
+        },
         preferredDoctor: {
           type: 'string',
           description: 'Doctor name if the patient mentioned one.',
         },
         preferredDateRange: {
           type: 'string',
-          description: 'Date preference as the patient expressed it, e.g. "semaine prochaine", "next Monday".',
+          description: 'Date or date range as the patient expressed it, e.g. "semaine prochaine", "next Monday", "le 5 juillet".',
         },
         reason: {
           type: 'string',
           description: 'Reason for the new appointment as the patient expressed it.',
         },
       },
-      required: [],
+      required: ['reason', 'preferredDateRange'],
     },
   },
   {
@@ -574,8 +585,14 @@ TOOL USAGE RULES — READ CAREFULLY:
 
 2. request_booking
    - Call this when the patient wants to book a new appointment.
-   - This is a SILENT side effect. After calling it, confirm warmly in text that their request has been noted and that the team will follow up.
-   - IDEMPOTENCY: Only call this once per booking request.
+   - BEFORE calling this tool, you MUST collect ALL of the following through conversation:
+     a) REASON — why do they need the appointment? Ask if not mentioned.
+     b) PREFERRED DATE — when do they want to come? Ask if not mentioned. Accept any format ("next week", "le 5 juillet", etc.)
+     c) PREFERRED DOCTOR OR SPECIALTY — do they have a preference? Ask if not mentioned. Accept "no preference" as a valid answer.
+   - Ask for each missing piece ONE AT A TIME — one question per message. Never ask two things at once.
+   - Only call request_booking once ALL THREE are known (doctor/specialty can be "no preference").
+   - This is a SILENT side effect. After calling it, confirm warmly in text that their request has been noted and the team will contact them to confirm the exact appointment.
+   - IDEMPOTENCY: Only call this once per booking request. Do not call it again if already called.
 
 3. request_handoff
    - Call this when the patient explicitly asks for a human, is very distressed, or the situation is HIGH severity.
@@ -746,6 +763,7 @@ Current turn: ${session.turnCount + 1}`;
       data: {
         campaignPatientId,
         clinicId,
+        preferredSpecialty: input.preferredSpecialty ?? null,
         preferredDoctor: input.preferredDoctor ?? null,
         preferredDateRange: input.preferredDateRange ?? null,
         reason: input.reason ?? null,

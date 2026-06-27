@@ -311,20 +311,14 @@ export class ConversationService {
       }
 
       if (response.stop_reason === 'max_tokens') {
-        this.logger.warn(`Claude response truncated (max_tokens) for ${phone}`);
-        const partial = response.content
-          .filter((b): b is AnthropicTextBlock => b.type === 'text' && b.text.trim().length > 0)
-          .map(b => b.text)
-          .join('\n\n')
-          .trim();
-
-        const msg = partial.length > 20
-          ? partial
-          : (session.language ?? Language.FR) === Language.EN
-            ? 'Sorry, something went wrong. Please try again.'
-            : 'Désolé, une erreur est survenue. Veuillez réessayer.';
-
-        await this.whatsappService.sendText(phone, msg);
+        // Never send a truncated mid-sentence response to the patient.
+        // Always send a clean neutral fallback and keep the session alive
+        // so the patient can reply and get a fresh response next turn.
+        this.logger.warn(`Claude response truncated (max_tokens) for ${phone} — sending clean fallback`);
+        const fallback = (session.language ?? Language.FR) === Language.EN
+          ? 'Sorry, something came up on my end. Could you repeat that?'
+          : 'Désolé, une erreur est survenue de mon côté. Pouvez-vous répéter ?';
+        await this.whatsappService.sendText(phone, fallback);
         await this.sessionsService.saveCampaignSession(session);
         return;
       }
@@ -605,6 +599,10 @@ CONVERSATION FLOW:
 IMPORTANT — DO NOT close the conversation after a single positive reply like "I'm fine" or "yeah all good".
 The patient may still have questions or need a follow-up appointment. Always ask one gentle follow-up before closing.
 Only use end_conversation when the patient has clearly indicated they have nothing more to discuss.
+
+CRITICAL — NEVER use end_conversation because the patient sends a short or repeated message like "hi", "ok", "yeah", "hello", or any single word.
+These are engagement signals, not goodbyes. The patient is still present and talking.
+Only close when the patient explicitly says goodbye ("bye", "merci au revoir", "that's all", "c'est tout") or after confirming they have no further questions or concerns.
 
 Current turn: ${session.turnCount + 1}`;
   }

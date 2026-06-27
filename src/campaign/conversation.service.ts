@@ -248,9 +248,6 @@ export class ConversationService {
     }
 
     // ── 5. Language detection ──────────────────────────────────────────────
-    // Re-detect on every message so the patient can switch languages at any time.
-    // Explicit switch phrases ("speak english", "parle en français") always win.
-    // Short ambiguous messages fall back to the current session language.
     const detectedLang = this.detectLanguage(patientMessage);
     const resolvedLang = detectedLang ?? session.language ?? Language.FR;
 
@@ -307,6 +304,10 @@ export class ConversationService {
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
 
+    // Declared outside the loop so the guard persists across all iterations.
+    // Once text is sent to the patient, it must never be sent again this turn.
+    let textSent = false;
+
     while (loopCount < MAX_TOOL_LOOPS && !conversationEnded) {
       let response: AnthropicMessage;
 
@@ -322,9 +323,6 @@ export class ConversationService {
       }
 
       if (response.stop_reason === 'max_tokens') {
-        // Never send a truncated mid-sentence response to the patient.
-        // Always send a clean neutral fallback and keep the session alive
-        // so the patient can reply and get a fresh response next turn.
         this.logger.warn(`Claude response truncated (max_tokens) for ${phone} — sending clean fallback`);
         const fallback = (session.language ?? Language.FR) === Language.EN
           ? 'Sorry, something came up on my end. Could you repeat that?'
@@ -345,15 +343,13 @@ export class ConversationService {
       const toolUseBlocks = response.content
         .filter((b): b is AnthropicToolUseBlock => b.type === 'tool_use');
 
-      // Build the joined text reply once — used by tool handlers and the no-tool branch
       const textReply = textBlocks.map(b => b.text).join(' ').trim();
 
-      // Track whether text was already sent this iteration to prevent double-sending
-      let textSentThisTurn = false;
-
+      // Sends the patient-facing text exactly once across the entire tool loop.
+      // Also stores it in session.messages so the dashboard shows it once.
       const sendTextOnce = async () => {
-        if (textSentThisTurn || !textReply) return;
-        textSentThisTurn = true;
+        if (textSent || !textReply) return;
+        textSent = true;
         await this.whatsappService.sendText(phone, textReply);
         session.messages.push({ role: 'assistant', content: textReply, timestamp: Date.now() });
       };
@@ -375,8 +371,9 @@ export class ConversationService {
               clinic,
             );
             resultContent = 'Complaint logged successfully.';
-            // Send Claude's empathetic text response immediately — do not wait for next loop
-            await sendTextOnce();
+            // Do NOT call sendTextOnce() here — stop_reason is 'tool_use' so
+            // Claude will produce the clean patient-facing text in the next
+            // end_turn iteration. Sending here causes dashboard duplicates.
 
           } else if (toolBlock.name === 'request_booking') {
             await this.executeRequestBooking(
@@ -386,11 +383,10 @@ export class ConversationService {
               patientMessage,
             );
             resultContent = 'Booking request recorded.';
-            // Send Claude's confirmation text immediately
-            await sendTextOnce();
+            // Same as above — do NOT send here, let end_turn handle it.
 
           } else if (toolBlock.name === 'request_handoff') {
-            // Send farewell text before closing
+            // Conversation is ending — send farewell text NOW before closing.
             await sendTextOnce();
             await this.executeRequestHandoff(
               toolBlock.input as unknown as RequestHandoffInput,
@@ -402,7 +398,7 @@ export class ConversationService {
             conversationEnded = true;
 
           } else if (toolBlock.name === 'end_conversation') {
-            // Send farewell text before closing
+            // Conversation is ending — send farewell text NOW before closing.
             await sendTextOnce();
             await this.closeConversation(
               session,
@@ -421,20 +417,32 @@ export class ConversationService {
         toolResults.push({ type: 'tool_result', tool_use_id: toolBlock.id, content: resultContent });
       }
 
-      if (toolUseBlocks.length === 0 || conversationEnded) {
-        // No tool calls — send text directly. sendTextOnce guards against re-sending.
+      // Conversation ended inside a tool handler — text already sent, just stop.
+      if (conversationEnded) {
+        break;
+      }
+
+      // No tools — this is end_turn, send the patient-facing text now.
+      if (toolUseBlocks.length === 0) {
         await sendTextOnce();
         break;
       }
 
+      // Push to claudeMessages for the next API call (internal only — never shown to patient).
       claudeMessages.push({ role: 'assistant', content: response.content as any });
       claudeMessages.push({ role: 'user', content: toolResults as any });
 
-      session.messages.push({
-        role: 'assistant',
-        content: JSON.stringify(response.content),
-        timestamp: Date.now(),
-      });
+      // Push raw tool exchange to session.messages ONLY if sendTextOnce() has
+      // not already stored the human-readable text. If it has, the text bubble
+      // is already in session.messages — pushing the raw JSON too would cause
+      // the dashboard to render the same message twice.
+      if (!textSent) {
+        session.messages.push({
+          role: 'assistant',
+          content: JSON.stringify(response.content),
+          timestamp: Date.now(),
+        });
+      }
       session.messages.push({
         role: 'user',
         content: JSON.stringify(toolResults),
@@ -509,9 +517,6 @@ export class ConversationService {
     const snapshot = campaignPatient.patientSnapshot as Record<string, any>;
     const historyData = snapshot?.history ?? null;
 
-    // ── Language instruction ───────────────────────────────────────────────
-    // Single clear rule: match the patient's detected language.
-    // No contradictory lock — the patient owns the language choice.
     const languageInstruction = language === Language.EN
       ? 'LANGUAGE: The patient is communicating in English. Respond in English.\n' +
         'If the patient switches to French at any point, switch to French immediately.\n' +
@@ -522,7 +527,6 @@ export class ConversationService {
         'Si le patient vous demande explicitement de parler dans une langue spécifique, changez immédiatement et confirmez-le.\n' +
         'Seuls le français (FR) et l\'anglais (EN) sont pris en charge. Si le patient écrit dans une autre langue, répondez en français.';
 
-    // ── Patient history ────────────────────────────────────────────────────
     let historySection = 'Aucun historique disponible.';
     if (
       historyData?.admissions &&
@@ -879,22 +883,9 @@ Current turn: ${session.turnCount + 1}`;
   // PRIVATE HELPERS
   // ═══════════════════════════════════════════════════════════════════════════
 
-  /**
-   * Detects language from a patient message.
-   *
-   * Priority:
-   *   1. Explicit switch phrases ("speak english", "parle en français") — always wins
-   *   2. Whole-word keyword scoring — word-boundary regex avoids false matches
-   *      e.g. "hi" won't match inside "jehilal", "no" won't match inside "bonjour"
-   *   3. Returns FR on tie or zero score (Moroccan clinic default)
-   *
-   * Short messages (< 3 chars) are returned as FR — caller uses current session
-   * language in that case so the response stays consistent.
-   */
   private detectLanguage(message: string): Language {
     const lower = message.toLowerCase().trim();
 
-    // ── 1. Explicit language-switch phrases — highest priority ─────────────
     const explicitEN = [
       'speak english', 'in english', 'switch to english', 'respond in english',
       'reply in english', 'english please', 'please english', 'en anglais',
@@ -909,10 +900,8 @@ Current turn: ${session.turnCount + 1}`;
     if (explicitEN.some(p => lower.includes(p))) return Language.EN;
     if (explicitFR.some(p => lower.includes(p))) return Language.FR;
 
-    // ── 2. Very short messages — fall back to FR default ───────────────────
     if (lower.length < 3) return Language.FR;
 
-    // ── 3. Whole-word keyword scoring ──────────────────────────────────────
     const frWords = [
       'bonjour', 'bonsoir', 'salut', 'merci', 'oui', 'non', 'bien',
       'comment', 'ça va', 'ca va', 'salam', 'très', 'pour', 'avec',
@@ -926,7 +915,6 @@ Current turn: ${session.turnCount + 1}`;
       'great', 'sure', 'no', 'not', 'done', 'right', 'got it',
     ];
 
-    // Word-boundary matcher — escapes special regex chars in the keyword
     const wb = (word: string) =>
       new RegExp(
         `(?<![a-zàâçéèêëîïôûùüÿæœ])${word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![a-zàâçéèêëîïôûùüÿæœ])`,
@@ -939,14 +927,9 @@ Current turn: ${session.turnCount + 1}`;
     if (enScore > frScore) return Language.EN;
     if (frScore > enScore) return Language.FR;
 
-    // ── 4. Tie or zero score — default FR ──────────────────────────────────
     return Language.FR;
   }
 
-  /**
-   * Fetches a bot message body from DB with FR fallback.
-   * Replaces common template variables.
-   */
   async fetchBotMessage(
     clinicId: string,
     key: MessageKey,

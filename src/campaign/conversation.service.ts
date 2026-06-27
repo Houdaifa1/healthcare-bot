@@ -345,6 +345,19 @@ export class ConversationService {
       const toolUseBlocks = response.content
         .filter((b): b is AnthropicToolUseBlock => b.type === 'tool_use');
 
+      // Build the joined text reply once — used by tool handlers and the no-tool branch
+      const textReply = textBlocks.map(b => b.text).join(' ').trim();
+
+      // Track whether text was already sent this iteration to prevent double-sending
+      let textSentThisTurn = false;
+
+      const sendTextOnce = async () => {
+        if (textSentThisTurn || !textReply) return;
+        textSentThisTurn = true;
+        await this.whatsappService.sendText(phone, textReply);
+        session.messages.push({ role: 'assistant', content: textReply, timestamp: Date.now() });
+      };
+
       const toolResults: { type: 'tool_result'; tool_use_id: string; content: string }[] = [];
 
       for (const toolBlock of toolUseBlocks) {
@@ -362,6 +375,8 @@ export class ConversationService {
               clinic,
             );
             resultContent = 'Complaint logged successfully.';
+            // Send Claude's empathetic text response immediately — do not wait for next loop
+            await sendTextOnce();
 
           } else if (toolBlock.name === 'request_booking') {
             await this.executeRequestBooking(
@@ -371,29 +386,24 @@ export class ConversationService {
               patientMessage,
             );
             resultContent = 'Booking request recorded.';
+            // Send Claude's confirmation text immediately
+            await sendTextOnce();
 
           } else if (toolBlock.name === 'request_handoff') {
-            if (textBlocks.length > 0) {
-              const textReply = textBlocks.map(b => b.text).join('\n\n').trim();
-              await this.whatsappService.sendText(phone, textReply);
-              session.messages.push({ role: 'assistant', content: textReply, timestamp: Date.now() });
-            }
+            // Send farewell text before closing
+            await sendTextOnce();
             await this.executeRequestHandoff(
               toolBlock.input as unknown as RequestHandoffInput,
               session,
-              campaignPatient.id,
-              campaignPatient.campaignId,
+              campaignPatient,
               clinic,
             );
             resultContent = 'Handoff executed.';
             conversationEnded = true;
 
           } else if (toolBlock.name === 'end_conversation') {
-            if (textBlocks.length > 0) {
-              const textReply = textBlocks.map(b => b.text).join('\n\n').trim();
-              await this.whatsappService.sendText(phone, textReply);
-              session.messages.push({ role: 'assistant', content: textReply, timestamp: Date.now() });
-            }
+            // Send farewell text before closing
+            await sendTextOnce();
             await this.closeConversation(
               session,
               campaignPatient.id,
@@ -412,11 +422,8 @@ export class ConversationService {
       }
 
       if (toolUseBlocks.length === 0 || conversationEnded) {
-        if (!conversationEnded && textBlocks.length > 0) {
-          const textReply = textBlocks.map(b => b.text).join('\n\n').trim();
-          await this.whatsappService.sendText(phone, textReply);
-          session.messages.push({ role: 'assistant', content: textReply, timestamp: Date.now() });
-        }
+        // No tool calls — send text directly. sendTextOnce guards against re-sending.
+        await sendTextOnce();
         break;
       }
 
@@ -777,14 +784,23 @@ Current turn: ${session.turnCount + 1}`;
   private async executeRequestHandoff(
     input: RequestHandoffInput,
     session: CampaignSession,
-    campaignPatientId: string,
-    campaignId: string,
+    campaignPatient: {
+      id: string;
+      campaignId: string;
+      patientName: string;
+      phone: string;
+      visitDate: Date;
+      prestation: string;
+      medecinTraitant: string;
+      ageYears: number | null;
+      ville: string | null;
+    },
     clinic: { id: string; notificationPhone?: string | null },
   ): Promise<void> {
     session.status = 'handed_off';
 
     await this.prisma.campaignPatient.update({
-      where: { id: campaignPatientId },
+      where: { id: campaignPatient.id },
       data: {
         status: CampaignPatientStatus.COMPLETED,
         outcome: ConversationOutcome.HANDED_OFF,
@@ -793,7 +809,7 @@ Current turn: ${session.turnCount + 1}`;
     });
 
     await this.prisma.campaign.update({
-      where: { id: campaignId },
+      where: { id: campaignPatient.campaignId },
       data: { completedCount: { increment: 1 } },
     });
 
@@ -802,16 +818,33 @@ Current turn: ${session.turnCount + 1}`;
 
     if (clinic.notificationPhone) {
       try {
-        await this.whatsappService.sendText(
-          clinic.notificationPhone,
-          `TRANSFERT REQUIS\nPatient: ${session.phone}\nRaison: ${input.reason}\nPrenez en charge ce patient.`,
-        );
+        const visitDate = new Date(campaignPatient.visitDate).toLocaleDateString('fr-FR');
+        const now = new Date().toLocaleString('fr-MA', { timeZone: 'Africa/Casablanca' });
+
+        const notification =
+          `PATIENT HANDOFF REQUIRED\n` +
+          `---------------------------\n` +
+          `Name      : ${campaignPatient.patientName}\n` +
+          `Phone     : ${campaignPatient.phone}\n` +
+          `Age       : ${campaignPatient.ageYears ?? 'N/A'} years\n` +
+          `City      : ${campaignPatient.ville ?? 'N/A'}\n` +
+          `---------------------------\n` +
+          `Last visit   : ${visitDate}\n` +
+          `Visit reason : ${campaignPatient.prestation}\n` +
+          `Doctor       : ${campaignPatient.medecinTraitant}\n` +
+          `---------------------------\n` +
+          `Handoff reason : ${input.reason}\n` +
+          `---------------------------\n` +
+          `Time : ${now}\n` +
+          `Action required : Contact this patient immediately.`;
+
+        await this.whatsappService.sendText(clinic.notificationPhone, notification);
       } catch (err: any) {
         this.logger.error(`Failed to notify staff of handoff: ${err.message}`);
       }
     }
 
-    this.logger.log(`Handoff executed for patient ${campaignPatientId} — session kept alive for staff`);
+    this.logger.log(`Handoff executed for patient ${campaignPatient.id} — session kept alive for staff`);
   }
 
   private async closeConversation(

@@ -156,13 +156,18 @@ export class OutboundProcessor extends WorkerHost {
     // Normalise phone to match WhatsApp webhook format (no '+' prefix)
     const normalisedPhone = campaignPatient.phone.replace(/^\+/, '').replace(/\s/g, '');
 
+    const openingText = `Bonjour ${campaignPatient.patientName}, nous faisons suite à votre visite du ${visitDate}. Comment vous sentez-vous depuis ?`;
+
     const session: CampaignSession = {
       phone:             normalisedPhone,
       campaignPatientId: campaignPatient.id,
       clinicId,
       patientSnapshot:   campaignPatient.patientSnapshot as Record<string, any>,
       language:          null,
-      messages:          [],
+      messages:          [
+        // Log the opening template message so Claude has full conversation context
+        { role: 'assistant', content: openingText, timestamp: Date.now() },
+      ],
       turnCount:         0,
       remindersSent:     0,
       status:            'awaiting_reply',

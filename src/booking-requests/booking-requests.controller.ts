@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Delete,
   Param,
   Body,
   Query,
@@ -56,5 +57,11 @@ export class BookingRequestsController {
     @Body() dto?: RejectBookingRequestDto,
   ) {
     return this.bookingRequestsService.reject(req.user.clinicId, id, dto);
+  }
+
+  // DELETE /api/admin/v1/booking-requests/:id
+  @Delete(':id')
+  remove(@Request() req: any, @Param('id') id: string) {
+    return this.bookingRequestsService.remove(req.user.clinicId, id);
   }
 }

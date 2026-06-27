@@ -186,6 +186,22 @@ export class BookingRequestsService {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // DELETE — hard delete a booking request
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  async remove(clinicId: string, id: string): Promise<void> {
+    const bookingRequest = await this.findOneRaw(clinicId, id);
+
+    this.logger.log(
+      `Deleting booking request ${id} for clinic ${clinicId}`,
+    );
+
+    await this.prisma.bookingRequest.delete({
+      where: { id },
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // REJECT
   // ═══════════════════════════════════════════════════════════════════════════
 

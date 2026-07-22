@@ -54,18 +54,21 @@ export class AiService {
       const completion = await this.client.chat.completions.create({
         model: this.MODEL,
         messages: [{ role: 'user', content: prompt }],
-        max_tokens: 10,       // intent is a single word — no need for more
-        temperature: 0,       // deterministic — we want consistent classification
+        max_tokens: 10, // intent is a single word — no need for more
+        temperature: 0, // deterministic — we want consistent classification
       });
 
-      const response = completion.choices[0]?.message?.content?.trim().toUpperCase() ?? '';
+      const response =
+        completion.choices[0]?.message?.content?.trim().toUpperCase() ?? '';
       this.logger.log(`Groq intent: "${response}" for: "${userMessage}"`);
 
       if (Object.values(Intent).includes(response as Intent)) {
         return response as Intent;
       }
 
-      this.logger.warn(`Groq returned unknown intent: "${response}" — using UNKNOWN`);
+      this.logger.warn(
+        `Groq returned unknown intent: "${response}" — using UNKNOWN`,
+      );
       return Intent.UNKNOWN;
     } catch (error: any) {
       this.logger.error('Groq intent detection failed', error.message);
@@ -85,7 +88,8 @@ export class AiService {
         temperature: 0,
       });
 
-      const response = completion.choices[0]?.message?.content?.trim().toUpperCase() ?? '';
+      const response =
+        completion.choices[0]?.message?.content?.trim().toUpperCase() ?? '';
       this.logger.log(`Groq language: "${response}" for: "${userMessage}"`);
 
       if (response === 'FR' || response === 'EN') return response;
@@ -104,7 +108,9 @@ export class AiService {
     if (!this.isEnabled || faqs.length === 0) return null;
 
     try {
-      const list = faqs.map((f, i) => `${i + 1}. [${f.id}] ${f.question}`).join('\n');
+      const list = faqs
+        .map((f, i) => `${i + 1}. [${f.id}] ${f.question}`)
+        .join('\n');
       const prompt = `The user asked: "${userMessage}"\n\nAvailable FAQs:\n${list}\n\nWhich FAQ id best answers the user's question? Reply with ONLY the FAQ id string (e.g. "clx123abc"). If none match well, reply: NONE`;
 
       const completion = await this.client.chat.completions.create({
@@ -142,14 +148,18 @@ export class AiService {
 
     // ── Confirm / Cancel ───────────────────────────────────────────────────
     if (
-      /^(oui|yes|yep|confirm|confirmer|d'accord|ok|okay|c'est bon|exact|correct|✅|sure)$/i.test(lower) ||
+      /^(oui|yes|yep|confirm|confirmer|d'accord|ok|okay|c'est bon|exact|correct|✅|sure)$/i.test(
+        lower,
+      ) ||
       lower.includes('confirm_yes')
     ) {
       return Intent.CONFIRM;
     }
 
     if (
-      /^(non|no|nope|cancel|annuler|quitter|stop|retour|menu|↩|exit)$/i.test(lower) ||
+      /^(non|no|nope|cancel|annuler|quitter|stop|retour|menu|↩|exit)$/i.test(
+        lower,
+      ) ||
       lower.includes('confirm_no')
     ) {
       return Intent.CANCEL;
@@ -157,27 +167,37 @@ export class AiService {
 
     // ── Human agent ────────────────────────────────────────────────────────
     if (
-      /(agent|humain|human|operator|opérateur|personne|parler à|speak to|talk to|someone|conseiller|👤)/i.test(lower)
+      /(agent|humain|human|operator|opérateur|personne|parler à|speak to|talk to|someone|conseiller|👤)/i.test(
+        lower,
+      )
     ) {
       return Intent.HUMAN_AGENT;
     }
 
     // ── Book appointment ───────────────────────────────────────────────────
     if (
-      /\b(rdv|r\.d\.v|rndv|rendez-vous|rendezvous|appointment|réserver|reserver|booking|consulter|consultation|médecin|medecin|docteur|doctor|prendre|schedule|موعد)\b/i.test(lower)
+      /\b(rdv|r\.d\.v|rndv|rendez-vous|rendezvous|appointment|réserver|reserver|booking|consulter|consultation|médecin|medecin|docteur|doctor|prendre|schedule|موعد)\b/i.test(
+        lower,
+      )
     ) {
       return Intent.BOOK_APPOINTMENT;
     }
 
     // ── FAQ ────────────────────────────────────────────────────────────────
     if (
-      /(horaire|heure|adresse|prix|tarif|coût|cout|où|ou est|quand|ouvert|fermé|ferme|time|open|close|location|téléphone|telephone|contact|faq)/i.test(lower)
+      /(horaire|heure|adresse|prix|tarif|coût|cout|où|ou est|quand|ouvert|fermé|ferme|time|open|close|location|téléphone|telephone|contact|faq)/i.test(
+        lower,
+      )
     ) {
       return Intent.ASK_FAQ;
     }
 
     // ── Greeting ───────────────────────────────────────────────────────────
-    if (/^(bonjour|bonsoir|salam|salut|hello|hi|hey|bonne journée|ahlan)[\s!,.]*$/i.test(lower)) {
+    if (
+      /^(bonjour|bonsoir|salam|salut|hello|hi|hey|bonne journée|ahlan)[\s!,.]*$/i.test(
+        lower,
+      )
+    ) {
       return Intent.GREETING;
     }
 

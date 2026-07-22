@@ -24,9 +24,9 @@ export class ComplaintsController {
   findAll(
     @Request() req: any,
     @Query('campaignId') campaignId?: string,
-    @Query('status')     status?: ComplaintStatus,
-    @Query('severity')   severity?: string,
-    @Query('type')       type?: string,
+    @Query('status') status?: ComplaintStatus,
+    @Query('severity') severity?: string,
+    @Query('type') type?: string,
   ) {
     return this.complaintsService.findAll(req.user.clinicId, {
       campaignId,
@@ -49,7 +49,11 @@ export class ComplaintsController {
     @Param('id') id: string,
     @Body() dto: UpdateComplaintStatusDto,
   ) {
-    return this.complaintsService.updateStatus(req.user.clinicId, id, dto.status);
+    return this.complaintsService.updateStatus(
+      req.user.clinicId,
+      id,
+      dto.status,
+    );
   }
 
   // PATCH /api/admin/v1/complaints/:id/staff-note
@@ -59,6 +63,10 @@ export class ComplaintsController {
     @Param('id') id: string,
     @Body() dto: UpdateComplaintStaffNoteDto,
   ) {
-    return this.complaintsService.updateStaffNote(req.user.clinicId, id, dto.staffNote);
+    return this.complaintsService.updateStaffNote(
+      req.user.clinicId,
+      id,
+      dto.staffNote,
+    );
   }
 }

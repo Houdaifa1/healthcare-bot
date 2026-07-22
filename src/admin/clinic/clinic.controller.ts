@@ -1,10 +1,4 @@
-import {
-  Controller,
-  Get,
-  Patch,
-  Body,
-  UseGuards,
-} from '@nestjs/common';
+import { Controller, Get, Patch, Body, UseGuards } from '@nestjs/common';
 import { ClinicService } from './clinic.service';
 import { UpdateClinicDto } from './dto/update-clinic.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -18,11 +12,11 @@ export class ClinicController {
 
   @Get()
   getClinic(@CurrentUser() user: AuthUser) {
-  return this.clinicService.getClinic(user.clinicId);
-}
+    return this.clinicService.getClinic(user.clinicId);
+  }
 
   @Patch()
   updateClinic(@CurrentUser() user: AuthUser, @Body() dto: UpdateClinicDto) {
-  return this.clinicService.updateClinic(user.clinicId, dto);
-}
+    return this.clinicService.updateClinic(user.clinicId, dto);
+  }
 }

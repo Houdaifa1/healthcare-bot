@@ -28,7 +28,7 @@ export class AvailabilityService {
 
     // Compute today in the given timezone
     const todayInTz = this.getTodayInTimezone(timezone);
-    let currentDate = todayInTz;
+    const currentDate = todayInTz;
 
     // Cap at 90 days to prevent infinite loop when all slots are booked
     const MAX_DAYS = 90;
@@ -173,23 +173,37 @@ export class AvailabilityService {
    * Preserves the slotDurationMinutes of the first slot in each merged group.
    */
   private mergeTimeRanges(
-    slots: { startTime: string; endTime: string; slotDurationMinutes: number }[],
+    slots: {
+      startTime: string;
+      endTime: string;
+      slotDurationMinutes: number;
+    }[],
   ): { startTime: string; endTime: string; slotDurationMinutes: number }[] {
     if (slots.length === 0) return [];
-    
+
     // Sort by startTime
-    const sorted = [...slots].sort((a, b) => a.startTime.localeCompare(b.startTime));
-    
-    const merged: { startTime: string; endTime: string; slotDurationMinutes: number }[] = [];
+    const sorted = [...slots].sort((a, b) =>
+      a.startTime.localeCompare(b.startTime),
+    );
+
+    const merged: {
+      startTime: string;
+      endTime: string;
+      slotDurationMinutes: number;
+    }[] = [];
     let current = { ...sorted[0] };
 
     for (let i = 1; i < sorted.length; i++) {
       const next = sorted[i];
       if (this.rangesOverlap(current, next)) {
         // Merge: take earliest start, latest end
-        current.endTime = current.endTime > next.endTime ? current.endTime : next.endTime;
+        current.endTime =
+          current.endTime > next.endTime ? current.endTime : next.endTime;
         // Keep the smallest slot duration (most granular)
-        current.slotDurationMinutes = Math.min(current.slotDurationMinutes, next.slotDurationMinutes);
+        current.slotDurationMinutes = Math.min(
+          current.slotDurationMinutes,
+          next.slotDurationMinutes,
+        );
       } else {
         merged.push(current);
         current = { ...next };
@@ -203,14 +217,29 @@ export class AvailabilityService {
    * Merge all time slots on the same day so overlapping ranges become one.
    */
   private mergeSlotsByDay(
-    timeSlots: { dayOfWeek: number; startTime: string; endTime: string; slotDurationMinutes: number }[],
-  ): Map<number, { startTime: string; endTime: string; slotDurationMinutes: number }[]> {
-    const byDay = new Map<number, { startTime: string; endTime: string; slotDurationMinutes: number }[]>();
+    timeSlots: {
+      dayOfWeek: number;
+      startTime: string;
+      endTime: string;
+      slotDurationMinutes: number;
+    }[],
+  ): Map<
+    number,
+    { startTime: string; endTime: string; slotDurationMinutes: number }[]
+  > {
+    const byDay = new Map<
+      number,
+      { startTime: string; endTime: string; slotDurationMinutes: number }[]
+    >();
 
     // Group by day
     for (const slot of timeSlots) {
       const arr = byDay.get(slot.dayOfWeek) ?? [];
-      arr.push({ startTime: slot.startTime, endTime: slot.endTime, slotDurationMinutes: slot.slotDurationMinutes });
+      arr.push({
+        startTime: slot.startTime,
+        endTime: slot.endTime,
+        slotDurationMinutes: slot.slotDurationMinutes,
+      });
       byDay.set(slot.dayOfWeek, arr);
     }
 

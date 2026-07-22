@@ -1,4 +1,8 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TimeSlot } from '@prisma/client';
 import { CreateTimeSlotDto } from './dto/create-timeslot.dto';
@@ -12,14 +16,20 @@ export class TimeSlotsService {
    * Time ranges overlap if A starts before or at B ends AND A ends after or at B starts.
    * Using <=/>= so touching/identical boundaries are detected as overlapping and merged.
    */
-  private rangesOverlap(a: { start: string; end: string }, b: { start: string; end: string }): boolean {
+  private rangesOverlap(
+    a: { start: string; end: string },
+    b: { start: string; end: string },
+  ): boolean {
     return a.start <= b.end && a.end >= b.start;
   }
 
   /**
    * Two slots are on the same day and their time ranges touch or overlap.
    */
-  private slotsTouchOrOverlap(a: { dayOfWeek: number; startTime: string; endTime: string }, b: { dayOfWeek: number; startTime: string; endTime: string }): boolean {
+  private slotsTouchOrOverlap(
+    a: { dayOfWeek: number; startTime: string; endTime: string },
+    b: { dayOfWeek: number; startTime: string; endTime: string },
+  ): boolean {
     if (a.dayOfWeek !== b.dayOfWeek) return false;
     return this.rangesOverlap(
       { start: a.startTime, end: a.endTime },
@@ -31,14 +41,19 @@ export class TimeSlotsService {
    * Validate that endTime is strictly after startTime.
    * Also validate that the range is large enough for at least one slot of the given duration.
    */
-  private validateTimeRange(startTime: string, endTime: string, slotDurationMinutes?: number): void {
+  private validateTimeRange(
+    startTime: string,
+    endTime: string,
+    slotDurationMinutes?: number,
+  ): void {
     if (startTime >= endTime) {
       throw new BadRequestException(
         `endTime (${endTime}) must be strictly after startTime (${startTime})`,
       );
     }
     if (slotDurationMinutes && slotDurationMinutes > 0) {
-      const diffMinutes = this.timeToMinutes(endTime) - this.timeToMinutes(startTime);
+      const diffMinutes =
+        this.timeToMinutes(endTime) - this.timeToMinutes(startTime);
       if (diffMinutes < slotDurationMinutes) {
         throw new BadRequestException(
           `Time range (${startTime} to ${endTime}) is only ${diffMinutes}min but slot duration is ${slotDurationMinutes}min`,
@@ -83,10 +98,7 @@ export class TimeSlotsService {
    * Find all active slots on the given day for a doctor, merge the new slot
    * with any overlapping/adjacent ones, delete the old ones, create the merged slot.
    */
-  async create(
-    doctorId: string,
-    dto: CreateTimeSlotDto,
-  ): Promise<TimeSlot> {
+  async create(doctorId: string, dto: CreateTimeSlotDto): Promise<TimeSlot> {
     this.validateSlotDuration(dto.slotDurationMinutes);
     this.validateTimeRange(dto.startTime, dto.endTime, dto.slotDurationMinutes);
 
@@ -107,7 +119,9 @@ export class TimeSlotsService {
     });
 
     // Check if any existing slot touches or overlaps with the incoming one
-    const touching = existingSlots.filter(s => this.slotsTouchOrOverlap(incoming, s));
+    const touching = existingSlots.filter((s) =>
+      this.slotsTouchOrOverlap(incoming, s),
+    );
 
     if (touching.length > 0) {
       // Merge all ranges together
@@ -164,17 +178,11 @@ export class TimeSlotsService {
   async findAll(doctorId: string): Promise<TimeSlot[]> {
     return this.prisma.timeSlot.findMany({
       where: { doctorId },
-      orderBy: [
-        { dayOfWeek: 'asc' },
-        { startTime: 'asc' },
-      ],
+      orderBy: [{ dayOfWeek: 'asc' }, { startTime: 'asc' }],
     });
   }
 
-  async update(
-    id: string,
-    dto: UpdateTimeSlotDto,
-  ): Promise<TimeSlot> {
+  async update(id: string, dto: UpdateTimeSlotDto): Promise<TimeSlot> {
     // Get the current slot before updating
     const existing = await this.prisma.timeSlot.findUnique({ where: { id } });
     if (!existing) {
@@ -184,7 +192,8 @@ export class TimeSlotsService {
     // Resolve final values (use existing if not updating)
     const startTime = dto.startTime ?? existing.startTime;
     const endTime = dto.endTime ?? existing.endTime;
-    const slotDurationMinutes = dto.slotDurationMinutes ?? existing.slotDurationMinutes;
+    const slotDurationMinutes =
+      dto.slotDurationMinutes ?? existing.slotDurationMinutes;
 
     this.validateSlotDuration(slotDurationMinutes);
     this.validateTimeRange(startTime, endTime, slotDurationMinutes);
@@ -216,7 +225,9 @@ export class TimeSlotsService {
       endTime: updated.endTime,
     };
 
-    const touching = otherSlots.filter(s => this.slotsTouchOrOverlap(incoming, s));
+    const touching = otherSlots.filter((s) =>
+      this.slotsTouchOrOverlap(incoming, s),
+    );
 
     if (touching.length > 0) {
       // Merge all ranges together

@@ -4,7 +4,7 @@ import { AppointmentStatus } from '@prisma/client';
 
 @Injectable()
 export class AdminService {
-  constructor(private prisma: PrismaService) { }
+  constructor(private prisma: PrismaService) {}
 
   // ─── Dashboard stats ──────────────────────────────────
   async getStats() {

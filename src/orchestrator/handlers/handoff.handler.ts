@@ -15,7 +15,7 @@ export class HandoffHandler {
     private readonly botMessageService: BotMessageService,
     private readonly configService: ConfigService,
     private readonly prisma: PrismaService,
-  ) { }
+  ) {}
 
   async handle(phone: string, text: string, session: Session): Promise<void> {
     if (session.state === SessionState.AWAITING_HANDOFF) {
@@ -43,7 +43,9 @@ export class HandoffHandler {
         session.data.language,
         'Menu',
       );
-      await this.whatsappService.sendButtons(phone, message, [{ id: 'menu', title: btnMenu }]);
+      await this.whatsappService.sendButtons(phone, message, [
+        { id: 'menu', title: btnMenu },
+      ]);
       return;
     }
 
@@ -75,27 +77,48 @@ export class HandoffHandler {
     }
   }
 
-  private async showWelcomeMenu(phone: string, session: Session): Promise<void> {
-  const clinic = await this.prisma.clinic.findUnique({
-    where: { id: session.data.clinicId },
-    select: { name: true },
-  });
+  private async showWelcomeMenu(
+    phone: string,
+    session: Session,
+  ): Promise<void> {
+    const clinic = await this.prisma.clinic.findUnique({
+      where: { id: session.data.clinicId },
+      select: { name: true },
+    });
 
-  const message = await this.botMessageService.getSafe(
-    session.data.clinicId,
-    MessageKey.WELCOME,
-    { clinicName: clinic?.name ?? '' },
-    session.data.language,
-    'Welcome! How can I help you?',
-  );
+    const message = await this.botMessageService.getSafe(
+      session.data.clinicId,
+      MessageKey.WELCOME,
+      { clinicName: clinic?.name ?? '' },
+      session.data.language,
+      'Welcome! How can I help you?',
+    );
 
-  const btnBook = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_BOOK_APP, {}, session.data.language, 'Book appointment');
-  const btnFaq = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_FAQ, {}, session.data.language, 'FAQ');
-  const btnAgent = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_AGENT, {}, session.data.language, 'Talk to agent');
-  await this.whatsappService.sendButtons(phone, message, [
-    { id: 'book_appointment', title: btnBook },
-    { id: 'faq', title: btnFaq },
-    { id: 'human_agent', title: btnAgent },
-  ]);
-}
+    const btnBook = await this.botMessageService.getSafe(
+      session.data.clinicId,
+      MessageKey.BUTTON_BOOK_APP,
+      {},
+      session.data.language,
+      'Book appointment',
+    );
+    const btnFaq = await this.botMessageService.getSafe(
+      session.data.clinicId,
+      MessageKey.BUTTON_FAQ,
+      {},
+      session.data.language,
+      'FAQ',
+    );
+    const btnAgent = await this.botMessageService.getSafe(
+      session.data.clinicId,
+      MessageKey.BUTTON_AGENT,
+      {},
+      session.data.language,
+      'Talk to agent',
+    );
+    await this.whatsappService.sendButtons(phone, message, [
+      { id: 'book_appointment', title: btnBook },
+      { id: 'faq', title: btnFaq },
+      { id: 'human_agent', title: btnAgent },
+    ]);
+  }
 }

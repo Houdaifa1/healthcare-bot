@@ -23,10 +23,7 @@ export class FaqsController {
   constructor(private readonly faqsService: FaqsService) {}
 
   @Post()
-  create(
-    @CurrentUser() user: AuthUser,
-    @Body() createFaqDto: CreateFaqDto,
-  ) {
+  create(@CurrentUser() user: AuthUser, @Body() createFaqDto: CreateFaqDto) {
     return this.faqsService.create(user.clinicId, createFaqDto);
   }
 
@@ -36,7 +33,11 @@ export class FaqsController {
     @Query('language') language?: Language,
     @Query('includeInactive') includeInactive?: string,
   ) {
-    return this.faqsService.findAll(user.clinicId, language, includeInactive === 'true');
+    return this.faqsService.findAll(
+      user.clinicId,
+      language,
+      includeInactive === 'true',
+    );
   }
 
   @Patch(':id')

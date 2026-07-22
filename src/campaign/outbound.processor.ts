@@ -1,7 +1,12 @@
 import { Processor, WorkerHost, OnWorkerEvent } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
-import { CampaignStatus, CampaignPatientStatus, Language, MessageKey } from '@prisma/client';
+import {
+  CampaignStatus,
+  CampaignPatientStatus,
+  Language,
+  MessageKey,
+} from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { SessionsService, CampaignSession } from '../sessions/sessions.service';
 import { WhatsAppService } from '../whatsapp/whatsapp.service';
@@ -21,7 +26,7 @@ export class OutboundProcessor extends WorkerHost {
   private readonly logger = new Logger(OutboundProcessor.name);
 
   constructor(
-    private readonly prisma:          PrismaService,
+    private readonly prisma: PrismaService,
     private readonly sessionsService: SessionsService,
     private readonly whatsappService: WhatsAppService,
   ) {
@@ -79,13 +84,11 @@ export class OutboundProcessor extends WorkerHost {
         await this.prisma.campaignPatient.update({
           where: { id: campaignPatientId },
           data: {
-            status:   CampaignPatientStatus.PARKED,
+            status: CampaignPatientStatus.PARKED,
             parkedAt: new Date(),
           },
         });
-        this.logger.log(
-          `CampaignPatient ${campaignPatientId} status → PARKED`,
-        );
+        this.logger.log(`CampaignPatient ${campaignPatientId} status → PARKED`);
       }
       return;
     }
@@ -126,7 +129,9 @@ export class OutboundProcessor extends WorkerHost {
 
     // ── 9. Build template variables ────────────────────────────────────────
     // {{1}} = patient name, {{2}} = visit date formatted as dd/MM/yyyy
-    const visitDate = new Date(campaignPatient.visitDate).toLocaleDateString('fr-FR');
+    const visitDate = new Date(campaignPatient.visitDate).toLocaleDateString(
+      'fr-FR',
+    );
 
     // ── 10. Send approved Meta template — works for new contacts ──────────
     // sendText() fails for contacts who have never messaged the clinic before
@@ -154,25 +159,27 @@ export class OutboundProcessor extends WorkerHost {
 
     // ── 11. Create campaign Redis session ──────────────────────────────────
     // Normalise phone to match WhatsApp webhook format (no '+' prefix)
-    const normalisedPhone = campaignPatient.phone.replace(/^\+/, '').replace(/\s/g, '');
+    const normalisedPhone = campaignPatient.phone
+      .replace(/^\+/, '')
+      .replace(/\s/g, '');
 
     const openingText = `Bonjour ${campaignPatient.patientName}, nous faisons suite à votre visite du ${visitDate}. Comment vous sentez-vous depuis ?`;
 
     const session: CampaignSession = {
-      phone:             normalisedPhone,
+      phone: normalisedPhone,
       campaignPatientId: campaignPatient.id,
       clinicId,
-      patientSnapshot:   campaignPatient.patientSnapshot as Record<string, any>,
-      language:          null,
-      messages:          [
+      patientSnapshot: campaignPatient.patientSnapshot as Record<string, any>,
+      language: null,
+      messages: [
         // Log the opening template message so Claude has full conversation context
         { role: 'assistant', content: openingText, timestamp: Date.now() },
       ],
-      turnCount:         0,
-      remindersSent:     0,
-      status:            'awaiting_reply',
-      startedAt:         Date.now(),
-      lastActivityAt:    Date.now(),
+      turnCount: 0,
+      remindersSent: 0,
+      status: 'awaiting_reply',
+      startedAt: Date.now(),
+      lastActivityAt: Date.now(),
     };
 
     await this.sessionsService.saveCampaignSession(session);
@@ -185,16 +192,16 @@ export class OutboundProcessor extends WorkerHost {
     await this.prisma.campaignPatient.update({
       where: { id: campaignPatientId },
       data: {
-        status:      CampaignPatientStatus.CONTACTED,
+        status: CampaignPatientStatus.CONTACTED,
         contactedAt: new Date(),
-        parkedAt:    null,
+        parkedAt: null,
       },
     });
 
     // ── 13. Increment Campaign.contactedCount ──────────────────────────────
     await this.prisma.campaign.update({
       where: { id: campaignId },
-      data:  { contactedCount: { increment: 1 } },
+      data: { contactedCount: { increment: 1 } },
     });
 
     this.logger.log(
@@ -213,7 +220,7 @@ export class OutboundProcessor extends WorkerHost {
    */
   private async fetchBotMessage(
     clinicId: string,
-    key:      MessageKey,
+    key: MessageKey,
     language: Language,
   ): Promise<string | null> {
     const record = await this.prisma.botMessage.findUnique({

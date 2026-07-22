@@ -1,4 +1,10 @@
-import { IsString, IsOptional, IsInt, IsBoolean, IsArray } from 'class-validator';
+import {
+  IsString,
+  IsOptional,
+  IsInt,
+  IsBoolean,
+  IsArray,
+} from 'class-validator';
 import { Language } from '@prisma/client';
 
 export class UpdateFaqDto {

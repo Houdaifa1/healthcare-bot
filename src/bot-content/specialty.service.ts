@@ -6,10 +6,7 @@ import { Language, Specialty } from '@prisma/client';
 export class SpecialtyService {
   constructor(private prisma: PrismaService) {}
 
-  async findActive(
-    clinicId: string,
-    language: Language,
-  ): Promise<Specialty[]> {
+  async findActive(clinicId: string, language: Language): Promise<Specialty[]> {
     const all = await this.prisma.specialty.findMany({
       where: {
         clinicId,

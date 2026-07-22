@@ -14,6 +14,6 @@ import { CampaignModule } from '../campaign/campaign.module';
     CampaignModule,
   ],
   providers: [MessageProcessor],
-  exports:   [BullModule],
+  exports: [BullModule],
 })
 export class QueueModule {}

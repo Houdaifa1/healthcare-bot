@@ -10,7 +10,6 @@ import { fr } from 'date-fns/locale';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AiService, Intent } from '../../ai/ai.service';
 
-
 @Injectable()
 export class DateHandler {
   constructor(
@@ -20,7 +19,7 @@ export class DateHandler {
     private readonly botMessageService: BotMessageService,
     private readonly prisma: PrismaService,
     private readonly aiService: AiService,
-  ) { }
+  ) {}
 
   async handle(phone: string, text: string, session: Session): Promise<void> {
     const trimmed = text.trim().toLowerCase();
@@ -36,7 +35,11 @@ export class DateHandler {
     const doctorId = session.data.doctorId;
     if (!doctorId) {
       const msg = await this.botMessageService.getSafe(
-        session.data.clinicId, MessageKey.ERROR_MISSING_DOCTOR, {}, session.data.language, 'Missing doctor. Please start over.'
+        session.data.clinicId,
+        MessageKey.ERROR_MISSING_DOCTOR,
+        {},
+        session.data.language,
+        'Missing doctor. Please start over.',
       );
       await this.whatsappService.sendText(phone, msg);
       await this.sessionsService.reset(phone);
@@ -46,7 +49,11 @@ export class DateHandler {
     const date = await this.resolveDate(text, doctorId);
 
     if (!date) {
-      const intent = await this.aiService.detectIntent(text, session.state, session.data.language);
+      const intent = await this.aiService.detectIntent(
+        text,
+        session.state,
+        session.data.language,
+      );
 
       if (intent === Intent.CANCEL || intent === Intent.GREETING) {
         session.state = SessionState.IDLE;
@@ -60,7 +67,11 @@ export class DateHandler {
         session.state = SessionState.AWAITING_HANDOFF;
         await this.sessionsService.save(session);
         const message = await this.botMessageService.getSafe(
-          session.data.clinicId, MessageKey.HANDOFF_TRIGGERED, {}, session.data.language, 'Connecting you with our team.'
+          session.data.clinicId,
+          MessageKey.HANDOFF_TRIGGERED,
+          {},
+          session.data.language,
+          'Connecting you with our team.',
         );
         await this.whatsappService.sendText(phone, message);
         return;
@@ -81,7 +92,11 @@ export class DateHandler {
 
     if (availableSlots.length === 0) {
       const message = await this.botMessageService.getSafe(
-        session.data.clinicId, MessageKey.NO_SLOTS_AVAILABLE, {}, session.data.language, 'No slots available.'
+        session.data.clinicId,
+        MessageKey.NO_SLOTS_AVAILABLE,
+        {},
+        session.data.language,
+        'No slots available.',
       );
       await this.whatsappService.sendText(phone, message);
       session.state = SessionState.BOOKING_DATE;
@@ -91,14 +106,26 @@ export class DateHandler {
     }
 
     const message = await this.botMessageService.getSafe(
-      session.data.clinicId, MessageKey.SELECT_TIME, {}, session.data.language, 'Please choose a time:'
+      session.data.clinicId,
+      MessageKey.SELECT_TIME,
+      {},
+      session.data.language,
+      'Please choose a time:',
     );
 
     const headerTimes = await this.botMessageService.getSafe(
-      session.data.clinicId, MessageKey.HEADER_TIMES, {}, session.data.language, 'Available Times'
+      session.data.clinicId,
+      MessageKey.HEADER_TIMES,
+      {},
+      session.data.language,
+      'Available Times',
     );
     const headerSelectTime = await this.botMessageService.getSafe(
-      session.data.clinicId, MessageKey.HEADER_SELECT_TIME, {}, session.data.language, 'Select a time'
+      session.data.clinicId,
+      MessageKey.HEADER_SELECT_TIME,
+      {},
+      session.data.language,
+      'Select a time',
     );
 
     await this.whatsappService.sendInteractiveList(
@@ -132,7 +159,11 @@ export class DateHandler {
 
     if (availableDates.length === 0) {
       const message = await this.botMessageService.getSafe(
-        session.data.clinicId, MessageKey.NO_SLOTS_AVAILABLE, {}, session.data.language, 'No slots available.'
+        session.data.clinicId,
+        MessageKey.NO_SLOTS_AVAILABLE,
+        {},
+        session.data.language,
+        'No slots available.',
       );
       await this.whatsappService.sendText(phone, message);
       session.state = SessionState.BOOKING_DOCTOR;
@@ -141,7 +172,11 @@ export class DateHandler {
     }
 
     const message = await this.botMessageService.getSafe(
-      session.data.clinicId, MessageKey.SELECT_DATE, {}, session.data.language, 'Please choose a date:'
+      session.data.clinicId,
+      MessageKey.SELECT_DATE,
+      {},
+      session.data.language,
+      'Please choose a date:',
     );
 
     await this.whatsappService.sendButtons(
@@ -188,7 +223,10 @@ export class DateHandler {
     return null;
   }
 
-  private async showWelcomeMenu(phone: string, session: Session): Promise<void> {
+  private async showWelcomeMenu(
+    phone: string,
+    session: Session,
+  ): Promise<void> {
     const clinic = await this.prisma.clinic.findUnique({
       where: { id: session.data.clinicId },
       select: { name: true },
@@ -202,9 +240,27 @@ export class DateHandler {
       'Welcome! How can I help you?',
     );
 
-    const btnBook = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_BOOK_APP, {}, session.data.language, 'Book appointment');
-    const btnFaq = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_FAQ, {}, session.data.language, 'FAQ');
-    const btnAgent = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_AGENT, {}, session.data.language, 'Talk to agent');
+    const btnBook = await this.botMessageService.getSafe(
+      session.data.clinicId,
+      MessageKey.BUTTON_BOOK_APP,
+      {},
+      session.data.language,
+      'Book appointment',
+    );
+    const btnFaq = await this.botMessageService.getSafe(
+      session.data.clinicId,
+      MessageKey.BUTTON_FAQ,
+      {},
+      session.data.language,
+      'FAQ',
+    );
+    const btnAgent = await this.botMessageService.getSafe(
+      session.data.clinicId,
+      MessageKey.BUTTON_AGENT,
+      {},
+      session.data.language,
+      'Talk to agent',
+    );
     await this.whatsappService.sendButtons(phone, message, [
       { id: 'book_appointment', title: btnBook },
       { id: 'faq', title: btnFaq },

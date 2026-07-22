@@ -44,14 +44,20 @@ export class OrchestratorService implements OnModuleInit {
     ];
 
     for (const [state, handlerClass] of handlerClasses) {
-      const handlerInstance = this.moduleRef.get(handlerClass, { strict: false });
+      const handlerInstance = this.moduleRef.get(handlerClass, {
+        strict: false,
+      });
       this.handlers.set(state, handlerInstance);
     }
 
     this.logger.log(`Registered ${this.handlers.size} state handlers.`);
   }
 
-  async handleMessage(phone: string, text: string, session: Session): Promise<void> {
+  async handleMessage(
+    phone: string,
+    text: string,
+    session: Session,
+  ): Promise<void> {
     const handler = this.handlers.get(session.state);
     if (handler) {
       this.logger.log(
@@ -65,10 +71,7 @@ export class OrchestratorService implements OnModuleInit {
     }
   }
 
-  async transition(
-    session: Session,
-    newState: SessionState,
-  ): Promise<void> {
+  async transition(session: Session, newState: SessionState): Promise<void> {
     this.logger.log(
       `Transitioning ${session.phone} from ${session.state} to ${newState}`,
     );

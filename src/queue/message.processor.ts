@@ -7,9 +7,9 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ConversationService } from '../campaign/conversation.service';
 
 export interface MessageJob {
-  from:      string;
-  name:      string;
-  text:      string;
+  from: string;
+  name: string;
+  text: string;
   messageId: string;
   timestamp: string;
 }
@@ -19,10 +19,10 @@ export class MessageProcessor extends WorkerHost {
   private readonly logger = new Logger(MessageProcessor.name);
 
   constructor(
-    private readonly orchestratorService:   OrchestratorService,
-    private readonly sessionsService:       SessionsService,
-    private readonly prisma:               PrismaService,
-    private readonly conversationService:  ConversationService,
+    private readonly orchestratorService: OrchestratorService,
+    private readonly sessionsService: SessionsService,
+    private readonly prisma: PrismaService,
+    private readonly conversationService: ConversationService,
   ) {
     super();
   }
@@ -48,9 +48,12 @@ export class MessageProcessor extends WorkerHost {
     }
 
     // ── 3. Campaign routing ────────────────────────────────────────────────
-    const hasCampaign = await this.sessionsService.hasActiveCampaignSession(from);
+    const hasCampaign =
+      await this.sessionsService.hasActiveCampaignSession(from);
     if (hasCampaign) {
-      this.logger.log(`Phone ${from} has active campaign session — routing to ConversationService`);
+      this.logger.log(
+        `Phone ${from} has active campaign session — routing to ConversationService`,
+      );
       await this.conversationService.handleReply(from, text);
       return;
     }
@@ -58,23 +61,35 @@ export class MessageProcessor extends WorkerHost {
     // ── 3b. Handoff routing — store patient message so staff can see it ────
     const isHandoff = await this.sessionsService.isHandoffCampaignSession(from);
     if (isHandoff) {
-      this.logger.log(`Phone ${from} is in handoff/admin_handling — storing patient reply for staff`);
-      
+      this.logger.log(
+        `Phone ${from} is in handoff/admin_handling — storing patient reply for staff`,
+      );
+
       const session = await this.sessionsService.getCampaignSession(from);
       if (session) {
-        session.messages.push({ role: 'user', content: text, timestamp: Date.now() });
+        session.messages.push({
+          role: 'user',
+          content: text,
+          timestamp: Date.now(),
+        });
         session.lastActivityAt = Date.now();
         await this.sessionsService.saveCampaignSession(session);
 
         // Also persist to DB so it shows up in the campaign patient history
-        await this.prisma.campaignPatient.update({
-          where: { id: session.campaignPatientId },
-          data: { messages: session.messages as any },
-        }).catch(() => {
-          this.logger.warn(`Failed to persist handoff message to DB for ${from}`);
-        });
+        await this.prisma.campaignPatient
+          .update({
+            where: { id: session.campaignPatientId },
+            data: { messages: session.messages as any },
+          })
+          .catch(() => {
+            this.logger.warn(
+              `Failed to persist handoff message to DB for ${from}`,
+            );
+          });
 
-        this.logger.log(`Handoff message from ${from} stored in session — staff will see it`);
+        this.logger.log(
+          `Handoff message from ${from} stored in session — staff will see it`,
+        );
       }
       return;
     }
@@ -89,7 +104,9 @@ export class MessageProcessor extends WorkerHost {
 
     // ── 4a. Stale-state guard ──────────────────────────────────────────────
     if (session.state === SessionState.AWAITING_HANDOFF) {
-      this.logger.log(`Reactive session for ${from} stuck in AWAITING_HANDOFF — resetting to IDLE`);
+      this.logger.log(
+        `Reactive session for ${from} stuck in AWAITING_HANDOFF — resetting to IDLE`,
+      );
       await this.sessionsService.reset(from);
       const { session: freshSession } = await this.sessionsService.getOrCreate(
         from,
@@ -104,7 +121,7 @@ export class MessageProcessor extends WorkerHost {
     try {
       await this.orchestratorService.handleMessage(from, text, session);
     } catch (error: any) {
-      const message: string    = error?.message ?? '';
+      const message: string = error?.message ?? '';
       const statusCode: number =
         error?.output?.statusCode ??
         error?.response?.status ??
@@ -146,6 +163,8 @@ export class MessageProcessor extends WorkerHost {
 
   @OnWorkerEvent('failed')
   onFailed(job: Job, error: Error): void {
-    this.logger.error(`Job ${job.id} failed after all retries: ${error.message}`);
+    this.logger.error(
+      `Job ${job.id} failed after all retries: ${error.message}`,
+    );
   }
 }

@@ -10,7 +10,7 @@ import {
 export class CreateSpecialtyDto {
   @IsObject()
   @IsNotEmpty()
-  labels!: Record<string, string>;  // { "FR": "général", "EN": "general" }
+  labels!: Record<string, string>; // { "FR": "général", "EN": "general" }
 
   @IsString()
   @IsNotEmpty()

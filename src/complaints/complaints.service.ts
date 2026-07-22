@@ -1,8 +1,4 @@
-import {
-  Injectable,
-  Logger,
-  NotFoundException,
-} from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Complaint, ComplaintStatus } from '@prisma/client';
 
@@ -52,10 +48,10 @@ export class ComplaintsService {
       include: {
         campaignPatient: {
           select: {
-            id:           true,
-            patientName:  true,
-            phone:        true,
-            campaignId:   true,
+            id: true,
+            patientName: true,
+            phone: true,
+            campaignId: true,
           },
         },
       },
@@ -73,13 +69,13 @@ export class ComplaintsService {
       include: {
         campaignPatient: {
           select: {
-            id:               true,
-            patientName:      true,
-            phone:            true,
-            campaignId:       true,
-            visitDate:        true,
-            prestation:       true,
-            medecinTraitant:  true,
+            id: true,
+            patientName: true,
+            phone: true,
+            campaignId: true,
+            visitDate: true,
+            prestation: true,
+            medecinTraitant: true,
           },
         },
       },
@@ -142,7 +138,7 @@ export class ComplaintsService {
 
     return this.prisma.complaint.update({
       where: { id },
-      data:  { staffNote },
+      data: { staffNote },
     });
   }
 }

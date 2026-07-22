@@ -1,0 +1,77 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: hc-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: hcadmin
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: healthcare_bot
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hcadmin -d healthcare_bot"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [hcnet]
+
+  redis:
+    image: redis:7-alpine
+    container_name: hc-redis
+    restart: unless-stopped
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [hcnet]
+
+  backend:
+    build: .
+    container_name: healthcare-bot
+    restart: unless-stopped
+    env_file: .env.production
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./prisma:/app/prisma
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks: [hcnet]
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: hc-tunnel
+    restart: unless-stopped
+    command: tunnel --config /etc/cloudflared/config.yml run
+    volumes:
+      - ./cloudflared:/etc/cloudflared:ro
+    depends_on:
+      - backend
+    networks: [hcnet]
+    
+  prisma-shadow:
+    image: postgres:16-alpine
+    container_name: prisma-shadow
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: shadow
+      POSTGRES_PASSWORD: shadow
+      POSTGRES_DB: shadow
+    ports:
+      - "127.0.0.1:5433:5432"
+    networks: [hcnet]
+    profiles: ["dev"]
+
+networks:
+  hcnet:
+
+volumes:
+  pgdata:
+  redisdata:

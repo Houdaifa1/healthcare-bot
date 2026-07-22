@@ -1,0 +1,7 @@
+tunnel: e3b44f25-4cdc-41b1-90c3-58090e0c1252
+credentials-file: /etc/cloudflared/creds.json
+
+ingress:
+  - hostname: api.houdaifa.dev
+    service: http://backend:3000
+  - service: http_status:404

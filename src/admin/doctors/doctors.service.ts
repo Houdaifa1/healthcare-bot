@@ -1,8 +1,4 @@
-import {
-  Injectable,
-  BadRequestException,
-  Logger,
-} from '@nestjs/common';
+import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { Doctor } from '@prisma/client';
 import { CreateDoctorDto } from './dto/create-doctor.dto';
@@ -54,7 +50,11 @@ export class DoctorsService {
     });
   }
 
-  async update(id: string, clinicId: string, dto: UpdateDoctorDto): Promise<Doctor> {
+  async update(
+    id: string,
+    clinicId: string,
+    dto: UpdateDoctorDto,
+  ): Promise<Doctor> {
     const doctor = await this.clinicGuard.validateDoctorBelongsToClinic(
       id,
       clinicId,
@@ -298,7 +298,10 @@ export class DoctorsService {
             ? customMessage
                 .replace(/\{patientName\}/g, apt.patientName)
                 .replace(/\{doctorName\}/g, doctor.name)
-                .replace(/\{appointmentDate\}/g, apt.appointmentDate.toISOString().split('T')[0])
+                .replace(
+                  /\{appointmentDate\}/g,
+                  apt.appointmentDate.toISOString().split('T')[0],
+                )
                 .replace(/\{appointmentTime\}/g, apt.appointmentTime)
             : `Cher patient, votre rendez-vous chez ${doctor.name} a été annulé. Veuillez nous contacter pour reprogrammer. Merci de votre compréhension.`;
 
@@ -318,7 +321,8 @@ export class DoctorsService {
       cancelledAppointments: appointmentsToCancel.length,
       notified: notify,
       notifiedCount,
-      notificationErrors: notificationErrors.length > 0 ? notificationErrors : undefined,
+      notificationErrors:
+        notificationErrors.length > 0 ? notificationErrors : undefined,
     };
   }
 
@@ -445,7 +449,10 @@ export class DoctorsService {
             ? customMessage
                 .replace(/\{patientName\}/g, apt.patientName)
                 .replace(/\{doctorName\}/g, doctor.name)
-                .replace(/\{appointmentDate\}/g, apt.appointmentDate.toISOString().split('T')[0])
+                .replace(
+                  /\{appointmentDate\}/g,
+                  apt.appointmentDate.toISOString().split('T')[0],
+                )
                 .replace(/\{appointmentTime\}/g, apt.appointmentTime)
             : `Cher patient, votre rendez-vous chez ${doctor.name} a été annulé. Veuillez nous contacter pour reprogrammer. Merci de votre compréhension.`;
 
@@ -465,7 +472,8 @@ export class DoctorsService {
       cancelledAppointments: appointmentsToCancel.length,
       notified: notify,
       notifiedCount,
-      notificationErrors: notificationErrors.length > 0 ? notificationErrors : undefined,
+      notificationErrors:
+        notificationErrors.length > 0 ? notificationErrors : undefined,
     };
   }
 }

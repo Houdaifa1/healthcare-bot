@@ -55,10 +55,26 @@ export class LanguageSelectHandler {
 
     // Ambiguous — ask again
     const message = await this.botMessageService.getSafe(
-      session.data.clinicId, MessageKey.LANGUAGE_PROMPT, {}, session.data.language, 'Choose your language:'
+      session.data.clinicId,
+      MessageKey.LANGUAGE_PROMPT,
+      {},
+      session.data.language,
+      'Choose your language:',
     );
-    const btnFr = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_FRENCH, {}, session.data.language, 'Français');
-    const btnEn = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_ENGLISH, {}, session.data.language, 'English');
+    const btnFr = await this.botMessageService.getSafe(
+      session.data.clinicId,
+      MessageKey.BUTTON_FRENCH,
+      {},
+      session.data.language,
+      'Français',
+    );
+    const btnEn = await this.botMessageService.getSafe(
+      session.data.clinicId,
+      MessageKey.BUTTON_ENGLISH,
+      {},
+      session.data.language,
+      'English',
+    );
     await this.whatsappService.sendButtons(phone, message, [
       { id: 'lang_fr', title: btnFr },
       { id: 'lang_en', title: btnEn },

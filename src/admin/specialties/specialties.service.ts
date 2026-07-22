@@ -38,7 +38,10 @@ export class SpecialtiesService {
     });
   }
 
-  async update(id: string, updateSpecialtyDto: UpdateSpecialtyDto): Promise<Specialty> {
+  async update(
+    id: string,
+    updateSpecialtyDto: UpdateSpecialtyDto,
+  ): Promise<Specialty> {
     return this.prisma.specialty.update({
       where: { id },
       data: updateSpecialtyDto,

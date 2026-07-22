@@ -22,7 +22,7 @@ export class DoctorHandler {
     private readonly doctorService: DoctorService,
     private readonly specialtyHandler: SpecialtyHandler,
     private readonly aiService: AiService,
-  ) { }
+  ) {}
 
   async handle(phone: string, text: string, session: Session): Promise<void> {
     const trimmed = text.trim().toLowerCase();
@@ -38,7 +38,11 @@ export class DoctorHandler {
 
     if (!session.data.specialtyId) {
       const msg = await this.botMessageService.getSafe(
-        session.data.clinicId, MessageKey.ERROR_MISSING_SPECIALTY, {}, session.data.language, 'Missing specialty. Please start over.'
+        session.data.clinicId,
+        MessageKey.ERROR_MISSING_SPECIALTY,
+        {},
+        session.data.language,
+        'Missing specialty. Please start over.',
       );
       await this.whatsappService.sendText(phone, msg);
       await this.sessionsService.reset(phone);
@@ -53,7 +57,11 @@ export class DoctorHandler {
     const doctor = this.resolveDoctor(text, doctors);
 
     if (!doctor) {
-      const intent = await this.aiService.detectIntent(text, session.state, session.data.language);
+      const intent = await this.aiService.detectIntent(
+        text,
+        session.state,
+        session.data.language,
+      );
 
       if (intent === Intent.CANCEL || intent === Intent.GREETING) {
         session.state = SessionState.IDLE;
@@ -67,7 +75,11 @@ export class DoctorHandler {
         session.state = SessionState.AWAITING_HANDOFF;
         await this.sessionsService.save(session);
         const message = await this.botMessageService.getSafe(
-          session.data.clinicId, MessageKey.HANDOFF_TRIGGERED, {}, session.data.language, 'Connecting you with our team.'
+          session.data.clinicId,
+          MessageKey.HANDOFF_TRIGGERED,
+          {},
+          session.data.language,
+          'Connecting you with our team.',
         );
         await this.whatsappService.sendText(phone, message);
         return;
@@ -90,7 +102,11 @@ export class DoctorHandler {
 
     if (availableDates.length === 0) {
       const message = await this.botMessageService.getSafe(
-        session.data.clinicId, MessageKey.NO_SLOTS_AVAILABLE, {}, session.data.language, 'No slots available.'
+        session.data.clinicId,
+        MessageKey.NO_SLOTS_AVAILABLE,
+        {},
+        session.data.language,
+        'No slots available.',
       );
       await this.whatsappService.sendText(phone, message);
       session.state = SessionState.BOOKING_DOCTOR;
@@ -100,7 +116,11 @@ export class DoctorHandler {
     }
 
     const message = await this.botMessageService.getSafe(
-      session.data.clinicId, MessageKey.SELECT_DATE, {}, session.data.language, 'Please choose a date:'
+      session.data.clinicId,
+      MessageKey.SELECT_DATE,
+      {},
+      session.data.language,
+      'Please choose a date:',
     );
 
     await this.whatsappService.sendButtons(
@@ -141,11 +161,19 @@ export class DoctorHandler {
     }
 
     const message = await this.botMessageService.getSafe(
-      session.data.clinicId, MessageKey.SELECT_DOCTOR, { specialty: '' }, session.data.language, 'Here are the available doctors:'
+      session.data.clinicId,
+      MessageKey.SELECT_DOCTOR,
+      { specialty: '' },
+      session.data.language,
+      'Here are the available doctors:',
     );
 
     const headerDoctors = await this.botMessageService.getSafe(
-      session.data.clinicId, MessageKey.HEADER_DOCTORS, {}, session.data.language, 'Doctors'
+      session.data.clinicId,
+      MessageKey.HEADER_DOCTORS,
+      {},
+      session.data.language,
+      'Doctors',
     );
 
     await this.whatsappService.sendInteractiveList(

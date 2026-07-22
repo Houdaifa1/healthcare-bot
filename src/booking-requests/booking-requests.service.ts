@@ -53,23 +53,23 @@ export class BookingRequestsService {
       include: {
         campaignPatient: {
           select: {
-            id:              true,
-            patientName:     true,
-            phone:           true,
-            campaignId:      true,
-            visitDate:       true,
-            prestation:      true,
+            id: true,
+            patientName: true,
+            phone: true,
+            campaignId: true,
+            visitDate: true,
+            prestation: true,
             medecinTraitant: true,
           },
         },
         appointment: {
           select: {
-            id:              true,
+            id: true,
             appointmentDate: true,
             appointmentTime: true,
-            doctorName:      true,
-            specialtyName:   true,
-            status:          true,
+            doctorName: true,
+            specialtyName: true,
+            status: true,
           },
         },
       },
@@ -87,12 +87,12 @@ export class BookingRequestsService {
       include: {
         campaignPatient: {
           select: {
-            id:              true,
-            patientName:     true,
-            phone:           true,
-            campaignId:      true,
-            visitDate:       true,
-            prestation:      true,
+            id: true,
+            patientName: true,
+            phone: true,
+            campaignId: true,
+            visitDate: true,
+            prestation: true,
             medecinTraitant: true,
           },
         },
@@ -146,14 +146,16 @@ export class BookingRequestsService {
     const appointment = await this.prisma.appointment.create({
       data: {
         clinicId,
-        patientName:      campaignPatient.patientName,
-        patientPhone:     campaignPatient.phone,
-        appointmentDate:  new Date(dto.appointmentDate),
-        appointmentTime:  dto.appointmentTime,
-        status:           AppointmentStatus.CONFIRMED,
-        doctorName:       bookingRequest.preferredDoctor  ?? campaignPatient.medecinTraitant,
-        specialtyName:    bookingRequest.preferredSpecialty ?? campaignPatient.prestation,
-        notes:            bookingRequest.reason ?? undefined,
+        patientName: campaignPatient.patientName,
+        patientPhone: campaignPatient.phone,
+        appointmentDate: new Date(dto.appointmentDate),
+        appointmentTime: dto.appointmentTime,
+        status: AppointmentStatus.CONFIRMED,
+        doctorName:
+          bookingRequest.preferredDoctor ?? campaignPatient.medecinTraitant,
+        specialtyName:
+          bookingRequest.preferredSpecialty ?? campaignPatient.prestation,
+        notes: bookingRequest.reason ?? undefined,
       },
     });
 
@@ -165,7 +167,7 @@ export class BookingRequestsService {
     const updated = await this.prisma.bookingRequest.update({
       where: { id },
       data: {
-        status:      BookingRequestStatus.CONFIRMED,
+        status: BookingRequestStatus.CONFIRMED,
         appointmentId: appointment.id,
         confirmedAt: new Date(),
       },
@@ -174,11 +176,18 @@ export class BookingRequestsService {
     // Send WhatsApp notification if a message was provided
     if (dto.message?.trim()) {
       try {
-        await this.whatsappService.sendText(campaignPatient.phone, dto.message.trim());
-        this.logger.log(`Confirmation message sent to ${campaignPatient.phone}`);
+        await this.whatsappService.sendText(
+          campaignPatient.phone,
+          dto.message.trim(),
+        );
+        this.logger.log(
+          `Confirmation message sent to ${campaignPatient.phone}`,
+        );
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
-        this.logger.error(`Failed to send confirmation message to ${campaignPatient.phone}: ${msg}`);
+        this.logger.error(
+          `Failed to send confirmation message to ${campaignPatient.phone}: ${msg}`,
+        );
       }
     }
 
@@ -192,9 +201,7 @@ export class BookingRequestsService {
   async remove(clinicId: string, id: string): Promise<void> {
     const bookingRequest = await this.findOneRaw(clinicId, id);
 
-    this.logger.log(
-      `Deleting booking request ${id} for clinic ${clinicId}`,
-    );
+    this.logger.log(`Deleting booking request ${id} for clinic ${clinicId}`);
 
     await this.prisma.bookingRequest.delete({
       where: { id },
@@ -222,23 +229,26 @@ export class BookingRequestsService {
       where: { id: bookingRequest.campaignPatientId },
     });
 
-    this.logger.log(
-      `Rejecting booking request ${id} for clinic ${clinicId}`,
-    );
+    this.logger.log(`Rejecting booking request ${id} for clinic ${clinicId}`);
 
     const updated = await this.prisma.bookingRequest.update({
       where: { id },
-      data:  { status: BookingRequestStatus.REJECTED },
+      data: { status: BookingRequestStatus.REJECTED },
     });
 
     // Send WhatsApp notification if a message was provided and not silent
     if (dto?.message?.trim() && !dto?.silent && campaignPatient?.phone) {
       try {
-        await this.whatsappService.sendText(campaignPatient.phone, dto.message.trim());
+        await this.whatsappService.sendText(
+          campaignPatient.phone,
+          dto.message.trim(),
+        );
         this.logger.log(`Rejection message sent to ${campaignPatient.phone}`);
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
-        this.logger.error(`Failed to send rejection message to ${campaignPatient.phone}: ${msg}`);
+        this.logger.error(
+          `Failed to send rejection message to ${campaignPatient.phone}: ${msg}`,
+        );
       }
     }
 

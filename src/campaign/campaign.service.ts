@@ -15,7 +15,12 @@ import { UpdateCampaignDto } from './dto/update-campaign.dto';
 import { SessionsService } from '../sessions/sessions.service';
 import { WhatsAppService } from '../whatsapp/whatsapp.service';
 import { QUEUES, JOBS } from '../queue/queue.constants';
-import { Campaign, CampaignStatus, CampaignPatientStatus, ConversationOutcome } from '@prisma/client';
+import {
+  Campaign,
+  CampaignStatus,
+  CampaignPatientStatus,
+  ConversationOutcome,
+} from '@prisma/client';
 
 export interface CampaignOutboundJob {
   campaignPatientId: string;
@@ -34,7 +39,7 @@ export class CampaignService {
     private readonly whatsappService: WhatsAppService,
     @InjectQueue(QUEUES.CAMPAIGN_OUTBOUND)
     private readonly outboundQueue: Queue,
-  ) { }
+  ) {}
 
   // ═══════════════════════════════════════════════════════════════════════════
   // CREATE
@@ -48,8 +53,12 @@ export class CampaignService {
         clinicId,
         name: dto.name,
         status: CampaignStatus.DRAFT,
-        scheduledStartAt: dto.scheduledStartAt ? new Date(dto.scheduledStartAt) : undefined,
-        filterDateFrom: dto.filterDateFrom ? new Date(dto.filterDateFrom) : undefined,
+        scheduledStartAt: dto.scheduledStartAt
+          ? new Date(dto.scheduledStartAt)
+          : undefined,
+        filterDateFrom: dto.filterDateFrom
+          ? new Date(dto.filterDateFrom)
+          : undefined,
         filterDateTo: dto.filterDateTo ? new Date(dto.filterDateTo) : undefined,
         filterDoctor: dto.filterDoctor,
         filterMotif: dto.filterMotif,
@@ -63,7 +72,9 @@ export class CampaignService {
 
     // "Send now" — no scheduledStartAt, auto-launch immediately
     if (!dto.scheduledStartAt) {
-      this.logger.log(`Campaign "${campaign.name}" created with "Send now" — auto-launching`);
+      this.logger.log(
+        `Campaign "${campaign.name}" created with "Send now" — auto-launching`,
+      );
       return this.executeLaunch(campaign);
     }
 
@@ -85,7 +96,10 @@ export class CampaignService {
   // FIND ONE — single campaign with its patients
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async findOne(clinicId: string, id: string): Promise<Campaign & { patients: any[] }> {
+  async findOne(
+    clinicId: string,
+    id: string,
+  ): Promise<Campaign & { patients: any[] }> {
     const campaign = await this.prisma.campaign.findFirst({
       where: { id, clinicId },
       include: {
@@ -102,8 +116,11 @@ export class CampaignService {
     // Enrich each patient with their live Redis session status
     const enrichedPatients = await Promise.all(
       campaign.patients.map(async (patient) => {
-        const normalizedPhone = patient.phone.replace(/^\+/, '').replace(/\s/g, '');
-        const redisSession = await this.sessionsService.getCampaignSession(normalizedPhone);
+        const normalizedPhone = patient.phone
+          .replace(/^\+/, '')
+          .replace(/\s/g, '');
+        const redisSession =
+          await this.sessionsService.getCampaignSession(normalizedPhone);
         return {
           ...patient,
           sessionStatus: redisSession?.status ?? null,
@@ -121,7 +138,11 @@ export class CampaignService {
   // UPDATE
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async update(clinicId: string, id: string, dto: UpdateCampaignDto): Promise<Campaign> {
+  async update(
+    clinicId: string,
+    id: string,
+    dto: UpdateCampaignDto,
+  ): Promise<Campaign> {
     const campaign = await this.findOneRaw(clinicId, id);
 
     if (
@@ -134,27 +155,53 @@ export class CampaignService {
     }
 
     if (
-      dto.name !== undefined || dto.filterDateFrom !== undefined ||
-      dto.filterDateTo !== undefined || dto.filterDoctor !== undefined ||
+      dto.name !== undefined ||
+      dto.filterDateFrom !== undefined ||
+      dto.filterDateTo !== undefined ||
+      dto.filterDoctor !== undefined ||
       dto.filterMotif !== undefined
     ) {
-      this.validateFilters({ ...campaign, ...dto } as any);
+      this.validateFilters({ ...campaign, ...dto });
     }
 
     return this.prisma.campaign.update({
       where: { id },
       data: {
         ...(dto.name !== undefined && { name: dto.name }),
-        ...(dto.scheduledStartAt !== undefined && { scheduledStartAt: dto.scheduledStartAt ? new Date(dto.scheduledStartAt) : null }),
-        ...(dto.filterDateFrom !== undefined && { filterDateFrom: dto.filterDateFrom ? new Date(dto.filterDateFrom) : null }),
-        ...(dto.filterDateTo !== undefined && { filterDateTo: dto.filterDateTo ? new Date(dto.filterDateTo) : null }),
-        ...(dto.filterDoctor !== undefined && { filterDoctor: dto.filterDoctor ?? null }),
-        ...(dto.filterMotif !== undefined && { filterMotif: dto.filterMotif ?? null }),
-        ...(dto.notificationPhone !== undefined && { notificationPhone: dto.notificationPhone ?? null }),
-        ...(dto.delayHours !== undefined && { delayHours: dto.delayHours ?? null }),
-        ...(dto.reminderCount !== undefined && { reminderCount: dto.reminderCount ?? null }),
-        ...(dto.reminderIntervalHours !== undefined && { reminderIntervalHours: dto.reminderIntervalHours ?? null }),
-        ...(dto.aiMaxTurns !== undefined && { aiMaxTurns: dto.aiMaxTurns ?? null }),
+        ...(dto.scheduledStartAt !== undefined && {
+          scheduledStartAt: dto.scheduledStartAt
+            ? new Date(dto.scheduledStartAt)
+            : null,
+        }),
+        ...(dto.filterDateFrom !== undefined && {
+          filterDateFrom: dto.filterDateFrom
+            ? new Date(dto.filterDateFrom)
+            : null,
+        }),
+        ...(dto.filterDateTo !== undefined && {
+          filterDateTo: dto.filterDateTo ? new Date(dto.filterDateTo) : null,
+        }),
+        ...(dto.filterDoctor !== undefined && {
+          filterDoctor: dto.filterDoctor ?? null,
+        }),
+        ...(dto.filterMotif !== undefined && {
+          filterMotif: dto.filterMotif ?? null,
+        }),
+        ...(dto.notificationPhone !== undefined && {
+          notificationPhone: dto.notificationPhone ?? null,
+        }),
+        ...(dto.delayHours !== undefined && {
+          delayHours: dto.delayHours ?? null,
+        }),
+        ...(dto.reminderCount !== undefined && {
+          reminderCount: dto.reminderCount ?? null,
+        }),
+        ...(dto.reminderIntervalHours !== undefined && {
+          reminderIntervalHours: dto.reminderIntervalHours ?? null,
+        }),
+        ...(dto.aiMaxTurns !== undefined && {
+          aiMaxTurns: dto.aiMaxTurns ?? null,
+        }),
       },
     });
   }
@@ -163,7 +210,10 @@ export class CampaignService {
   // PREVIEW
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async preview(clinicId: string, id: string): Promise<{ count: number; patients: ClinOpsPatient[] }> {
+  async preview(
+    clinicId: string,
+    id: string,
+  ): Promise<{ count: number; patients: ClinOpsPatient[] }> {
     const campaign = await this.findOneRaw(clinicId, id);
     const patients = await this.fetchPatientsFromClinOps(campaign);
     return { count: patients.length, patients };
@@ -241,11 +291,15 @@ export class CampaignService {
 
     if (dueCampaigns.length === 0) return;
 
-    this.logger.log(`Found ${dueCampaigns.length} scheduled campaign(s) ready to launch`);
+    this.logger.log(
+      `Found ${dueCampaigns.length} scheduled campaign(s) ready to launch`,
+    );
 
     for (const campaign of dueCampaigns) {
       try {
-        this.logger.log(`Auto-launching campaign "${campaign.name}" (${campaign.id})`);
+        this.logger.log(
+          `Auto-launching campaign "${campaign.name}" (${campaign.id})`,
+        );
         await this.executeLaunch(campaign);
       } catch (err: any) {
         this.logger.error(
@@ -300,7 +354,9 @@ export class CampaignService {
     });
 
     if (parkedPatients.length === 0) {
-      this.logger.log(`Campaign ${id} resumed — no parked patients to re-queue`);
+      this.logger.log(
+        `Campaign ${id} resumed — no parked patients to re-queue`,
+      );
       return this.findOneRaw(clinicId, id);
     }
 
@@ -396,7 +452,9 @@ export class CampaignService {
     let purgedSessions = 0;
     for (const patient of patients) {
       try {
-        const session = await this.sessionsService.getCampaignSession(patient.phone);
+        const session = await this.sessionsService.getCampaignSession(
+          patient.phone,
+        );
         if (session) {
           await this.sessionsService.deleteCampaignSession(patient.phone);
           purgedSessions++;
@@ -440,14 +498,18 @@ export class CampaignService {
   // ═══════════════════════════════════════════════════════════════════════════
 
   private async executeLaunch(campaign: Campaign): Promise<Campaign> {
-    const clinic = await this.prisma.clinic.findUnique({ where: { id: campaign.clinicId } });
+    const clinic = await this.prisma.clinic.findUnique({
+      where: { id: campaign.clinicId },
+    });
     if (!clinic) throw new NotFoundException('Clinic not found');
 
     const clinopsPatients = await this.fetchPatientsFromClinOps(campaign);
 
     if (clinopsPatients.length === 0) {
       if (campaign.status === CampaignStatus.SCHEDULED) {
-        this.logger.warn(`Scheduled campaign "${campaign.name}" has no matching patients — marking COMPLETED`);
+        this.logger.warn(
+          `Scheduled campaign "${campaign.name}" has no matching patients — marking COMPLETED`,
+        );
         return this.prisma.campaign.update({
           where: { id: campaign.id },
           data: {
@@ -461,9 +523,10 @@ export class CampaignService {
       );
     }
 
-    const delayHours = campaign.delayHours !== null && campaign.delayHours !== undefined
-      ? campaign.delayHours
-      : clinic.campaignDelayHours;
+    const delayHours =
+      campaign.delayHours !== null && campaign.delayHours !== undefined
+        ? campaign.delayHours
+        : clinic.campaignDelayHours;
 
     const delayMs = delayHours * 60 * 60 * 1000;
 
@@ -543,19 +606,29 @@ export class CampaignService {
   // AGENT SEND MESSAGE (handoff / live session)
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async sendPatientMessage(clinicId: string, campaignId: string, patientId: string, message: string) {
+  async sendPatientMessage(
+    clinicId: string,
+    campaignId: string,
+    patientId: string,
+    message: string,
+  ) {
     const patient = await this.prisma.campaignPatient.findFirst({
       where: { id: patientId, campaignId, clinicId },
     });
 
     if (!patient) {
-      throw new NotFoundException(`Patient ${patientId} not found in campaign ${campaignId}`);
+      throw new NotFoundException(
+        `Patient ${patientId} not found in campaign ${campaignId}`,
+      );
     }
 
     const normalizedPhone = patient.phone.replace(/^\+/, '').replace(/\s/g, '');
-    const session = await this.sessionsService.getCampaignSession(normalizedPhone);
+    const session =
+      await this.sessionsService.getCampaignSession(normalizedPhone);
     if (!session) {
-      throw new NotFoundException(`No active session found for patient ${patientId}. The conversation may have already ended.`);
+      throw new NotFoundException(
+        `No active session found for patient ${patientId}. The conversation may have already ended.`,
+      );
     }
 
     await this.whatsappService.sendText(patient.phone, message);
@@ -570,10 +643,12 @@ export class CampaignService {
     session.phone = normalizedPhone;
     await this.sessionsService.saveCampaignSession(session);
 
-    await this.prisma.campaignPatient.update({
-      where: { id: patientId },
-      data: { messages: session.messages as any },
-    }).catch(() => { });
+    await this.prisma.campaignPatient
+      .update({
+        where: { id: patientId },
+        data: { messages: session.messages as any },
+      })
+      .catch(() => {});
 
     return { success: true };
   }
@@ -582,13 +657,19 @@ export class CampaignService {
   // RESOLVE HANDOFF / LIVE SESSION
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async resolveConversation(clinicId: string, campaignId: string, patientId: string) {
+  async resolveConversation(
+    clinicId: string,
+    campaignId: string,
+    patientId: string,
+  ) {
     const patient = await this.prisma.campaignPatient.findFirst({
       where: { id: patientId, campaignId, clinicId },
     });
 
     if (!patient) {
-      throw new NotFoundException(`Patient ${patientId} not found in campaign ${campaignId}`);
+      throw new NotFoundException(
+        `Patient ${patientId} not found in campaign ${campaignId}`,
+      );
     }
 
     await this.prisma.campaignPatient.update({
@@ -627,7 +708,9 @@ export class CampaignService {
     return campaign;
   }
 
-  private async fetchPatientsFromClinOps(campaign: Campaign): Promise<ClinOpsPatient[]> {
+  private async fetchPatientsFromClinOps(
+    campaign: Campaign,
+  ): Promise<ClinOpsPatient[]> {
     const filters: Record<string, any> = {};
 
     if (campaign.filterMotif) filters.motif = campaign.filterMotif;
@@ -652,8 +735,8 @@ export class CampaignService {
 
     if (campaign.filterDoctor) {
       const doctorLower = campaign.filterDoctor.toLowerCase();
-      patients = patients.filter(
-        (p) => p.medecin_traitant.toLowerCase().includes(doctorLower),
+      patients = patients.filter((p) =>
+        p.medecin_traitant.toLowerCase().includes(doctorLower),
       );
     }
 
@@ -664,7 +747,11 @@ export class CampaignService {
   // GET CONVERSATION HISTORY
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async getConversation(clinicId: string, campaignId: string, patientId: string) {
+  async getConversation(
+    clinicId: string,
+    campaignId: string,
+    patientId: string,
+  ) {
     const patient = await this.prisma.campaignPatient.findFirst({
       where: { id: patientId, campaignId, clinicId },
       select: {
@@ -684,11 +771,14 @@ export class CampaignService {
     });
 
     if (!patient) {
-      throw new NotFoundException(`Patient ${patientId} not found in campaign ${campaignId}`);
+      throw new NotFoundException(
+        `Patient ${patientId} not found in campaign ${campaignId}`,
+      );
     }
 
     const normalizedPhone = patient.phone.replace(/^\+/, '').replace(/\s/g, '');
-    const redisSession = await this.sessionsService.getCampaignSession(normalizedPhone);
+    const redisSession =
+      await this.sessionsService.getCampaignSession(normalizedPhone);
 
     return {
       ...patient,
@@ -700,14 +790,20 @@ export class CampaignService {
   // CLOSE / FORCE-END A PATIENT CONVERSATION
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async closePatientConversation(clinicId: string, campaignId: string, patientId: string) {
+  async closePatientConversation(
+    clinicId: string,
+    campaignId: string,
+    patientId: string,
+  ) {
     const patient = await this.prisma.campaignPatient.findFirst({
       where: { id: patientId, campaignId, clinicId },
       include: { campaign: true },
     });
 
     if (!patient) {
-      throw new NotFoundException(`Patient ${patientId} not found in campaign ${campaignId}`);
+      throw new NotFoundException(
+        `Patient ${patientId} not found in campaign ${campaignId}`,
+      );
     }
 
     await this.prisma.campaignPatient.update({
@@ -733,18 +829,25 @@ export class CampaignService {
   // TAKE OVER — PAUSE BOT, LET STAFF HANDLE
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async takeOverConversation(clinicId: string, campaignId: string, patientId: string) {
+  async takeOverConversation(
+    clinicId: string,
+    campaignId: string,
+    patientId: string,
+  ) {
     const patient = await this.prisma.campaignPatient.findFirst({
       where: { id: patientId, campaignId, clinicId },
       include: { campaign: true },
     });
 
     if (!patient) {
-      throw new NotFoundException(`Patient ${patientId} not found in campaign ${campaignId}`);
+      throw new NotFoundException(
+        `Patient ${patientId} not found in campaign ${campaignId}`,
+      );
     }
 
     const normalizedPhone = patient.phone.replace(/^\+/, '').replace(/\s/g, '');
-    const existingSession = await this.sessionsService.getCampaignSession(normalizedPhone);
+    const existingSession =
+      await this.sessionsService.getCampaignSession(normalizedPhone);
     if (existingSession) {
       existingSession.status = 'admin_handling';
       existingSession.phone = normalizedPhone;
@@ -786,9 +889,17 @@ export class CampaignService {
   // PRIVATE HELPERS
   // ═══════════════════════════════════════════════════════════════════════════
   private validateFilters(
-    dto: Pick<CreateCampaignDto, 'filterDateFrom' | 'filterDateTo' | 'filterDoctor' | 'filterMotif'>,
+    dto: Pick<
+      CreateCampaignDto,
+      'filterDateFrom' | 'filterDateTo' | 'filterDoctor' | 'filterMotif'
+    >,
   ): void {
-    if (!dto.filterDateFrom && !dto.filterDateTo && !dto.filterDoctor && !dto.filterMotif) {
+    if (
+      !dto.filterDateFrom &&
+      !dto.filterDateTo &&
+      !dto.filterDoctor &&
+      !dto.filterMotif
+    ) {
       throw new BadRequestException(
         'At least one filter is required (filterDateFrom, filterDateTo, filterDoctor, or filterMotif)',
       );
@@ -796,7 +907,9 @@ export class CampaignService {
 
     if (dto.filterDateFrom && dto.filterDateTo) {
       if (new Date(dto.filterDateFrom) > new Date(dto.filterDateTo)) {
-        throw new BadRequestException('filterDateFrom must be before filterDateTo');
+        throw new BadRequestException(
+          'filterDateFrom must be before filterDateTo',
+        );
       }
     }
   }

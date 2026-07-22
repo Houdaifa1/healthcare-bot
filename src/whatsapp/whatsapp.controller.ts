@@ -32,9 +32,9 @@ export class WhatsAppController {
   // Must respond with hub.challenge as plain text within 5 seconds.
   @Get()
   verifyWebhook(
-    @Query('hub.mode')         mode:      string,
-    @Query('hub.verify_token') token:     string,
-    @Query('hub.challenge')    challenge: string,
+    @Query('hub.mode') mode: string,
+    @Query('hub.verify_token') token: string,
+    @Query('hub.challenge') challenge: string,
     @Res() res: Response,
   ): void {
     const verifyToken = this.configService.get<string>('whatsapp.verifyToken');
@@ -45,7 +45,9 @@ export class WhatsAppController {
       return;
     }
 
-    this.logger.warn(`❌ Webhook verification failed — mode=${mode} token=${token}`);
+    this.logger.warn(
+      `❌ Webhook verification failed — mode=${mode} token=${token}`,
+    );
     res.status(403).send('Forbidden');
   }
 
@@ -78,12 +80,17 @@ export class WhatsAppController {
 
   // ─── HMAC-SHA256 signature verification ──────────────────────────────────
 
-  private verifySignature(signature: string, rawBody: Buffer | undefined): void {
+  private verifySignature(
+    signature: string,
+    rawBody: Buffer | undefined,
+  ): void {
     const appSecret = this.configService.get<string>('whatsapp.appSecret');
 
     if (!appSecret) {
       if (this.configService.get<string>('nodeEnv') !== 'production') {
-        this.logger.warn('META_APP_SECRET not set — skipping signature check (dev only)');
+        this.logger.warn(
+          'META_APP_SECRET not set — skipping signature check (dev only)',
+        );
         return;
       }
       throw new Error('META_APP_SECRET must be set in production');
@@ -99,7 +106,9 @@ export class WhatsAppController {
     }
 
     if (!rawBody) {
-      throw new BadRequestException('Raw body unavailable — ensure rawBody:true in NestFactory.create()');
+      throw new BadRequestException(
+        'Raw body unavailable — ensure rawBody:true in NestFactory.create()',
+      );
     }
 
     const expected = crypto
@@ -107,8 +116,8 @@ export class WhatsAppController {
       .update(rawBody)
       .digest('hex');
 
-    const trusted  = Buffer.from(parts[1], 'hex');
-    const computed = Buffer.from(expected,  'hex');
+    const trusted = Buffer.from(parts[1], 'hex');
+    const computed = Buffer.from(expected, 'hex');
 
     if (
       trusted.length !== computed.length ||

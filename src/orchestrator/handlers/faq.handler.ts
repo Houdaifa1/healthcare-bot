@@ -17,7 +17,7 @@ export class FaqHandler {
     private readonly botMessageService: BotMessageService,
     private readonly aiService: AiService,
     private readonly prisma: PrismaService,
-  ) { }
+  ) {}
 
   /**
    * Called by IdleHandler when the user picks FAQ from the main menu.
@@ -31,22 +31,55 @@ export class FaqHandler {
     const faqs = await this.faqService.findActive(clinicId, lang);
 
     if (faqs.length === 0) {
-      const message = await this.botMessageService.getSafe(clinicId, MessageKey.FAQ_NOT_FOUND, {}, lang, 'No FAQs available.');
-      const btnMenu = await this.botMessageService.getSafe(clinicId, MessageKey.BUTTON_MENU, {}, lang, 'Menu');
+      const message = await this.botMessageService.getSafe(
+        clinicId,
+        MessageKey.FAQ_NOT_FOUND,
+        {},
+        lang,
+        'No FAQs available.',
+      );
+      const btnMenu = await this.botMessageService.getSafe(
+        clinicId,
+        MessageKey.BUTTON_MENU,
+        {},
+        lang,
+        'Menu',
+      );
       await this.whatsappService.sendButtons(phone, message, [
         { id: 'menu', title: btnMenu },
       ]);
       return;
     }
 
-    const header = await this.botMessageService.getSafe(clinicId, MessageKey.FAQ_INTRO, {}, lang, 'Frequently Asked Questions');
-    const body = await this.botMessageService.getSafe(clinicId, MessageKey.FAQ_LIST_PROMPT, {}, lang, 'Select a question:');
-    const buttonLabel = await this.botMessageService.getSafe(clinicId, MessageKey.HEADER_SELECT_FAQ, {}, lang, 'View questions');
+    const header = await this.botMessageService.getSafe(
+      clinicId,
+      MessageKey.FAQ_INTRO,
+      {},
+      lang,
+      'Frequently Asked Questions',
+    );
+    const body = await this.botMessageService.getSafe(
+      clinicId,
+      MessageKey.FAQ_LIST_PROMPT,
+      {},
+      lang,
+      'Select a question:',
+    );
+    const buttonLabel = await this.botMessageService.getSafe(
+      clinicId,
+      MessageKey.HEADER_SELECT_FAQ,
+      {},
+      lang,
+      'View questions',
+    );
 
     // Split FAQs into sections of max 10 rows (Meta limit)
     const rows = faqs.map((f, i) => ({
       id: `faq_${i + 1}`,
-      title: f.question.length > 24 ? f.question.substring(0, 21) + '...' : f.question,
+      title:
+        f.question.length > 24
+          ? f.question.substring(0, 21) + '...'
+          : f.question,
       description: undefined,
     }));
 
@@ -109,7 +142,11 @@ export class FaqHandler {
     // ── Intent detection (for free-text) ──────────────────────────────────
     const intent = await this.aiService.detectIntent(text, session.state, lang);
 
-    if (intent === Intent.CANCEL || intent === Intent.GREETING || intent === Intent.BOOK_APPOINTMENT) {
+    if (
+      intent === Intent.CANCEL ||
+      intent === Intent.GREETING ||
+      intent === Intent.BOOK_APPOINTMENT
+    ) {
       await this.goToMainMenu(phone, session);
       return;
     }
@@ -133,16 +170,39 @@ export class FaqHandler {
       if (aiFaqId) {
         const matchedFaq = allFaqs.find((f) => f.id === aiFaqId);
         if (matchedFaq) {
-          await this.sendFaqAnswer(phone, session, matchedFaq.answer, allFaqs.length > 1);
+          await this.sendFaqAnswer(
+            phone,
+            session,
+            matchedFaq.answer,
+            allFaqs.length > 1,
+          );
           return;
         }
       }
     }
 
     // ── No match found — return to FAQ list ───────────────────────────────
-    const notFound = await this.botMessageService.getSafe(clinicId, MessageKey.FAQ_NOT_FOUND, {}, lang, 'I could not find an answer.');
-    const btnFaqList = await this.botMessageService.getSafe(clinicId, MessageKey.BUTTON_FAQ_LIST, {}, lang, 'Back to questions');
-    const btnMenu = await this.botMessageService.getSafe(clinicId, MessageKey.BUTTON_MENU, {}, lang, 'Menu');
+    const notFound = await this.botMessageService.getSafe(
+      clinicId,
+      MessageKey.FAQ_NOT_FOUND,
+      {},
+      lang,
+      'I could not find an answer.',
+    );
+    const btnFaqList = await this.botMessageService.getSafe(
+      clinicId,
+      MessageKey.BUTTON_FAQ_LIST,
+      {},
+      lang,
+      'Back to questions',
+    );
+    const btnMenu = await this.botMessageService.getSafe(
+      clinicId,
+      MessageKey.BUTTON_MENU,
+      {},
+      lang,
+      'Menu',
+    );
     await this.whatsappService.sendButtons(phone, notFound, [
       { id: 'faq_list', title: btnFaqList },
       { id: 'menu', title: btnMenu },
@@ -160,17 +220,41 @@ export class FaqHandler {
     // Show follow-up buttons: Back to FAQ list + Menu
     const lang = session.data.language;
     const clinicId = session.data.clinicId;
-    const followUp = await this.botMessageService.getSafe(clinicId, MessageKey.FAQ_FOLLOW_UP, {}, lang, 'Anything else?');
+    const followUp = await this.botMessageService.getSafe(
+      clinicId,
+      MessageKey.FAQ_FOLLOW_UP,
+      {},
+      lang,
+      'Anything else?',
+    );
 
     if (hasMoreFaqs) {
-      const btnFaqList = await this.botMessageService.getSafe(clinicId, MessageKey.BUTTON_FAQ_LIST, {}, lang, 'More questions');
-      const btnMenu = await this.botMessageService.getSafe(clinicId, MessageKey.BUTTON_MENU, {}, lang, 'Menu');
+      const btnFaqList = await this.botMessageService.getSafe(
+        clinicId,
+        MessageKey.BUTTON_FAQ_LIST,
+        {},
+        lang,
+        'More questions',
+      );
+      const btnMenu = await this.botMessageService.getSafe(
+        clinicId,
+        MessageKey.BUTTON_MENU,
+        {},
+        lang,
+        'Menu',
+      );
       await this.whatsappService.sendButtons(phone, followUp, [
         { id: 'faq_list', title: btnFaqList },
         { id: 'menu', title: btnMenu },
       ]);
     } else {
-      const btnMenu = await this.botMessageService.getSafe(clinicId, MessageKey.BUTTON_MENU, {}, lang, 'Menu');
+      const btnMenu = await this.botMessageService.getSafe(
+        clinicId,
+        MessageKey.BUTTON_MENU,
+        {},
+        lang,
+        'Menu',
+      );
       await this.whatsappService.sendButtons(phone, followUp, [
         { id: 'menu', title: btnMenu },
       ]);
@@ -190,10 +274,34 @@ export class FaqHandler {
       select: { name: true },
     });
 
-    const message = await this.botMessageService.getSafe(clinicId, MessageKey.WELCOME, { clinicName: clinic?.name ?? '' }, lang, 'Welcome!');
-    const btnBook = await this.botMessageService.getSafe(clinicId, MessageKey.BUTTON_BOOK_APP, {}, lang, 'Book appointment');
-    const btnFaq = await this.botMessageService.getSafe(clinicId, MessageKey.BUTTON_FAQ, {}, lang, 'FAQ');
-    const btnAgent = await this.botMessageService.getSafe(clinicId, MessageKey.BUTTON_AGENT, {}, lang, 'Talk to agent');
+    const message = await this.botMessageService.getSafe(
+      clinicId,
+      MessageKey.WELCOME,
+      { clinicName: clinic?.name ?? '' },
+      lang,
+      'Welcome!',
+    );
+    const btnBook = await this.botMessageService.getSafe(
+      clinicId,
+      MessageKey.BUTTON_BOOK_APP,
+      {},
+      lang,
+      'Book appointment',
+    );
+    const btnFaq = await this.botMessageService.getSafe(
+      clinicId,
+      MessageKey.BUTTON_FAQ,
+      {},
+      lang,
+      'FAQ',
+    );
+    const btnAgent = await this.botMessageService.getSafe(
+      clinicId,
+      MessageKey.BUTTON_AGENT,
+      {},
+      lang,
+      'Talk to agent',
+    );
     await this.whatsappService.sendButtons(phone, message, [
       { id: 'book_appointment', title: btnBook },
       { id: 'faq', title: btnFaq },

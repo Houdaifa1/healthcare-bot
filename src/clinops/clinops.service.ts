@@ -37,23 +37,33 @@ export class ClinOpsService {
   private readonly mockAvailability: ClinOpsTimeSlot[];
 
   constructor(private readonly configService: ConfigService) {
-    this.mode = this.configService.get<string>('clinops.mode') === 'live'
-      ? 'live'
-      : 'mock';
+    this.mode =
+      this.configService.get<string>('clinops.mode') === 'live'
+        ? 'live'
+        : 'mock';
 
-    this.logger.log(`ClinOpsService running in ${this.mode.toUpperCase()} mode`);
+    this.logger.log(
+      `ClinOpsService running in ${this.mode.toUpperCase()} mode`,
+    );
 
     if (this.mode === 'mock') {
-      this.mockPatients        = this.loadJson<ClinOpsPatient[]>('patients.mock.json');
-      this.mockPatientHistories = this.loadJson<Record<string, ClinOpsPatientHistory>>('patient-history.mock.json');
-      this.mockDoctors         = this.loadJson<ClinOpsDoctorMock[]>('doctors.mock.json');
-      this.mockSpecialties     = this.loadJson<ClinOpsSpecialty[]>('specialties.mock.json');
-      this.mockAvailability    = this.loadJson<ClinOpsTimeSlot[]>('availability.mock.json');
+      this.mockPatients = this.loadJson<ClinOpsPatient[]>('patients.mock.json');
+      this.mockPatientHistories = this.loadJson<
+        Record<string, ClinOpsPatientHistory>
+      >('patient-history.mock.json');
+      this.mockDoctors =
+        this.loadJson<ClinOpsDoctorMock[]>('doctors.mock.json');
+      this.mockSpecialties = this.loadJson<ClinOpsSpecialty[]>(
+        'specialties.mock.json',
+      );
+      this.mockAvailability = this.loadJson<ClinOpsTimeSlot[]>(
+        'availability.mock.json',
+      );
 
       this.logger.log(
         `Mock data loaded: ${this.mockPatients.length} patients, ` +
-        `${Object.keys(this.mockPatientHistories).length} histories, ` +
-        `${this.mockDoctors.length} doctors`,
+          `${Object.keys(this.mockPatientHistories).length} histories, ` +
+          `${this.mockDoctors.length} doctors`,
       );
     }
   }
@@ -62,14 +72,22 @@ export class ClinOpsService {
   // Patient Search — mirrors searchPatientsInfos
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async searchPatients(filters: ClinOpsSearchFilters): Promise<ClinOpsPatient[]> {
+  async searchPatients(
+    filters: ClinOpsSearchFilters,
+  ): Promise<ClinOpsPatient[]> {
     if (this.mode === 'live') {
       throw new NotImplementedException(
         'ClinOps live mode is not yet implemented. Set CLINOPS_MODE=mock.',
       );
     }
 
-    const { cin_passeport, date_derniere_consultation, motif, numeroTelephone, OnlyVerifiedNumbers } = filters;
+    const {
+      cin_passeport,
+      date_derniere_consultation,
+      motif,
+      numeroTelephone,
+      OnlyVerifiedNumbers,
+    } = filters;
 
     if (!cin_passeport && !motif && !numeroTelephone && !OnlyVerifiedNumbers) {
       throw new BadRequestException(
@@ -81,37 +99,47 @@ export class ClinOpsService {
 
     if (cin_passeport) {
       const q = cin_passeport.toLowerCase();
-      results = results.filter(p => p.cin?.toLowerCase().includes(q));
+      results = results.filter((p) => p.cin?.toLowerCase().includes(q));
     }
 
     if (motif) {
       const q = motif.toLowerCase();
-      results = results.filter(p => p.prestation.toLowerCase().includes(q));
+      results = results.filter((p) => p.prestation.toLowerCase().includes(q));
     }
 
     if (numeroTelephone) {
       const q = numeroTelephone.replace(/\s+/g, '').toLowerCase();
       results = results.filter(
-        p =>
-          p.numeroTelephonePrincipale?.replace(/\s+/g, '').toLowerCase().includes(q) ||
-          p.numeroTelephoneSecondaire?.replace(/\s+/g, '').toLowerCase().includes(q),
+        (p) =>
+          p.numeroTelephonePrincipale
+            ?.replace(/\s+/g, '')
+            .toLowerCase()
+            .includes(q) ||
+          p.numeroTelephoneSecondaire
+            ?.replace(/\s+/g, '')
+            .toLowerCase()
+            .includes(q),
       );
     }
 
     if (date_derniere_consultation) {
       results = results.filter(
-        p => p.date_derniere_admission?.substring(0, 10) === date_derniere_consultation,
+        (p) =>
+          p.date_derniere_admission?.substring(0, 10) ===
+          date_derniere_consultation,
       );
     }
 
     if (OnlyVerifiedNumbers === true) {
-      results = results.filter(p => !!p.numeroTelephonePrincipale);
+      results = results.filter((p) => !!p.numeroTelephonePrincipale);
     }
 
     // Per API spec: exact CIN matches sort first
     if (cin_passeport) {
       const exact = cin_passeport;
-      results.sort((a, b) => (a.cin === exact ? 0 : 1) - (b.cin === exact ? 0 : 1));
+      results.sort(
+        (a, b) => (a.cin === exact ? 0 : 1) - (b.cin === exact ? 0 : 1),
+      );
     }
 
     return results;
@@ -142,9 +170,11 @@ export class ClinOpsService {
     // Fallback: phone lookup — find patient by phone, load history by their CIN
     const normalizedPhone = identifier.replace(/\s+/g, '').toLowerCase();
     const patient = this.mockPatients.find(
-      p =>
-        p.numeroTelephonePrincipale?.replace(/\s+/g, '').toLowerCase() === normalizedPhone ||
-        p.numeroTelephoneSecondaire?.replace(/\s+/g, '').toLowerCase() === normalizedPhone,
+      (p) =>
+        p.numeroTelephonePrincipale?.replace(/\s+/g, '').toLowerCase() ===
+          normalizedPhone ||
+        p.numeroTelephoneSecondaire?.replace(/\s+/g, '').toLowerCase() ===
+          normalizedPhone,
     );
 
     if (patient?.cin && this.mockPatientHistories[patient.cin]) {
@@ -173,7 +203,9 @@ export class ClinOpsService {
   // Doctors by Specialty — mirrors getDoctorsBySpeciality
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async getDoctorsBySpeciality(specialite_id: number): Promise<ClinOpsDoctor[]> {
+  async getDoctorsBySpeciality(
+    specialite_id: number,
+  ): Promise<ClinOpsDoctor[]> {
     if (this.mode === 'live') {
       throw new NotImplementedException(
         'ClinOps live mode is not yet implemented. Set CLINOPS_MODE=mock.',
@@ -184,7 +216,7 @@ export class ClinOpsService {
     }
     // Strip the mock-only specialite_id field before returning — callers get clean ClinOpsDoctor shapes
     return this.mockDoctors
-      .filter(d => d.specialite_id === specialite_id)
+      .filter((d) => d.specialite_id === specialite_id)
       .map(({ doctorId, doctorLabel }) => ({ doctorId, doctorLabel }));
   }
 
@@ -192,7 +224,10 @@ export class ClinOpsService {
   // Doctor Availability — mirrors getDoctorsAvailability
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async getDoctorsAvailability(nom_medecin: string, date_prevue: string): Promise<ClinOpsTimeSlot[]> {
+  async getDoctorsAvailability(
+    nom_medecin: string,
+    date_prevue: string,
+  ): Promise<ClinOpsTimeSlot[]> {
     if (this.mode === 'live') {
       throw new NotImplementedException(
         'ClinOps live mode is not yet implemented. Set CLINOPS_MODE=mock.',
@@ -233,7 +268,7 @@ export class ClinOpsService {
     }
     // Mock: return all doctors of the given specialty (ignore actual schedule)
     return this.mockDoctors
-      .filter(d => d.specialite_id === specialite_id)
+      .filter((d) => d.specialite_id === specialite_id)
       .map(({ doctorId, doctorLabel }) => ({ doctorId, doctorLabel }));
   }
 
@@ -251,13 +286,18 @@ export class ClinOpsService {
     }
 
     if (!request.datePrevue || !request.motif || !request.medecinTraitant) {
-      throw new BadRequestException('datePrevue, motif et medecinTraitant sont requis');
+      throw new BadRequestException(
+        'datePrevue, motif et medecinTraitant sont requis',
+      );
     }
 
-    const hasPatientId      = request.patientId != null;
+    const hasPatientId = request.patientId != null;
     const hasNumeroIdentite = !!request.numero_identite;
-    const isNewPatient      =
-      !!request.nom && !!request.prenom && !!request.telephone_prefix && !!request.telephone;
+    const isNewPatient =
+      !!request.nom &&
+      !!request.prenom &&
+      !!request.telephone_prefix &&
+      !!request.telephone;
 
     if (!hasPatientId && !hasNumeroIdentite && !isNewPatient) {
       throw new BadRequestException(
@@ -265,8 +305,13 @@ export class ClinOpsService {
       );
     }
 
-    const patient_id = request.patientId ?? Math.floor(Math.random() * 9000) + 1000;
-    return { success: true, message: 'Rendez-vous créé avec succès', patient_id };
+    const patient_id =
+      request.patientId ?? Math.floor(Math.random() * 9000) + 1000;
+    return {
+      success: true,
+      message: 'Rendez-vous créé avec succès',
+      patient_id,
+    };
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -290,7 +335,9 @@ export class ClinOpsService {
     try {
       return JSON.parse(fs.readFileSync(filePath, 'utf-8')) as T;
     } catch (err: any) {
-      this.logger.error(`Failed to load mock data: ${filePath} — ${err.message}`);
+      this.logger.error(
+        `Failed to load mock data: ${filePath} — ${err.message}`,
+      );
       throw err;
     }
   }

@@ -14,26 +14,29 @@ import type { MessageJob } from '../queue/message.processor';
 export class WhatsAppService {
   private readonly logger = new Logger(WhatsAppService.name);
 
-  private readonly accessToken:   string;
+  private readonly accessToken: string;
   private readonly phoneNumberId: string;
-  private readonly apiVersion:    string;
-  private readonly baseUrl:       string;
+  private readonly apiVersion: string;
+  private readonly baseUrl: string;
 
   constructor(
     private readonly configService: ConfigService,
     @InjectQueue(QUEUES.MESSAGES) private readonly messageQueue: Queue,
   ) {
-    const accessToken   = this.configService.get<string>('whatsapp.accessToken');
-    const phoneNumberId = this.configService.get<string>('whatsapp.phoneNumberId');
-    const apiVersion    = this.configService.get<string>('whatsapp.apiVersion') ?? 'v20.0';
+    const accessToken = this.configService.get<string>('whatsapp.accessToken');
+    const phoneNumberId = this.configService.get<string>(
+      'whatsapp.phoneNumberId',
+    );
+    const apiVersion =
+      this.configService.get<string>('whatsapp.apiVersion') ?? 'v20.0';
 
-    if (!accessToken)   throw new Error('META_ACCESS_TOKEN is not set');
+    if (!accessToken) throw new Error('META_ACCESS_TOKEN is not set');
     if (!phoneNumberId) throw new Error('META_PHONE_NUMBER_ID is not set');
 
-    this.accessToken   = accessToken;
+    this.accessToken = accessToken;
     this.phoneNumberId = phoneNumberId;
-    this.apiVersion    = apiVersion;
-    this.baseUrl       = `https://graph.facebook.com/${this.apiVersion}/${this.phoneNumberId}/messages`;
+    this.apiVersion = apiVersion;
+    this.baseUrl = `https://graph.facebook.com/${this.apiVersion}/${this.phoneNumberId}/messages`;
   }
 
   // ─── Incoming webhook entry point — called by WhatsAppController ──────────
@@ -77,15 +80,15 @@ export class WhatsAppService {
             from,
             name,
             text,
-            messageId:  msg?.id ?? '',
-            timestamp:  msg?.timestamp ?? String(Math.floor(Date.now() / 1000)),
+            messageId: msg?.id ?? '',
+            timestamp: msg?.timestamp ?? String(Math.floor(Date.now() / 1000)),
           };
 
           await this.messageQueue.add(JOBS.PROCESS_MESSAGE, job, {
-            attempts:         5,
-            backoff:          { type: 'exponential', delay: 5_000 },
+            attempts: 5,
+            backoff: { type: 'exponential', delay: 5_000 },
             removeOnComplete: 100,
-            removeOnFail:     50,
+            removeOnFail: 50,
           });
 
           this.logger.log(`Job queued for ${from} (${name}): "${text}"`);
@@ -125,10 +128,10 @@ export class WhatsAppService {
   async sendText(to: string, body: string): Promise<void> {
     await this.sendRaw({
       messaging_product: 'whatsapp',
-      recipient_type:    'individual',
-      to:                this.normalisePhone(to),
-      type:              'text',
-      text:              { preview_url: false, body },
+      recipient_type: 'individual',
+      to: this.normalisePhone(to),
+      type: 'text',
+      text: { preview_url: false, body },
     });
     this.logger.log(`Text sent to ${to}`);
   }
@@ -153,18 +156,18 @@ export class WhatsAppService {
    *   }]
    */
   async sendTemplate(
-    to:           string,
+    to: string,
     templateName: string,
     languageCode: string,
-    components:   Record<string, unknown>[],
+    components: Record<string, unknown>[],
   ): Promise<void> {
     await this.sendRaw({
       messaging_product: 'whatsapp',
-      recipient_type:    'individual',
-      to:                this.normalisePhone(to),
-      type:              'template',
+      recipient_type: 'individual',
+      to: this.normalisePhone(to),
+      type: 'template',
       template: {
-        name:     templateName,
+        name: templateName,
         language: { code: languageCode },
         components,
       },
@@ -179,9 +182,9 @@ export class WhatsAppService {
    * warning is logged — callers should never pass more than 3.
    */
   async sendButtons(
-    to:       string,
+    to: string,
     bodyText: string,
-    buttons:  { id: string; title: string }[],
+    buttons: { id: string; title: string }[],
   ): Promise<void> {
     if (buttons.length === 0) {
       // Degrade gracefully to plain text
@@ -203,19 +206,19 @@ export class WhatsAppService {
         );
       }
       return {
-        type:  'reply',
+        type: 'reply',
         reply: {
-          id:    b.id.slice(0, 256),    // Meta limit: 256 chars
-          title: b.title.slice(0, 20),  // Meta limit: 20 chars
+          id: b.id.slice(0, 256), // Meta limit: 256 chars
+          title: b.title.slice(0, 20), // Meta limit: 20 chars
         },
       };
     });
 
     await this.sendRaw({
       messaging_product: 'whatsapp',
-      recipient_type:    'individual',
-      to:                this.normalisePhone(to),
-      type:              'interactive',
+      recipient_type: 'individual',
+      to: this.normalisePhone(to),
+      type: 'interactive',
       interactive: {
         type: 'button',
         body: { text: bodyText.slice(0, 1024) }, // Meta body limit: 1024
@@ -231,11 +234,14 @@ export class WhatsAppService {
    * row description ≤ 72 chars, max 10 rows per section, max 10 sections.
    */
   async sendInteractiveList(
-    to:          string,
-    header:      string,
-    body:        string,
+    to: string,
+    header: string,
+    body: string,
     buttonLabel: string,
-    sections:    { title: string; rows: { id: string; title: string; description?: string }[] }[],
+    sections: {
+      title: string;
+      rows: { id: string; title: string; description?: string }[];
+    }[],
   ): Promise<void> {
     if (sections.length === 0 || sections.every((s) => s.rows.length === 0)) {
       await this.sendText(to, `${header}\n\n${body}`);
@@ -244,24 +250,24 @@ export class WhatsAppService {
 
     const safeSections = sections.slice(0, 10).map((s) => ({
       title: s.title.slice(0, 24),
-      rows:  s.rows.slice(0, 10).map((r) => ({
-        id:          r.id.slice(0, 200),
-        title:       r.title.slice(0, 24),
+      rows: s.rows.slice(0, 10).map((r) => ({
+        id: r.id.slice(0, 200),
+        title: r.title.slice(0, 24),
         description: r.description ? r.description.slice(0, 72) : undefined,
       })),
     }));
 
     await this.sendRaw({
       messaging_product: 'whatsapp',
-      recipient_type:    'individual',
-      to:                this.normalisePhone(to),
-      type:              'interactive',
+      recipient_type: 'individual',
+      to: this.normalisePhone(to),
+      type: 'interactive',
       interactive: {
-        type:   'list',
+        type: 'list',
         header: { type: 'text', text: header.slice(0, 60) },
-        body:   { text: body.slice(0, 1024) },
+        body: { text: body.slice(0, 1024) },
         action: {
-          button:   buttonLabel.slice(0, 20),
+          button: buttonLabel.slice(0, 20),
           sections: safeSections,
         },
       },
@@ -273,10 +279,10 @@ export class WhatsAppService {
 
   private async sendRaw(payload: Record<string, unknown>): Promise<void> {
     const response = await fetch(this.baseUrl, {
-      method:  'POST',
+      method: 'POST',
       headers: {
-        'Content-Type':  'application/json',
-        'Authorization': `Bearer ${this.accessToken}`,
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${this.accessToken}`,
       },
       body: JSON.stringify(payload),
     });

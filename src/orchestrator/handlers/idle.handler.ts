@@ -47,7 +47,7 @@ export class IdleHandler {
     private readonly faqHandler: FaqHandler,
     private readonly handoffHandler: HandoffHandler,
     private readonly prisma: PrismaService,
-  ) { }
+  ) {}
 
   async handle(phone: string, text: string, session: Session): Promise<void> {
     const lower = text.trim().toLowerCase();
@@ -64,7 +64,11 @@ export class IdleHandler {
         session.state = SessionState.AWAITING_NAME;
         await this.sessionsService.save(session);
         const message = await this.botMessageService.getSafe(
-          session.data.clinicId, MessageKey.ASK_NAME, {}, session.data.language, 'What is your name?'
+          session.data.clinicId,
+          MessageKey.ASK_NAME,
+          {},
+          session.data.language,
+          'What is your name?',
         );
         await this.whatsappService.sendText(phone, message);
       }
@@ -104,10 +108,26 @@ export class IdleHandler {
         session.state = SessionState.LANGUAGE_SELECT;
         await this.sessionsService.save(session);
         const message = await this.botMessageService.getSafe(
-          session.data.clinicId, MessageKey.LANGUAGE_PROMPT, {}, session.data.language, 'Choose your language:'
+          session.data.clinicId,
+          MessageKey.LANGUAGE_PROMPT,
+          {},
+          session.data.language,
+          'Choose your language:',
         );
-        const btnFr = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_FRENCH, {}, session.data.language, 'Français');
-        const btnEn = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_ENGLISH, {}, session.data.language, 'English');
+        const btnFr = await this.botMessageService.getSafe(
+          session.data.clinicId,
+          MessageKey.BUTTON_FRENCH,
+          {},
+          session.data.language,
+          'Français',
+        );
+        const btnEn = await this.botMessageService.getSafe(
+          session.data.clinicId,
+          MessageKey.BUTTON_ENGLISH,
+          {},
+          session.data.language,
+          'English',
+        );
         await this.whatsappService.sendButtons(phone, message, [
           { id: 'lang_fr', title: btnFr },
           { id: 'lang_en', title: btnEn },
@@ -137,7 +157,11 @@ export class IdleHandler {
         session.state = SessionState.AWAITING_NAME;
         await this.sessionsService.save(session);
         const message = await this.botMessageService.getSafe(
-          session.data.clinicId, MessageKey.ASK_NAME, {}, session.data.language, 'What is your name?'
+          session.data.clinicId,
+          MessageKey.ASK_NAME,
+          {},
+          session.data.language,
+          'What is your name?',
         );
         await this.whatsappService.sendText(phone, message);
       }
@@ -174,9 +198,27 @@ export class IdleHandler {
       'Welcome! How can I help you?',
     );
 
-    const btnBook = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_BOOK_APP, {}, session.data.language, 'Book appointment');
-    const btnFaq = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_FAQ, {}, session.data.language, 'FAQ');
-    const btnAgent = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_AGENT, {}, session.data.language, 'Talk to agent');
+    const btnBook = await this.botMessageService.getSafe(
+      session.data.clinicId,
+      MessageKey.BUTTON_BOOK_APP,
+      {},
+      session.data.language,
+      'Book appointment',
+    );
+    const btnFaq = await this.botMessageService.getSafe(
+      session.data.clinicId,
+      MessageKey.BUTTON_FAQ,
+      {},
+      session.data.language,
+      'FAQ',
+    );
+    const btnAgent = await this.botMessageService.getSafe(
+      session.data.clinicId,
+      MessageKey.BUTTON_AGENT,
+      {},
+      session.data.language,
+      'Talk to agent',
+    );
     await this.whatsappService.sendButtons(phone, message, [
       { id: 'book_appointment', title: btnBook },
       { id: 'faq', title: btnFaq },

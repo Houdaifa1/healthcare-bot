@@ -20,7 +20,7 @@ export class SpecialtyHandler {
     private readonly botMessageService: BotMessageService,
     private readonly prisma: PrismaService,
     private readonly aiService: AiService,
-  ) { }
+  ) {}
 
   /**
    * Called by IdleHandler / NameHandler when we want to SHOW the specialty list.
@@ -55,7 +55,13 @@ export class SpecialtyHandler {
       'Please choose your specialty:',
     );
 
-    const header = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.HEADER_SPECIALTIES, {}, session.data.language, 'Specialties');
+    const header = await this.botMessageService.getSafe(
+      session.data.clinicId,
+      MessageKey.HEADER_SPECIALTIES,
+      {},
+      session.data.language,
+      'Specialties',
+    );
     await this.whatsappService.sendInteractiveList(
       phone,
       header,
@@ -66,7 +72,8 @@ export class SpecialtyHandler {
           title: '',
           rows: specialties.map((s) => {
             const labels = s.labels as Record<string, string> | null;
-            const label = labels?.[session.data.language] ?? labels?.['FR'] ?? s.slug;
+            const label =
+              labels?.[session.data.language] ?? labels?.['FR'] ?? s.slug;
             return {
               id: `specialty_${s.slug}`,
               title: label,
@@ -116,7 +123,11 @@ export class SpecialtyHandler {
 
     if (!specialty) {
       // Run intent detection — user might want to cancel, go to menu, or talk to agent
-      const intent = await this.aiService.detectIntent(text, session.state, session.data.language);
+      const intent = await this.aiService.detectIntent(
+        text,
+        session.state,
+        session.data.language,
+      );
 
       if (intent === Intent.CANCEL || intent === Intent.GREETING) {
         session.state = SessionState.IDLE;
@@ -131,7 +142,11 @@ export class SpecialtyHandler {
         await this.sessionsService.save(session);
         // delegate to handoff flow inline
         const message = await this.botMessageService.getSafe(
-          session.data.clinicId, MessageKey.HANDOFF_TRIGGERED, {}, session.data.language, 'Connecting you with our team.'
+          session.data.clinicId,
+          MessageKey.HANDOFF_TRIGGERED,
+          {},
+          session.data.language,
+          'Connecting you with our team.',
         );
         await this.whatsappService.sendText(phone, message);
         return;
@@ -168,7 +183,8 @@ export class SpecialtyHandler {
     }
 
     const labels = specialty.labels as Record<string, string> | null;
-    const specialtyLabel = labels?.[session.data.language] ?? labels?.['FR'] ?? specialty.slug;
+    const specialtyLabel =
+      labels?.[session.data.language] ?? labels?.['FR'] ?? specialty.slug;
 
     const message = await this.botMessageService.getSafe(
       session.data.clinicId,
@@ -217,9 +233,27 @@ export class SpecialtyHandler {
       'Welcome! How can I help you?',
     );
 
-    const btnBook = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_BOOK_APP, {}, session.data.language, 'Book appointment');
-    const btnFaq = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_FAQ, {}, session.data.language, 'FAQ');
-    const btnAgent = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_AGENT, {}, session.data.language, 'Talk to agent');
+    const btnBook = await this.botMessageService.getSafe(
+      session.data.clinicId,
+      MessageKey.BUTTON_BOOK_APP,
+      {},
+      session.data.language,
+      'Book appointment',
+    );
+    const btnFaq = await this.botMessageService.getSafe(
+      session.data.clinicId,
+      MessageKey.BUTTON_FAQ,
+      {},
+      session.data.language,
+      'FAQ',
+    );
+    const btnAgent = await this.botMessageService.getSafe(
+      session.data.clinicId,
+      MessageKey.BUTTON_AGENT,
+      {},
+      session.data.language,
+      'Talk to agent',
+    );
     await this.whatsappService.sendButtons(phone, message, [
       { id: 'book_appointment', title: btnBook },
       { id: 'faq', title: btnFaq },
@@ -253,13 +287,15 @@ export class SpecialtyHandler {
 
     // Label match (case-insensitive, accent-tolerant) — checks both FR and EN labels
     const normalised = trimmed.toLowerCase();
-    return specialties.find((s) => {
-      const labels = s.labels as Record<string, string> | null;
-      if (!labels) return false;
-      for (const label of Object.values(labels)) {
-        if (label?.toLowerCase() === normalised) return true;
-      }
-      return false;
-    }) ?? null;
+    return (
+      specialties.find((s) => {
+        const labels = s.labels as Record<string, string> | null;
+        if (!labels) return false;
+        for (const label of Object.values(labels)) {
+          if (label?.toLowerCase() === normalised) return true;
+        }
+        return false;
+      }) ?? null
+    );
   }
 }

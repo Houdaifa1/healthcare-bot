@@ -38,7 +38,15 @@ interface AdminUserFixture {
 
 function loadFixture<T>(filename: string): T {
   // __dirname is /app/dist/src/prisma at runtime — fixtures are at /app/prisma/fixtures
-  const filepath = join(__dirname, '..', '..', '..', 'prisma', 'fixtures', filename);
+  const filepath = join(
+    __dirname,
+    '..',
+    '..',
+    '..',
+    'prisma',
+    'fixtures',
+    filename,
+  );
   return JSON.parse(readFileSync(filepath, 'utf-8')) as T;
 }
 
@@ -48,7 +56,9 @@ async function main() {
   // ── 1. Clinic ─────────────────────────────────────────────────────────
   // Only created once. Never updated — admin manages clinic data via dashboard.
   const clinicData = loadFixture<ClinicFixture>('clinic.json');
-  const existingClinic = await prisma.clinic.findUnique({ where: { id: 'main' } });
+  const existingClinic = await prisma.clinic.findUnique({
+    where: { id: 'main' },
+  });
 
   if (!existingClinic) {
     await prisma.clinic.create({
@@ -67,7 +77,9 @@ async function main() {
     console.log(`⏭️  Clinic already exists — skipping`);
   }
 
-  const clinic = existingClinic ?? (await prisma.clinic.findUnique({ where: { id: 'main' } }))!;
+  const clinic =
+    existingClinic ??
+    (await prisma.clinic.findUnique({ where: { id: 'main' } }))!;
 
   // ── 2. Bot messages ───────────────────────────────────────────────────
   // Only inserts keys that don't exist yet.
@@ -106,7 +118,9 @@ async function main() {
     }
   }
 
-  console.log(`✅ Bot messages: ${inserted} inserted, ${skipped} already existed (preserved)`);
+  console.log(
+    `✅ Bot messages: ${inserted} inserted, ${skipped} already existed (preserved)`,
+  );
 
   // ── 3. Admin user ─────────────────────────────────────────────────────
   // Created once from env vars. Never updated by seed.

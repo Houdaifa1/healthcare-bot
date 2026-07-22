@@ -1,4 +1,10 @@
-import { IsString, IsOptional, IsBoolean, IsArray, IsEnum } from 'class-validator';
+import {
+  IsString,
+  IsOptional,
+  IsBoolean,
+  IsArray,
+  IsEnum,
+} from 'class-validator';
 import { Language } from '@prisma/client';
 
 export class UpdateClinicDto {

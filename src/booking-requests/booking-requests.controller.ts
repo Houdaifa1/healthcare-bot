@@ -18,14 +18,16 @@ import { BookingRequestStatus } from '@prisma/client';
 @UseGuards(JwtAuthGuard)
 @Controller('api/admin/v1/booking-requests')
 export class BookingRequestsController {
-  constructor(private readonly bookingRequestsService: BookingRequestsService) {}
+  constructor(
+    private readonly bookingRequestsService: BookingRequestsService,
+  ) {}
 
   // GET /api/admin/v1/booking-requests
   @Get()
   findAll(
     @Request() req: any,
     @Query('campaignId') campaignId?: string,
-    @Query('status')     status?: BookingRequestStatus,
+    @Query('status') status?: BookingRequestStatus,
   ) {
     return this.bookingRequestsService.findAll(req.user.clinicId, {
       campaignId,

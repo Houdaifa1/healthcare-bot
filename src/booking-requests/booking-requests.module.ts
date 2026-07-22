@@ -4,8 +4,8 @@ import { BookingRequestsController } from './booking-requests.controller';
 import { WhatsAppModule } from '../whatsapp/whatsapp.module';
 
 @Module({
-  imports:      [WhatsAppModule],
-  controllers:  [BookingRequestsController],
-  providers:    [BookingRequestsService],
+  imports: [WhatsAppModule],
+  controllers: [BookingRequestsController],
+  providers: [BookingRequestsService],
 })
 export class BookingRequestsModule {}

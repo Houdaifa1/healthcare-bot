@@ -17,8 +17,8 @@ import { BookingRequestsModule } from './booking-requests/booking-requests.modul
 @Module({
   imports: [
     ConfigModule.forRoot({
-      isGlobal:    true,
-      load:        [configuration],
+      isGlobal: true,
+      load: [configuration],
       envFilePath: '.env',
     }),
     ScheduleModule.forRoot(),

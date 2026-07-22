@@ -47,12 +47,12 @@ export class BotMessageService {
     // 3. Nowhere to fall back — admin MUST seed this key
     this.logger.error(
       `BotMessage "${key}" not found for clinic ${clinicId} in ANY language. ` +
-      `Seed files must include this key for both FR and EN.`,
+        `Seed files must include this key for both FR and EN.`,
     );
 
     throw new NotFoundException(
       `BotMessage key "${key}" not found for clinic ${clinicId} in [${language}] or [EN]. ` +
-      `Run seed or add via admin dashboard.`,
+        `Run seed or add via admin dashboard.`,
     );
   }
 

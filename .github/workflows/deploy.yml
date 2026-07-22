@@ -30,6 +30,17 @@ jobs:
           fi
           echo "✅ .env.production found"
 
+      - name: Use non-interactive Docker config
+        run: |
+          mkdir -p "$RUNNER_TEMP/docker-config"
+          cat > "$RUNNER_TEMP/docker-config/config.json" <<'EOF'
+          {
+            "auths": {}
+          }
+          EOF
+          echo "DOCKER_CONFIG=$RUNNER_TEMP/docker-config" >> "$GITHUB_ENV"
+          echo "✅ Using temporary Docker config without keychain credential helpers"
+
       - name: Build backend image
         run: docker compose build backend
 

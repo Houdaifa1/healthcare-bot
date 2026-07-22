@@ -1,4 +1,8 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { BotMessage, Language, MessageKey } from '@prisma/client';
 import { UpdateBotMessageDto } from './dto/update-bot-message.dto';
@@ -29,7 +33,7 @@ export class BotMessagesService {
     language: Language,
     data: UpdateBotMessageDto,
   ): Promise<BotMessage> {
-    if (!Object.values(MessageKey).includes(key as MessageKey)) {
+    if (!Object.values(MessageKey).includes(key)) {
       throw new BadRequestException(
         `Invalid message key "${key}". Valid keys: ${Object.values(MessageKey).join(', ')}`,
       );

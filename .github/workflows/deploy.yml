@@ -32,14 +32,18 @@ jobs:
 
       - name: Use non-interactive Docker config
         run: |
-          mkdir -p "$RUNNER_TEMP/docker-config"
-          cat > "$RUNNER_TEMP/docker-config/config.json" <<'EOF'
+          ISOLATED_HOME="$RUNNER_TEMP/docker-home"
+          mkdir -p "$ISOLATED_HOME/.docker"
+          cat > "$ISOLATED_HOME/.docker/config.json" <<'EOF'
           {
             "auths": {}
           }
           EOF
-          echo "DOCKER_CONFIG=$RUNNER_TEMP/docker-config" >> "$GITHUB_ENV"
-          echo "✅ Using temporary Docker config without keychain credential helpers"
+          echo "HOME=$ISOLATED_HOME" >> "$GITHUB_ENV"
+          echo "DOCKER_CONFIG=$ISOLATED_HOME/.docker" >> "$GITHUB_ENV"
+          echo "DOCKER_BUILDKIT=0" >> "$GITHUB_ENV"
+          echo "COMPOSE_DOCKER_CLI_BUILD=0" >> "$GITHUB_ENV"
+          echo "✅ Using isolated home and Docker config without keychain credential helpers"
 
       - name: Detect Docker Compose command
         run: |

@@ -30,6 +30,13 @@ jobs:
           fi
           echo "✅ .env.production found"
 
+      - name: Configure Docker for headless runner
+        run: |
+          DOCKER_CONFIG_DIR="$RUNNER_TEMP/docker-config"
+          mkdir -p "$DOCKER_CONFIG_DIR"
+          printf '{"auths":{}}' > "$DOCKER_CONFIG_DIR/config.json"
+          echo "DOCKER_CONFIG=$DOCKER_CONFIG_DIR" >> "$GITHUB_ENV"
+
       - name: Build backend image
         run: docker compose build backend
 

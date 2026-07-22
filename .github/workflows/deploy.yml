@@ -6,128 +6,66 @@ on:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macbook-prod]
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set lowercase repo name
-        id: repo
-        run: echo "name=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+      - name: Link production env file
+        run: |
+          ENV_SOURCE="$HOME/projects/healthcare-bot/.env.production"
+          if [ ! -f "$ENV_SOURCE" ]; then
+            echo "❌ $ENV_SOURCE not found — deploy cannot continue."
+            exit 1
+          fi
+          ln -sf "$ENV_SOURCE" .env.production
+          echo "✅ Linked .env.production from $ENV_SOURCE"
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Verify .env.production exists
+        run: |
+          if [ ! -f .env.production ]; then
+            echo "❌ .env.production not found on this machine — deploy cannot continue."
+            exit 1
+          fi
+          echo "✅ .env.production found"
 
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build backend image
+        run: docker compose build backend
 
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          no-cache: true
-          tags: ghcr.io/${{ steps.repo.outputs.name }}:latest
+      - name: Ensure Postgres and Redis are up
+        run: docker compose up -d postgres redis
 
-      - name: Deploy to Droplet
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.DROPLET_IP }}
-          username: root
-          key: ${{ secrets.DROPLET_SSH_KEY }}
-          script: |
-            set -euo pipefail
-
-            IMAGE="ghcr.io/${{ steps.repo.outputs.name }}:latest"
-            ENV_FILE="/root/.env.production"
-
-            # ── Ensure Redis ──────────────────────────────────────────────
-            if ! command -v redis-server &> /dev/null; then
-              apt-get update -qq && apt-get install -y redis-server
-              sed -i 's/^bind .*/bind 127.0.0.1/' /etc/redis/redis.conf
-              systemctl enable redis-server
+      - name: Resolve stuck migrations
+        run: |
+          docker compose run --rm backend sh -c "
+            set -e
+            FAILED=\$(npx prisma migrate status 2>&1 | grep 'Following migration' -A 999 | grep '^\s*[0-9]' | awk '{print \$1}' || true)
+            if [ -n \"\$FAILED\" ]; then
+              for m in \$FAILED; do npx prisma migrate resolve --rolled-back \"\$m\" || true; done
             fi
-            systemctl start redis-server || true
-            redis-cli ping | grep -q PONG && echo "✅ Redis is up" || { echo "❌ Redis failed"; exit 1; }
+          "
 
-            # ── Pull latest image ─────────────────────────────────────────
-            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-            docker pull "$IMAGE"
+      - name: Run migrations
+        run: docker compose run --rm backend sh -c "npx prisma migrate deploy"
 
-            # ── Resolve any stuck/failed migrations ───────────────────────
-            echo "▶ Checking for stuck migrations..."
-            docker run --rm \
-              --network host \
-              --env-file "$ENV_FILE" \
-              "$IMAGE" \
-              sh -c "
-                set -e
-                FAILED=\$(npx prisma migrate status 2>&1 | grep 'Following migration' -A 999 | grep '^\s*[0-9]' | awk '{print \$1}' || true)
-                if [ -n \"\$FAILED\" ]; then
-                  echo \"Found stuck migrations: \$FAILED\"
-                  for m in \$FAILED; do
-                    echo \"Marking \$m as rolled back...\"
-                    npx prisma migrate resolve --rolled-back \"\$m\" || true
-                  done
-                  echo '✅ Stuck migrations resolved'
-                else
-                  echo '✅ No stuck migrations found'
-                fi
-              "
+      - name: Seed database
+        run: docker compose run --rm backend sh -c "node dist/src/prisma/seed.js"
 
-            # ── Run migrations ────────────────────────────────────────────
-            echo "▶ Running prisma migrate deploy..."
-            docker run --rm \
-              --network host \
-              --env-file "$ENV_FILE" \
-              "$IMAGE" \
-              sh -c "npx prisma migrate deploy"
-            echo "✅ Migrations applied"
+      - name: Deploy backend + tunnel
+        run: docker compose up -d backend cloudflared
 
-            # ── Seed database ─────────────────────────────────────────────
-            # Only inserts missing records — never overwrites existing data.
-            # New bot message keys added to fixtures are picked up automatically.
-            # Doctors, specialties, FAQs, timeslots are NOT seeded — admin owns them.
-            echo "▶ Running database seed..."
-            docker run --rm \
-              --network host \
-              --env-file "$ENV_FILE" \
-              "$IMAGE" \
-              sh -c "node dist/src/prisma/seed.js"
-            echo "✅ Seed complete"
+      - name: Prune old images
+        run: docker image prune -f
 
-            # ── Session versioning ────────────────────────────────────────
-            # No flush needed. Stale sessions are reset individually on the
-            # user's next message via SESSION_VERSION check in SessionsService.
-            # Bump SESSION_VERSION in sessions.service.ts only when session
-            # structure changes incompatibly.
-            echo "✅ Session versioning active — no flush needed"
-
-            # ── Swap container ────────────────────────────────────────────
-            docker stop healthcare-bot 2>/dev/null || true
-            docker rm   healthcare-bot 2>/dev/null || true
-            docker run -d \
-              --name healthcare-bot \
-              --restart unless-stopped \
-              --network host \
-              --env-file "$ENV_FILE" \
-              "$IMAGE"
-
-            docker image prune -f
-
-            # ── Verify ────────────────────────────────────────────────────
-            echo "▶ Waiting for container to become healthy..."
-            sleep 10
-            if docker ps | grep -q healthcare-bot; then
-              echo "✅ Deployment successful"
-            else
-              echo "❌ Container not running — last 50 log lines:"
-              docker logs healthcare-bot --tail 50
-              exit 1
-            fi
-            docker logs healthcare-bot --tail 20
+      - name: Verify deployment
+        run: |
+          sleep 10
+          if docker ps --filter "name=healthcare-bot" --filter "status=running" | grep -q healthcare-bot; then
+            echo "✅ Deployment successful"
+          else
+            echo "❌ Container not running — last 50 log lines:"
+            docker logs healthcare-bot --tail 50
+            exit 1
+          fi
+          docker logs healthcare-bot --tail 20

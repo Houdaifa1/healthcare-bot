@@ -19,16 +19,24 @@ jobs:
         run: |
           REPO="$HOME/projects/healthcare-bot"
 
-          for f in ".env.production" ".env" "cloudflared/creds.json"; do
+          for f in ".env.production" ".env"; do
             SOURCE="$REPO/$f"
             if [ ! -f "$SOURCE" ]; then
               echo "❌ $SOURCE not found — deploy cannot continue."
               exit 1
             fi
-            mkdir -p "$(dirname "$f")"
             ln -sf "$SOURCE" "$f"
             echo "✅ Linked $f"
           done
+
+          CREDS_SOURCE="$REPO/cloudflared/creds.json"
+          if [ ! -f "$CREDS_SOURCE" ]; then
+            echo "❌ $CREDS_SOURCE not found — deploy cannot continue."
+            exit 1
+          fi
+          mkdir -p cloudflared
+          cp -f "$CREDS_SOURCE" cloudflared/creds.json
+          echo "✅ Copied cloudflared/creds.json"
 
       - name: Build backend image (classic builder, bypass compose)
         run: DOCKER_BUILDKIT=0 docker build -t healthcare-bot-backend:latest .

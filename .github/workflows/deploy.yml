@@ -40,6 +40,14 @@ jobs:
           echo "DOCKER_CONTEXT=default" >> "$GITHUB_ENV"
           echo "✅ Using non-interactive Docker config and default context"
 
+      - name: Ensure default buildx builder
+        run: |
+          if ! docker buildx ls | grep -q "defaultbuilder"; then
+            docker buildx create --name defaultbuilder --driver docker-container --bootstrap
+          fi
+          docker buildx use defaultbuilder
+          echo "✅ Using defaultbuilder (docker-container driver, no Desktop keychain dependency)"
+
       - name: Build backend image
         run: docker compose build backend
 

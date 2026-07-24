@@ -7,6 +7,9 @@ on:
 jobs:
   deploy:
     runs-on: [self-hosted, macbook-prod]
+    env:
+      DOCKER_BUILDKIT: "0"
+      COMPOSE_DOCKER_CLI_BUILD: "0"
 
     steps:
       - name: Checkout code
@@ -26,19 +29,6 @@ jobs:
             ln -sf "$SOURCE" "$f"
             echo "✅ Linked $f"
           done
-
-      - name: Use non-interactive Docker config
-        run: |
-          mkdir -p "$RUNNER_TEMP/docker-config"
-          cat > "$RUNNER_TEMP/docker-config/config.json" <<'EOF'
-          {
-            "auths": {}
-          }
-          EOF
-          ln -sf "$HOME/.docker/cli-plugins" "$RUNNER_TEMP/docker-config/cli-plugins"
-          echo "DOCKER_CONFIG=$RUNNER_TEMP/docker-config" >> "$GITHUB_ENV"
-          echo "DOCKER_CONTEXT=default" >> "$GITHUB_ENV"
-          echo "✅ Using non-interactive Docker config and default context"
 
       - name: Build backend image
         run: docker compose build backend

@@ -37,7 +37,8 @@ jobs:
           EOF
           ln -sf "$HOME/.docker/cli-plugins" "$RUNNER_TEMP/docker-config/cli-plugins"
           echo "DOCKER_CONFIG=$RUNNER_TEMP/docker-config" >> "$GITHUB_ENV"
-          echo "✅ Using temporary Docker config without keychain credential helpers"
+          echo "DOCKER_CONTEXT=default" >> "$GITHUB_ENV"
+          echo "✅ Using non-interactive Docker config and default context"
 
       - name: Build backend image
         run: docker compose build backend

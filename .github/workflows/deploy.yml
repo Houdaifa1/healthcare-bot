@@ -30,8 +30,8 @@ jobs:
             echo "✅ Linked $f"
           done
 
-      - name: Build backend image
-        run: docker compose build backend
+      - name: Build backend image (classic builder, bypass compose)
+        run: DOCKER_BUILDKIT=0 docker build -t healthcare-bot-backend:latest .
 
       - name: Ensure Postgres and Redis are up
         run: docker compose up -d postgres redis

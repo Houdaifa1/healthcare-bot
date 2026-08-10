@@ -6,7 +6,7 @@ on:
 
 jobs:
   deploy:
-    runs-on: [self-hosted, macbook-prod]
+    runs-on: self-hosted
     env:
       DOCKER_BUILDKIT: "0"
       COMPOSE_DOCKER_CLI_BUILD: "0"

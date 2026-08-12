@@ -1,8 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { SessionsService, CampaignSession, CampaignMessage } from '../sessions/sessions.service';
 import { WhatsAppService } from '../whatsapp/whatsapp.service';
+import { OllamaProvider } from './providers/ollama.provider';
+import { AIMessage, AIToolDefinition, AITextBlock, AIToolUseBlock } from './providers/ai-response.types';
 import {
   CampaignPatientStatus,
   ComplaintSeverity,
@@ -11,31 +12,6 @@ import {
   Language,
   MessageKey,
 } from '@prisma/client';
-
-// ─── Anthropic API shapes ─────────────────────────────────────────────────────
-
-interface AnthropicTextBlock {
-  type: 'text';
-  text: string;
-}
-
-interface AnthropicToolUseBlock {
-  type: 'tool_use';
-  id: string;
-  name: string;
-  input: Record<string, unknown>;
-}
-
-type AnthropicContentBlock = AnthropicTextBlock | AnthropicToolUseBlock;
-
-interface AnthropicMessage {
-  id: string;
-  type: 'message';
-  role: 'assistant';
-  content: AnthropicContentBlock[];
-  stop_reason: 'end_turn' | 'tool_use' | 'max_tokens' | string;
-  usage: { input_tokens: number; output_tokens: number };
-}
 
 // ─── Tool input shapes ────────────────────────────────────────────────────────
 
@@ -60,9 +36,9 @@ interface EndConversationInput {
   outcome: ConversationOutcome;
 }
 
-// ─── Tool definitions ─────────────────────────────────────────────────────────
+// ─── Tool definitions (provider-agnostic — both Anthropic and Ollama adapt this) ─────
 
-const CLAUDE_TOOLS = [
+const AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'log_complaint',
     description:
@@ -172,30 +148,19 @@ const CLAUDE_TOOLS = [
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const ANTHROPIC_MODEL = 'claude-haiku-4-5';
-const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
-const ANTHROPIC_VERSION = '2023-06-01';
-const MAX_RETRIES = 2;
-const RETRY_DELAY_MS = 1500;
 const MAX_TOOL_LOOPS = 6;
-
-const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
 @Injectable()
 export class ConversationService {
   private readonly logger = new Logger(ConversationService.name);
-  private readonly anthropicApiKey: string;
 
   constructor(
-    private readonly configService: ConfigService,
     private readonly prisma: PrismaService,
     private readonly sessionsService: SessionsService,
     private readonly whatsappService: WhatsAppService,
+    private readonly ollamaProvider: OllamaProvider,
   ) {
-    const key = this.configService.get<string>('anthropic.apiKey');
-    if (!key) throw new Error('ANTHROPIC_API_KEY is not set');
-    this.anthropicApiKey = key;
-    this.logger.log(`ConversationService initialized — model: ${ANTHROPIC_MODEL}`);
+    this.logger.log('ConversationService initialized — Ollama local model only, no cloud fallback');
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -295,26 +260,27 @@ export class ConversationService {
       return;
     }
 
-    // ── 11. Build prompt and run Claude tool loop ──────────────────────────
+    // ── 11. Build prompt and run AI tool loop ──────────────────────────────
     const systemPrompt = this.buildSystemPrompt(session, campaignPatient, clinic);
-    const claudeMessages = this.buildClaudeMessages(session);
+    const aiMessages = this.buildAiMessages(session);
 
     let conversationEnded = false;
     let loopCount = 0;
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
+    let lastUsedModel = 'unknown';
 
     // Declared outside the loop so the guard persists across all iterations.
     // Once text is sent to the patient, it must never be sent again this turn.
     let textSent = false;
 
     while (loopCount < MAX_TOOL_LOOPS && !conversationEnded) {
-      let response: AnthropicMessage;
+      let response: AIMessage;
 
       try {
-        response = await this.callClaudeWithRetry(systemPrompt, claudeMessages);
+        response = await this.ollamaProvider.generate(systemPrompt, aiMessages, AI_TOOLS);
       } catch (err: any) {
-        this.logger.error(`Claude call failed for ${phone}: ${err.message}`);
+        this.logger.error(`Ollama call failed for ${phone}: ${err.message}`);
         const errMsg = (session.language ?? Language.FR) === Language.EN
           ? 'Sorry, I encountered a technical issue. Please try again in a few minutes.'
           : 'Désolé, je rencontre un problème technique. Veuillez réessayer dans quelques minutes.';
@@ -322,8 +288,10 @@ export class ConversationService {
         return;
       }
 
+      lastUsedModel = response.model;
+
       if (response.stop_reason === 'max_tokens') {
-        this.logger.warn(`Claude response truncated (max_tokens) for ${phone} — sending clean fallback`);
+        this.logger.warn(`AI response truncated (max_tokens) for ${phone} — sending clean fallback`);
         const fallback = (session.language ?? Language.FR) === Language.EN
           ? 'Sorry, something came up on my end. Could you repeat that?'
           : 'Désolé, une erreur est survenue de mon côté. Pouvez-vous répéter ?';
@@ -338,10 +306,10 @@ export class ConversationService {
       }
 
       const textBlocks = response.content
-        .filter((b): b is AnthropicTextBlock => b.type === 'text' && b.text.trim().length > 0);
+        .filter((b): b is AITextBlock => b.type === 'text' && b.text.trim().length > 0);
 
       const toolUseBlocks = response.content
-        .filter((b): b is AnthropicToolUseBlock => b.type === 'tool_use');
+        .filter((b): b is AIToolUseBlock => b.type === 'tool_use');
 
       const textReply = textBlocks.map(b => b.text).join(' ').trim();
 
@@ -372,7 +340,7 @@ export class ConversationService {
             );
             resultContent = 'Complaint logged successfully.';
             // Do NOT call sendTextOnce() here — stop_reason is 'tool_use' so
-            // Claude will produce the clean patient-facing text in the next
+            // the model will produce the clean patient-facing text in the next
             // end_turn iteration. Sending here causes dashboard duplicates.
 
           } else if (toolBlock.name === 'request_booking') {
@@ -428,9 +396,9 @@ export class ConversationService {
         break;
       }
 
-      // Push to claudeMessages for the next API call (internal only — never shown to patient).
-      claudeMessages.push({ role: 'assistant', content: response.content as any });
-      claudeMessages.push({ role: 'user', content: toolResults as any });
+      // Push to aiMessages for the next call (internal only — never shown to patient).
+      aiMessages.push({ role: 'assistant', content: response.content as any });
+      aiMessages.push({ role: 'user', content: toolResults as any });
 
       // Push raw tool exchange to session.messages ONLY if sendTextOnce() has
       // not already stored the human-readable text. If it has, the text bubble
@@ -455,22 +423,20 @@ export class ConversationService {
     // ── 12. Increment turn count ───────────────────────────────────────────
     session.turnCount += 1;
 
-    // ── 13. Log token usage ────────────────────────────────────────────────
-    if (totalInputTokens > 0 || totalOutputTokens > 0) {
-      try {
-        await this.prisma.aiUsage.create({
-          data: {
-            campaignPatientId: campaignPatient.id,
-            clinicId: clinic.id,
-            campaignId: campaignPatient.campaignId,
-            inputTokens: totalInputTokens,
-            outputTokens: totalOutputTokens,
-            model: ANTHROPIC_MODEL,
-          },
-        });
-      } catch (err: any) {
-        this.logger.warn(`Failed to log token usage: ${err.message}`);
-      }
+    // ── 13. Log usage — model reflects whichever provider actually served this turn ──
+    try {
+      await this.prisma.aiUsage.create({
+        data: {
+          campaignPatientId: campaignPatient.id,
+          clinicId: clinic.id,
+          campaignId: campaignPatient.campaignId,
+          inputTokens: totalInputTokens,
+          outputTokens: totalOutputTokens,
+          model: lastUsedModel,
+        },
+      });
+    } catch (err: any) {
+      this.logger.warn(`Failed to log AI usage: ${err.message}`);
     }
 
     // ── 14. Persist to DB ──────────────────────────────────────────────────
@@ -487,7 +453,7 @@ export class ConversationService {
       await this.sessionsService.saveCampaignSession(session);
     }
 
-    this.logger.log(`Turn ${session.turnCount}/${aiMaxTurns} complete for ${phone}`);
+    this.logger.log(`Turn ${session.turnCount}/${aiMaxTurns} complete for ${phone} (model: ${lastUsedModel})`);
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -636,10 +602,10 @@ Current turn: ${session.turnCount + 1}`;
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // BUILD CLAUDE MESSAGES ARRAY
+  // BUILD AI MESSAGES ARRAY (provider-agnostic — consumed by whichever provider runs)
   // ═══════════════════════════════════════════════════════════════════════════
 
-  private buildClaudeMessages(
+  private buildAiMessages(
     session: CampaignSession,
   ): { role: 'user' | 'assistant'; content: any }[] {
     return session.messages
@@ -658,68 +624,6 @@ Current turn: ${session.turnCount + 1}`;
         }
         return { role: m.role, content };
       });
-  }
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // CALL CLAUDE WITH RETRY
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  private async callClaudeWithRetry(
-    systemPrompt: string,
-    messages: { role: 'user' | 'assistant'; content: any }[],
-  ): Promise<AnthropicMessage> {
-    let lastError: Error | null = null;
-
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-      try {
-        return await this.callClaude(systemPrompt, messages);
-      } catch (err: any) {
-        lastError = err;
-        const isRetryable =
-          err.message.includes('529') ||
-          err.message.includes('500') ||
-          err.message.includes('503');
-
-        if (isRetryable && attempt < MAX_RETRIES) {
-          this.logger.warn(`Anthropic API error — retrying (${attempt + 1}/${MAX_RETRIES}): ${err.message}`);
-          await sleep(RETRY_DELAY_MS * (attempt + 1));
-          continue;
-        }
-        throw err;
-      }
-    }
-
-    throw lastError!;
-  }
-
-  private async callClaude(
-    systemPrompt: string,
-    messages: { role: 'user' | 'assistant'; content: any }[],
-  ): Promise<AnthropicMessage> {
-    const response = await fetch(ANTHROPIC_API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': this.anthropicApiKey,
-        'anthropic-version': ANTHROPIC_VERSION,
-      },
-      body: JSON.stringify({
-        model: ANTHROPIC_MODEL,
-        max_tokens: 1024,
-        system: systemPrompt,
-        tools: CLAUDE_TOOLS,
-        messages,
-      }),
-    });
-
-    if (!response.ok) {
-      let errorBody = '';
-      try { errorBody = JSON.stringify(await response.json()); }
-      catch { errorBody = await response.text().catch(() => ''); }
-      throw new Error(`Anthropic API error ${response.status}: ${errorBody}`);
-    }
-
-    return response.json() as Promise<AnthropicMessage>;
   }
 
   // ═══════════════════════════════════════════════════════════════════════════

@@ -78,7 +78,10 @@ export class OllamaProvider implements AIProvider {
     const content: AIContentBlock[] = [];
 
     if (choice.message?.content?.trim()) {
-      content.push({ type: 'text', text: choice.message.content });
+      const cleanedText = this.stripLeakedToolSyntax(choice.message.content, tools);
+      if (cleanedText) {
+        content.push({ type: 'text', text: cleanedText });
+      }
     }
 
     for (const toolCall of choice.message?.tool_calls ?? []) {
@@ -140,5 +143,43 @@ export class OllamaProvider implements AIProvider {
     }
 
     return input;
+  }
+
+  /**
+   * Safety net for local model unreliability: strips any leaked tool-call
+   * syntax the model may have written directly into patient-facing text
+   * instead of using a proper structured tool_calls field (e.g. the model
+   * outputs "log_complaint {...}" as plain text). A patient must NEVER see
+   * this regardless of how rare the leak is — this is not optional even
+   * with a stronger model, since no local model is 100% reliable here.
+   */
+  private stripLeakedToolSyntax(text: string, tools: AIToolDefinition[]): string {
+    let cleaned = text;
+
+    for (const tool of tools) {
+      // Matches patterns like: I log_complaint {...}  OR  log_complaint({...})
+      // OR bare tool_name followed by a JSON-like object anywhere in the text.
+      const leakPattern = new RegExp(
+        `\\b(?:I\\s+)?${tool.name}\\s*[:(]?\\s*\\{[\\s\\S]*?\\}\\)?`,
+        'gi',
+      );
+      cleaned = cleaned.replace(leakPattern, '').trim();
+    }
+
+    // Also catch a bare tool name mentioned with no JSON (rarer, but still
+    // a leak — e.g. model writes "Calling log_complaint..." as prose).
+    for (const tool of tools) {
+      const bareNamePattern = new RegExp(`\\b${tool.name}\\b`, 'gi');
+      cleaned = cleaned.replace(bareNamePattern, '').trim();
+    }
+
+    // Collapse any double spaces/newlines left behind by the removal.
+    cleaned = cleaned.replace(/\s{2,}/g, ' ').replace(/\n{2,}/g, '\n').trim();
+
+    if (cleaned !== text) {
+      this.logger.warn(`Stripped leaked tool-call syntax from Ollama response text`);
+    }
+
+    return cleaned;
   }
 }

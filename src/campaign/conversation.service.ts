@@ -113,7 +113,11 @@ const AI_TOOLS: AIToolDefinition[] = [
       'Transfer the conversation to a human staff member. ' +
       'Use when: the patient explicitly asks for a human, the patient is very distressed, ' +
       'the situation is medically complex, or severity is HIGH. ' +
-      'IMPORTANT: If the patient complained AND wants a human, call log_complaint first, then request_handoff. ' +
+      'IMPORTANT: If the patient complained AND wants a human, call log_complaint first, then request_handoff, ' +
+      'in the SAME turn. ' +
+      'PRIORITY RULE: If the patient explicitly asks to speak to a human/staff member, OR uses words like ' +
+      '"maintenant", "urgent", "immédiatement", "right now", "immediately" together with a health concern, ' +
+      'you MUST call request_handoff. NEVER call log_complaint alone when the patient has explicitly requested a human. ' +
       'This ends the AI conversation — always send a warm farewell text before calling this.',
     input_schema: {
       type: 'object',
@@ -149,6 +153,23 @@ const AI_TOOLS: AIToolDefinition[] = [
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const MAX_TOOL_LOOPS = 6;
+
+// Matches raw/malformed tool-call syntax that a misparsing provider can leak
+// into plain text (e.g. "_log_complaint{...}", "log_complaint(...)",
+// "request_handoff({...")). This is a defensive net, not the primary fix —
+// the real fix belongs in the provider's response parser.
+const TOOL_NAMES = ['log_complaint', 'request_booking', 'request_handoff', 'end_conversation'] as const;
+// NOTE: deliberately no \b word-boundary anchor before the tool name.
+// A real production leak came through as "_vlog_complaint{...}" — there is
+// no word boundary between "v" and "l" in "vlog_complaint", so an anchored
+// pattern silently misses it (this was the actual root-cause bug). Matching
+// the tool name as a plain substring is intentional here: this is a
+// last-resort net behind the provider's own recovery/stripping, and a
+// slightly wider match is far safer than missing a real leak.
+const TOOL_LEAK_PATTERN = new RegExp(
+  `(?:${TOOL_NAMES.join('|')})\\s*[\\(\\{]`,
+  'i',
+);
 
 @Injectable()
 export class ConversationService {
@@ -213,6 +234,10 @@ export class ConversationService {
     }
 
     // ── 5. Language detection ──────────────────────────────────────────────
+    // detectLanguage returns null on ties/no-signal messages so that a
+    // short or keyword-free reply (e.g. "actually can i book another
+    // appointment next week" if it happens to score 0/0) never silently
+    // overwrites an already-established session language.
     const detectedLang = this.detectLanguage(patientMessage);
     const resolvedLang = detectedLang ?? session.language ?? Language.FR;
 
@@ -311,7 +336,8 @@ export class ConversationService {
       const toolUseBlocks = response.content
         .filter((b): b is AIToolUseBlock => b.type === 'tool_use');
 
-      const textReply = textBlocks.map(b => b.text).join(' ').trim();
+      const rawTextReply = textBlocks.map(b => b.text).join(' ').trim();
+      const textReply = this.sanitizeTextReply(rawTextReply, phone, toolUseBlocks.length > 0);
 
       // Sends the patient-facing text exactly once across the entire tool loop.
       // Also stores it in session.messages so the dashboard shows it once.
@@ -324,14 +350,22 @@ export class ConversationService {
 
       const toolResults: { type: 'tool_result'; tool_use_id: string; content: string }[] = [];
 
+      // Track whether a HIGH-severity complaint was logged this turn without
+      // a corresponding request_handoff call, so we can auto-escalate below —
+      // a code-level safety net for cases where the model (esp. a local 7B
+      // model) misses the "HIGH severity → must also hand off" prompt rule.
+      let highSeverityComplaintLogged = false;
+      let handoffCalledThisTurn = false;
+
       for (const toolBlock of toolUseBlocks) {
         this.logger.log(`Tool: ${toolBlock.name} — ${JSON.stringify(toolBlock.input)}`);
 
         let resultContent = 'Success';
         try {
           if (toolBlock.name === 'log_complaint') {
+            const input = toolBlock.input as unknown as LogComplaintInput;
             await this.executeLogComplaint(
-              toolBlock.input as unknown as LogComplaintInput,
+              input,
               campaignPatient.id,
               clinic.id,
               patientMessage,
@@ -339,6 +373,9 @@ export class ConversationService {
               clinic,
             );
             resultContent = 'Complaint logged successfully.';
+            if (input.severity === ComplaintSeverity.HIGH) {
+              highSeverityComplaintLogged = true;
+            }
             // Do NOT call sendTextOnce() here — stop_reason is 'tool_use' so
             // the model will produce the clean patient-facing text in the next
             // end_turn iteration. Sending here causes dashboard duplicates.
@@ -354,6 +391,7 @@ export class ConversationService {
             // Same as above — do NOT send here, let end_turn handle it.
 
           } else if (toolBlock.name === 'request_handoff') {
+            handoffCalledThisTurn = true;
             // Conversation is ending — send farewell text NOW before closing.
             await sendTextOnce();
             await this.executeRequestHandoff(
@@ -383,9 +421,36 @@ export class ConversationService {
         }
 
         toolResults.push({ type: 'tool_result', tool_use_id: toolBlock.id, content: resultContent });
+
+        if (conversationEnded) break;
       }
 
-      // Conversation ended inside a tool handler — text already sent, just stop.
+      // ── Safety net: HIGH severity complaint MUST result in a human handoff. ──
+      // If the model logged a HIGH severity complaint but did not call
+      // request_handoff in the same turn, force the escalation here rather
+      // than trusting a 7B local model's instruction-following for something
+      // this important. This can fire even if the loop already sent text —
+      // sendTextOnce() below is a no-op in that case, so we only need to make
+      // sure the handoff itself still executes.
+      if (highSeverityComplaintLogged && !handoffCalledThisTurn && !conversationEnded) {
+        this.logger.warn(
+          `HIGH severity complaint logged without request_handoff for ${phone} — auto-escalating`,
+        );
+        await sendTextOnce();
+        try {
+          await this.executeRequestHandoff(
+            { reason: 'Auto-escalated by system: HIGH severity complaint logged without explicit handoff.' },
+            session,
+            campaignPatient,
+            clinic,
+          );
+          conversationEnded = true;
+        } catch (err: any) {
+          this.logger.error(`Auto-escalation handoff failed for ${phone}: ${err.message}`);
+        }
+      }
+
+      // Conversation ended inside a tool handler (or the safety net above) — stop.
       if (conversationEnded) {
         break;
       }
@@ -573,7 +638,10 @@ TOOL USAGE RULES — READ CAREFULLY:
 
 3. request_handoff
    - Call this when the patient explicitly asks for a human, is very distressed, or the situation is HIGH severity.
-   - IMPORTANT: If the patient also complained, call log_complaint FIRST, then request_handoff.
+   - IMPORTANT: If the patient also complained, call log_complaint FIRST, then request_handoff, in the SAME turn.
+   - PRIORITY RULE: If the patient explicitly asks to speak to a human/staff member, OR uses words like
+     "maintenant", "urgent", "immédiatement", "right now", "immediately" together with a health concern,
+     you MUST call request_handoff. NEVER call log_complaint alone when the patient has explicitly requested a human.
    - Before calling this tool, send a warm farewell text to the patient telling them a staff member will be in touch.
    - This ENDS the AI conversation permanently.
 
@@ -601,6 +669,7 @@ Only close when the patient explicitly says goodbye ("bye", "merci au revoir", "
 If the patient's message is unclear, a typo, or ambiguous (random characters, incomplete words, something you don't understand), do NOT interpret it as a goodbye, complaint, or any specific intent. Simply ask them to clarify what they meant.
 
 NEVER write a tool's name or its arguments as visible text to the patient. Tool calls happen silently and separately from your text reply — the patient must only ever see natural conversational language, never anything resembling code, JSON, or a function name.
+If you decide to call a tool, output ONLY the tool call — do not also describe it, name it, or paraphrase its arguments in your text response.
 
 Current turn: ${session.turnCount + 1}`;
   }
@@ -844,7 +913,36 @@ Current turn: ${session.turnCount + 1}`;
   // PRIVATE HELPERS
   // ═══════════════════════════════════════════════════════════════════════════
 
-  private detectLanguage(message: string): Language {
+  /**
+   * Removes/blocks any patient-facing text that looks like a leaked raw tool
+   * call (e.g. "_log_complaint{...}", "request_handoff(...)"). This is a
+   * defensive net for provider-parsing bugs — qwen2.5:7b-instruct via Ollama
+   * does not always emit clean tool_calls, and can mix pseudo-JSON tool
+   * syntax directly into the text content instead. When this fires, the
+   * corresponding tool almost certainly did NOT execute as a proper
+   * tool_use block, so this is a strong signal of a missed complaint/
+   * booking/handoff, not just a cosmetic issue — it's logged as an error
+   * so it can be alerted on, not just swallowed silently.
+   */
+  private sanitizeTextReply(raw: string, phone: string, hadToolUseBlocks: boolean): string {
+    if (!raw) return raw;
+
+    if (TOOL_LEAK_PATTERN.test(raw)) {
+      this.logger.error(
+        `TOOL-CALL LEAK detected in text reply for ${phone} (hadParsedToolUseBlocks=${hadToolUseBlocks}). ` +
+        `Raw text: ${raw}`,
+      );
+      // TODO: wire this into your alerting (Sentry/Slack) — this indicates
+      // the provider failed to parse a tool call correctly, so whatever
+      // action the model intended (complaint/booking/handoff) may not have
+      // been executed. Check the corresponding DB table for this patient.
+      return '';
+    }
+
+    return raw;
+  }
+
+  private detectLanguage(message: string): Language | null {
     const lower = message.toLowerCase().trim();
 
     const explicitEN = [
@@ -861,19 +959,24 @@ Current turn: ${session.turnCount + 1}`;
     if (explicitEN.some(p => lower.includes(p))) return Language.EN;
     if (explicitFR.some(p => lower.includes(p))) return Language.FR;
 
-    if (lower.length < 3) return Language.FR;
+    // Too short to judge reliably — defer to whatever the session already has.
+    if (lower.length < 3) return null;
 
     const frWords = [
       'bonjour', 'bonsoir', 'salut', 'merci', 'oui', 'non', 'bien',
       'comment', 'ça va', 'ca va', 'salam', 'très', 'pour', 'avec',
       'dans', 'vous', 'nous', 'est-ce', "j'ai", "c'est", 'pas', 'je',
       'quoi', 'rien', 'tout', 'encore', 'maintenant', 'vraiment',
+      'rendez-vous', 'rendez vous', 'semaine', 'prochaine', 'prochain',
+      'douleur', 'mal', 'après-midi', 'apres-midi', 'matin',
     ];
     const enWords = [
       'hello', 'hi', 'hey', 'thanks', 'thank you', 'thank', 'yes', 'yeah',
       'good', 'fine', 'okay', 'ok', 'please', 'help', 'what', 'when',
       'where', 'how', "i'm", 'i am', 'i have', 'i need',
       'great', 'sure', 'no', 'not', 'done', 'right', 'got it',
+      'appointment', 'book', 'booking', 'week', 'next', 'pain', 'hurt',
+      'afternoon', 'morning', 'again', 'actually',
     ];
 
     const wb = (word: string) =>
@@ -888,7 +991,10 @@ Current turn: ${session.turnCount + 1}`;
     if (enScore > frScore) return Language.EN;
     if (frScore > enScore) return Language.FR;
 
-    return Language.FR;
+    // Genuine tie or no keyword signal at all — do not guess. Let the
+    // caller fall back to session.language, which is far more reliable
+    // than defaulting to FR on every ambiguous message.
+    return null;
   }
 
   async fetchBotMessage(

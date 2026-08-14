@@ -598,6 +598,10 @@ CRITICAL — NEVER use end_conversation because the patient sends a short or rep
 These are engagement signals, not goodbyes. The patient is still present and talking.
 Only close when the patient explicitly says goodbye ("bye", "merci au revoir", "that's all", "c'est tout") or after confirming they have no further questions or concerns.
 
+If the patient's message is unclear, a typo, or ambiguous (random characters, incomplete words, something you don't understand), do NOT interpret it as a goodbye, complaint, or any specific intent. Simply ask them to clarify what they meant.
+
+NEVER write a tool's name or its arguments as visible text to the patient. Tool calls happen silently and separately from your text reply — the patient must only ever see natural conversational language, never anything resembling code, JSON, or a function name.
+
 Current turn: ${session.turnCount + 1}`;
   }
 
@@ -608,7 +612,12 @@ Current turn: ${session.turnCount + 1}`;
   private buildAiMessages(
     session: CampaignSession,
   ): { role: 'user' | 'assistant'; content: any }[] {
-    return session.messages
+    const language = session.language ?? Language.FR;
+    const languageReminder = language === Language.EN
+      ? '[Respond in English]'
+      : '[Répondez en français]';
+
+    const messages = session.messages
       .filter(m => m.content?.trim())
       .map(m => {
         let content: any = m.content;
@@ -624,6 +633,23 @@ Current turn: ${session.turnCount + 1}`;
         }
         return { role: m.role, content };
       });
+
+    // Reinforce the language instruction directly on the latest patient
+    // message. The system prompt alone isn't reliably held onto by the
+    // local model across tool-calling turns — this per-turn reminder,
+    // placed right next to the actual generation point, is far more
+    // reliable than a single upfront instruction for a smaller model.
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'user' && typeof messages[i].content === 'string') {
+        messages[i] = {
+          ...messages[i],
+          content: `${messages[i].content}\n\n${languageReminder}`,
+        };
+        break;
+      }
+    }
+
+    return messages;
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -638,6 +664,21 @@ Current turn: ${session.turnCount + 1}`;
     campaignId: string,
     clinic: { id: string; notificationPhone?: string | null },
   ): Promise<void> {
+    // Code-level idempotency guard — dedupe on the exact same triggering
+    // message so a genuinely new complaint later in the conversation is
+    // never blocked, but a model retry/loop logging the SAME patient
+    // message twice doesn't create duplicate complaint records.
+    const existing = await this.prisma.complaint.findFirst({
+      where: { campaignPatientId, triggeringMessage },
+    });
+
+    if (existing) {
+      this.logger.warn(
+        `Complaint already logged for this exact message from patient ${campaignPatientId} — skipping duplicate`,
+      );
+      return;
+    }
+
     await this.prisma.complaint.create({
       data: {
         campaignPatientId,
@@ -674,6 +715,22 @@ Current turn: ${session.turnCount + 1}`;
     clinicId: string,
     rawPatientMessage: string,
   ): Promise<void> {
+    // Code-level idempotency guard — the system prompt asks the model not
+    // to call this twice, but a local model's instruction-following isn't
+    // reliable enough to trust as the only safeguard. If a booking request
+    // already exists for this patient in this conversation, skip creating
+    // a duplicate rather than trusting the model caught its own repeat call.
+    const existing = await this.prisma.bookingRequest.findFirst({
+      where: { campaignPatientId },
+    });
+
+    if (existing) {
+      this.logger.warn(
+        `Booking request already exists for patient ${campaignPatientId} — skipping duplicate create`,
+      );
+      return;
+    }
+
     await this.prisma.bookingRequest.create({
       data: {
         campaignPatientId,

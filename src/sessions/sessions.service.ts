@@ -113,11 +113,46 @@ export class SessionsService implements OnModuleDestroy {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // PHONE NORMALIZATION — SINGLE SOURCE OF TRUTH
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PRODUCTION FIX: previously every caller (whatsapp.service.ts,
+  // conversation.service.ts, campaign.service.ts, message.processor.ts) had
+  // to remember to normalize phone numbers identically before touching a
+  // session. They didn't, consistently. A campaign patient's phone could be
+  // stored as "+212644..." from ClinOps while the inbound webhook delivers
+  // "212644..." (Meta's format, no +). Two different Redis keys for the same
+  // physical patient meant campaign sessions became invisible to inbound
+  // lookups — the exact mechanism behind messages falling through to the
+  // reactive/inbound flow instead of being recognized as handed-off.
+  //
+  // Fix: normalization now happens ONCE, here, and every public method in
+  // this class runs the phone argument through it before touching Redis.
+  // Callers can pass phone in ANY format (with +, with spaces, local format
+  // with leading 0) and always resolve to the same key.
+  private normalizePhone(phone: string): string {
+    if (!phone) return phone;
+
+    let normalized = phone.trim().replace(/[\s\-()]/g, '').replace(/^\+/, '');
+
+    // Moroccan local format safety net: numbers starting with a bare "0"
+    // (e.g. "0644xxxxxx", 10 digits) are missing the country code. Meta's
+    // webhook and WhatsApp always deliver full E.164 without the leading 0,
+    // so a raw ClinOps export using local format must be corrected here or
+    // it will never match an inbound key. Adjust the "212" prefix if you
+    // ever expand outside Morocco.
+    if (/^0\d{9}$/.test(normalized)) {
+      normalized = `212${normalized.slice(1)}`;
+    }
+
+    return normalized;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // REACTIVE BOT SESSIONS  key: session:<phone>
   // ═══════════════════════════════════════════════════════════════════════════
 
   private reactiveKey(phone: string): string {
-    return `session:${phone}`;
+    return `session:${this.normalizePhone(phone)}`;
   }
 
   async getOrCreate(
@@ -126,7 +161,8 @@ export class SessionsService implements OnModuleDestroy {
     defaultLanguage: Language,
     timezone:        string,
   ): Promise<SessionResult> {
-    const raw = await this.redis.get(this.reactiveKey(phone));
+    const normalizedPhone = this.normalizePhone(phone);
+    const raw = await this.redis.get(this.reactiveKey(normalizedPhone));
 
     if (raw) {
       let session: Session;
@@ -134,25 +170,25 @@ export class SessionsService implements OnModuleDestroy {
       try {
         session = JSON.parse(raw) as Session;
       } catch {
-        this.logger.warn(`Corrupted session for ${phone} — resetting`);
-        const fresh = this.buildFreshReactiveSession(phone, clinicId, defaultLanguage, timezone);
+        this.logger.warn(`Corrupted session for ${normalizedPhone} — resetting`);
+        const fresh = this.buildFreshReactiveSession(normalizedPhone, clinicId, defaultLanguage, timezone);
         await this.saveReactive(fresh);
         return { session: fresh, isNew: true };
       }
 
       if (!session.data) {
-        this.logger.warn(`Session ${phone} missing data field — resetting`);
-        const fresh = this.buildFreshReactiveSession(phone, clinicId, defaultLanguage, timezone);
+        this.logger.warn(`Session ${normalizedPhone} missing data field — resetting`);
+        const fresh = this.buildFreshReactiveSession(normalizedPhone, clinicId, defaultLanguage, timezone);
         await this.saveReactive(fresh);
         return { session: fresh, isNew: true };
       }
 
       if (!session.version || session.version !== SESSION_VERSION) {
         this.logger.warn(
-          `Session version mismatch for ${phone} ` +
+          `Session version mismatch for ${normalizedPhone} ` +
           `(got ${session.version ?? 'none'}, expected ${SESSION_VERSION}) — resetting`,
         );
-        const fresh = this.buildFreshReactiveSession(phone, clinicId, defaultLanguage, timezone);
+        const fresh = this.buildFreshReactiveSession(normalizedPhone, clinicId, defaultLanguage, timezone);
         await this.saveReactive(fresh);
         return { session: fresh, isNew: true };
       }
@@ -160,7 +196,7 @@ export class SessionsService implements OnModuleDestroy {
       return { session, isNew: false };
     }
 
-    const fresh = this.buildFreshReactiveSession(phone, clinicId, defaultLanguage, timezone);
+    const fresh = this.buildFreshReactiveSession(normalizedPhone, clinicId, defaultLanguage, timezone);
     await this.saveReactive(fresh);
     return { session: fresh, isNew: true };
   }
@@ -172,7 +208,7 @@ export class SessionsService implements OnModuleDestroy {
     timezone:        string,
   ): Session {
     return {
-      phone,
+      phone: this.normalizePhone(phone),
       state:   SessionState.IDLE,
       version: SESSION_VERSION,
       data: {
@@ -186,6 +222,7 @@ export class SessionsService implements OnModuleDestroy {
   }
 
   async saveReactive(session: Session): Promise<void> {
+    session.phone = this.normalizePhone(session.phone);
     session.updatedAt = Date.now();
     await this.redis.setex(
       this.reactiveKey(session.phone),
@@ -200,19 +237,20 @@ export class SessionsService implements OnModuleDestroy {
   }
 
   async reset(phone: string): Promise<void> {
-    const raw = await this.redis.get(this.reactiveKey(phone));
+    const normalizedPhone = this.normalizePhone(phone);
+    const raw = await this.redis.get(this.reactiveKey(normalizedPhone));
     if (!raw) return;
 
     let parsed: Session;
     try {
       parsed = JSON.parse(raw) as Session;
     } catch {
-      await this.redis.del(this.reactiveKey(phone));
+      await this.redis.del(this.reactiveKey(normalizedPhone));
       return;
     }
 
     const fresh: Session = {
-      phone,
+      phone: normalizedPhone,
       state:   SessionState.IDLE,
       version: SESSION_VERSION,
       data: {
@@ -250,7 +288,7 @@ export class SessionsService implements OnModuleDestroy {
   // ═══════════════════════════════════════════════════════════════════════════
 
   private campaignKey(phone: string): string {
-    return `campaign:${phone}`;
+    return `campaign:${this.normalizePhone(phone)}`;
   }
 
   async getCampaignSession(phone: string): Promise<CampaignSession | null> {
@@ -267,6 +305,7 @@ export class SessionsService implements OnModuleDestroy {
   }
 
   async saveCampaignSession(session: CampaignSession): Promise<void> {
+    session.phone = this.normalizePhone(session.phone);
     session.lastActivityAt = Date.now();
     await this.redis.setex(
       this.campaignKey(session.phone),

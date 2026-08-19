@@ -7,17 +7,44 @@ import {
   AIToolDefinition,
 } from './ai-response.types';
 
-const OLLAMA_URL = process.env.OLLAMA_URL ?? 'http://localhost:11434/v1/chat/completions';
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? 'healthcare-bot';
-const OLLAMA_TIMEOUT_MS = Number(process.env.OLLAMA_TIMEOUT_MS ?? 8000);
-
-// Lower than a "creative" temperature on purpose. qwen2.5-instruct's own
-// function-calling guidance recommends a low temperature for structured/
-// tool output — 0.6 was measurably too high and is the most likely reason
-// the model was drifting off the tool_calls schema and free-writing
-// pseudo tool-call syntax directly into message content instead.
-// Override via env if you've tuned this differently for your Modelfile.
+// ─── Native Ollama API — NOT the OpenAI-compat endpoint ────────────────────
+// /api/chat supports `format: <json-schema>` which forces grammar-constrained
+// decoding. The model is structurally unable to return malformed JSON.
+// This replaces the old text-scraping "recoverLeakedToolCalls" hack, which
+// silently deleted any tool call it couldn't pattern-match.
+const OLLAMA_URL = process.env.OLLAMA_URL ?? 'http://localhost:11434/api/chat';
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? 'healthcare-bot:latest';
+const OLLAMA_TIMEOUT_MS = Number(process.env.OLLAMA_TIMEOUT_MS ?? 20000);
 const OLLAMA_TEMPERATURE = Number(process.env.OLLAMA_TEMPERATURE ?? 0.2);
+
+// ─── Fixed response envelope every model call must conform to ──────────────
+// Structural validity is guaranteed by Ollama's grammar constraint.
+// Business validity (correct enums, required fields per tool) is still
+// checked in code below — the schema can't know "log_complaint needs a
+// severity but request_handoff doesn't".
+const RESPONSE_SCHEMA = {
+  type: 'object',
+  properties: {
+    reply: { type: 'string' },
+    tool_calls: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+          input: { type: 'object' },
+        },
+        required: ['name', 'input'],
+      },
+    },
+  },
+  required: ['reply', 'tool_calls'],
+};
+
+interface StrictModelResponse {
+  reply: string;
+  tool_calls: { name: string; input: Record<string, unknown> }[];
+}
 
 @Injectable()
 export class OllamaProvider implements AIProvider {
@@ -29,25 +56,30 @@ export class OllamaProvider implements AIProvider {
     messages: AIInputMessage[],
     tools: AIToolDefinition[],
   ): Promise<AIMessage> {
-    const openaiMessages = [
-      { role: 'system', content: systemPrompt },
+    // Tool schemas are described in the system prompt (buildSystemPrompt already
+    // does this in detail). We still pass the tool catalogue as a compact
+    // reference block so the model has the exact names/params in front of it
+    // every turn, not just once at conversation start.
+    const toolCatalogue = tools
+      .map(t => `- ${t.name}(${t.input_schema.required.join(', ')}): ${t.description}`)
+      .join('\n');
+
+    const fullSystemPrompt =
+      `${systemPrompt}\n\n` +
+      `OUTPUT CONTRACT — MANDATORY:\n` +
+      `You must respond with ONLY a JSON object shaped exactly like this:\n` +
+      `{"reply": "<text to send the patient, or empty string if none>", "tool_calls": [{"name": "<tool_name>", "input": {...}}]}\n` +
+      `tool_calls can be an empty array []. You may include multiple tool calls in the array if needed.\n` +
+      `Never output anything outside this JSON object. No markdown, no code fences, no explanation.\n\n` +
+      `AVAILABLE TOOLS:\n${toolCatalogue}`;
+
+    const chatMessages = [
+      { role: 'system', content: fullSystemPrompt },
       ...messages.map(m => ({
         role: m.role,
-        // Local model gets flattened text for continuity — it doesn't need
-        // to parse Anthropic-shaped content blocks from prior turns, just
-        // enough context to understand what already happened.
         content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
       })),
     ];
-
-    const openaiTools = tools.map(t => ({
-      type: 'function' as const,
-      function: {
-        name: t.name,
-        description: t.description,
-        parameters: t.input_schema,
-      },
-    }));
 
     const controller = new AbortController();
     const timeoutHandle = setTimeout(() => controller.abort(), OLLAMA_TIMEOUT_MS);
@@ -60,10 +92,10 @@ export class OllamaProvider implements AIProvider {
         signal: controller.signal,
         body: JSON.stringify({
           model: OLLAMA_MODEL,
-          messages: openaiMessages,
-          tools: openaiTools,
-          temperature: OLLAMA_TEMPERATURE,
+          messages: chatMessages,
+          format: RESPONSE_SCHEMA,
           stream: false,
+          options: { temperature: OLLAMA_TEMPERATURE },
         }),
       });
     } catch (err: any) {
@@ -80,58 +112,78 @@ export class OllamaProvider implements AIProvider {
     }
 
     const data = await res.json();
-    const choice = data.choices?.[0];
-    if (!choice) throw new Error('Ollama returned no choices');
+
+    // Accept either an already-parsed object or a JSON string in the API
+    // envelope. Be explicit about unexpected envelopes so operators can
+    // diagnose quickly.
+    const rawContentCandidate: any = data?.message?.content ?? data?.content ?? data?.result ?? null;
+
+    if (rawContentCandidate === null || rawContentCandidate === undefined) {
+      this.logger.error(`Ollama returned unexpected envelope: ${JSON.stringify(data)}`);
+      throw new Error('Ollama returned empty or unexpected content envelope');
+    }
+
+    let parsed: StrictModelResponse;
+    if (typeof rawContentCandidate === 'object') {
+      parsed = rawContentCandidate as StrictModelResponse;
+    } else if (typeof rawContentCandidate === 'string') {
+      const rawContent = rawContentCandidate;
+      if (!rawContent.trim()) {
+        throw new Error('Ollama returned empty content');
+      }
+
+      try {
+        parsed = JSON.parse(rawContent);
+      } catch (err: any) {
+        this.logger.error(
+          `Ollama did not return valid JSON despite format schema. ` +
+          `Check "ollama --version" — structured outputs require >= 0.5. Raw: ${rawContent}`,
+        );
+        throw new Error(`Ollama structured output failed to parse: ${err.message}`);
+      }
+    } else {
+      this.logger.error(`Ollama returned content of unexpected type: ${typeof rawContentCandidate}`);
+      throw new Error('Ollama returned content of unexpected type');
+    }
+
+    if (typeof parsed.reply !== 'string' || !Array.isArray(parsed.tool_calls)) {
+      this.logger.error(`Ollama response violated the contract shape. Parsed: ${JSON.stringify(parsed)}`);
+      throw new Error(`Ollama response violated the contract shape.`);
+    }
 
     const content: AIContentBlock[] = [];
 
-    // ── Properly-formed native tool_calls (the happy path) ──────────────────
-    for (const toolCall of choice.message?.tool_calls ?? []) {
-      const toolDef = tools.find(t => t.name === toolCall.function?.name);
-      const parsedInput = this.parseAndValidateToolCall(toolCall, toolDef);
+    for (const call of parsed.tool_calls) {
+      const toolDef = tools.find(t => t.name === call.name);
+      if (!toolDef) {
+        this.logger.error(`Ollama called unknown tool "${call.name}" — dropping this call, not the whole turn.`);
+        continue;
+      }
+
+      const validated = this.validateAgainstSchema(call.input ?? {}, toolDef);
+      if (!validated.ok) {
+        this.logger.error(
+          `Tool call "${call.name}" missing required field(s): ${validated.missing.join(', ')} — dropping. ` +
+          `Input received: ${JSON.stringify(call.input)}`,
+        );
+        continue;
+      }
+
       content.push({
         type: 'tool_use',
-        id: toolCall.id ?? this.generateToolCallId(),
-        name: toolCall.function.name,
-        input: parsedInput,
+        id: this.generateToolCallId(),
+        name: call.name,
+        input: call.input,
       });
     }
 
-    // ── Text content: recover any leaked tool call BEFORE stripping ─────────
-    // qwen2.5:7b-instruct via Ollama's OpenAI-compat endpoint does not
-    // always populate tool_calls reliably — it can write the call directly
-    // into message content instead, sometimes with garbled/mangled prefixes
-    // (observed in production: "_vlog_complaint{...}" instead of a clean
-    // tool_calls entry for "log_complaint"). Losing that call silently is
-    // unacceptable for a healthcare bot — a dropped HIGH-severity complaint
-    // or handoff request is a patient-safety issue, not a cosmetic one.
-    // So: try to recover a real tool_use block from the leaked text first,
-    // and only fall back to plain stripping if recovery fails.
-    if (choice.message?.content?.trim()) {
-      const rawText: string = choice.message.content;
-      const recovered = this.recoverLeakedToolCalls(rawText, tools);
-
-      for (const rec of recovered.calls) {
-        this.logger.error(
-          `RECOVERED leaked tool call "${rec.name}" from raw text for model ${OLLAMA_MODEL}. ` +
-          `This means the model failed to use native tool_calls — investigate the Modelfile TEMPLATE ` +
-          `and consider lowering temperature further. Raw fragment: ${rec.rawFragment}`,
-        );
-        content.push({
-          type: 'tool_use',
-          id: this.generateToolCallId(),
-          name: rec.name,
-          input: rec.input,
-        });
-      }
-
-      const remainingText = recovered.cleanedText.trim();
-      if (remainingText) {
-        content.push({ type: 'text', text: remainingText });
-      }
+    if (parsed.reply.trim()) {
+      content.push({ type: 'text', text: parsed.reply.trim() });
     }
 
-    if (content.length === 0) throw new Error('Ollama returned empty content (no text, no tool calls)');
+    if (content.length === 0) {
+      throw new Error('Ollama returned no usable reply text and no valid tool calls');
+    }
 
     const hasToolUse = content.some(b => b.type === 'tool_use');
 
@@ -140,7 +192,10 @@ export class OllamaProvider implements AIProvider {
       role: 'assistant',
       content,
       stop_reason: hasToolUse ? 'tool_use' : 'end_turn',
-      usage: { input_tokens: 0, output_tokens: 0 }, // local inference — not metered
+      usage: {
+        input_tokens: data.prompt_eval_count ?? 0,
+        output_tokens: data.eval_count ?? 0,
+      },
       provider: 'ollama',
       model: OLLAMA_MODEL,
     };
@@ -150,148 +205,13 @@ export class OllamaProvider implements AIProvider {
     return `local_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   }
 
-  /**
-   * Local models are meaningfully less reliable at strict JSON schema
-   * adherence than Claude. This is the single biggest risk of running a
-   * smaller local model for tool-heavy conversation flows — validate every
-   * tool call against its declared schema BEFORE it ever reaches business
-   * logic. A malformed call here throws, which the orchestrator treats as
-   * a provider failure and falls back to Anthropic for this turn.
-   */
-  private parseAndValidateToolCall(
-    toolCall: any,
-    toolDef: AIToolDefinition | undefined,
-  ): Record<string, unknown> {
-    let input: Record<string, unknown>;
-    try {
-      input = JSON.parse(toolCall.function.arguments);
-    } catch {
-      throw new Error(`Ollama produced malformed tool call arguments for ${toolCall.function?.name}`);
-    }
-
-    return this.validateAgainstSchema(input, toolDef, toolCall.function?.name);
-  }
-
   private validateAgainstSchema(
     input: Record<string, unknown>,
-    toolDef: AIToolDefinition | undefined,
-    calledName: string | undefined,
-  ): Record<string, unknown> {
-    if (!toolDef) {
-      throw new Error(`Ollama called unknown tool: ${calledName}`);
-    }
-
+    toolDef: AIToolDefinition,
+  ): { ok: true } | { ok: false; missing: string[] } {
     const missing = toolDef.input_schema.required.filter(
       field => input[field] === undefined || input[field] === null || input[field] === '',
     );
-
-    if (missing.length > 0) {
-      this.logger.warn(
-        `Ollama tool call "${toolDef.name}" missing required field(s): ${missing.join(', ')} — rejecting`,
-      );
-      throw new Error(`Ollama tool call "${toolDef.name}" missing required fields: ${missing.join(', ')}`);
-    }
-
-    return input;
-  }
-
-  /**
-   * Scans raw text content for a tool name occurring anywhere — NOT
-   * anchored to a word boundary, since observed leaks include mangled
-   * prefixes like "_vlog_complaint" where a strict `\bname\b` match fails
-   * (there's no word boundary between "v" and "l" in "vlog_complaint",
-   * so a naive regex silently misses it — this was the exact bug that let
-   * a real leak through to a patient in testing).
-   *
-   * For each match, finds the next "{" after the tool name and walks
-   * forward with brace-depth counting to extract a syntactically complete
-   * JSON object (handles nested braces correctly, unlike a single greedy
-   * regex). Attempts to parse and schema-validate it as that tool's input.
-   * On success, the call is treated exactly like a native tool_calls entry.
-   * On failure, that fragment is left for plain stripping so it never
-   * reaches the patient, but the failure is logged at error level since it
-   * likely represents an unrecoverable dropped action.
-   */
-  private recoverLeakedToolCalls(
-    text: string,
-    tools: AIToolDefinition[],
-  ): { calls: { name: string; input: Record<string, unknown>; rawFragment: string }[]; cleanedText: string } {
-    const calls: { name: string; input: Record<string, unknown>; rawFragment: string }[] = [];
-    let working = text;
-
-    for (const tool of tools) {
-      let searchFrom = 0;
-
-      // Loop in case the same tool name leaks more than once in one response.
-      while (true) {
-        const nameIdx = working.toLowerCase().indexOf(tool.name.toLowerCase(), searchFrom);
-        if (nameIdx === -1) break;
-
-        const braceStart = working.indexOf('{', nameIdx);
-        // No JSON object follows within a reasonable window — likely just the
-        // model narrating the tool name in prose, not an actual leaked call.
-        // Bail out of the loop for this tool; the bare-name stripping pass
-        // below still removes it from patient-facing text.
-        if (braceStart === -1 || braceStart - nameIdx > 20) {
-          searchFrom = nameIdx + tool.name.length;
-          continue;
-        }
-
-        const braceEnd = this.findMatchingBrace(working, braceStart);
-        if (braceEnd === -1) {
-          searchFrom = nameIdx + tool.name.length;
-          continue;
-        }
-
-        const jsonFragment = working.slice(braceStart, braceEnd + 1);
-        const fullFragment = working.slice(nameIdx, braceEnd + 1);
-
-        try {
-          const parsedInput = JSON.parse(jsonFragment);
-          const validated = this.validateAgainstSchema(parsedInput, tool, tool.name);
-          calls.push({ name: tool.name, input: validated, rawFragment: fullFragment });
-          // Remove the recovered fragment entirely from the working text.
-          working = working.slice(0, nameIdx) + working.slice(braceEnd + 1);
-          searchFrom = nameIdx; // re-scan from same point in the shortened string
-        } catch (err: any) {
-          this.logger.error(
-            `Found leaked "${tool.name}" call pattern but failed to recover it (${err.message}). ` +
-            `This action was likely LOST — check if the patient's request needs manual follow-up. ` +
-            `Fragment: ${fullFragment}`,
-          );
-          // Leave it in place; the bare-name + brace stripping pass below
-          // will still remove it from what the patient sees, even though
-          // we couldn't recover the structured call.
-          searchFrom = braceEnd + 1;
-        }
-      }
-    }
-
-    // Final cleanup pass: strip any remaining bare tool-name mentions or
-    // unrecovered JSON-ish fragments so nothing resembling a tool call can
-    // ever reach the patient, even if recovery above didn't fully succeed.
-    for (const tool of tools) {
-      const bareNamePattern = new RegExp(tool.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
-      working = working.replace(bareNamePattern, '');
-    }
-    // Strip any leftover standalone JSON-object-looking fragments.
-    working = working.replace(/\{[^{}]*\}/g, '');
-    working = working.replace(/\s{2,}/g, ' ').replace(/\n{2,}/g, '\n').trim();
-
-    return { calls, cleanedText: working };
-  }
-
-  /** Walks forward from an opening brace index, tracking depth, and returns
-   * the index of its matching closing brace, or -1 if unbalanced/not found. */
-  private findMatchingBrace(text: string, openIdx: number): number {
-    let depth = 0;
-    for (let i = openIdx; i < text.length; i++) {
-      if (text[i] === '{') depth++;
-      else if (text[i] === '}') {
-        depth--;
-        if (depth === 0) return i;
-      }
-    }
-    return -1;
+    return missing.length > 0 ? { ok: false, missing } : { ok: true };
   }
 }

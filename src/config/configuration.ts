@@ -37,4 +37,12 @@ export default () => ({
   clinops: {
     mode: process.env.CLINOPS_MODE || 'mock',
   },
+
+  campaign: {
+    // Approved Meta template used for the outbound opening message. Template
+    // names/languages are specific to each WhatsApp Business account, so they
+    // must be configurable, never hardcoded in the send path.
+    openingTemplateName: process.env.CAMPAIGN_OPENING_TEMPLATE_NAME || 'patient_followup',
+    openingTemplateLanguage: process.env.CAMPAIGN_OPENING_TEMPLATE_LANGUAGE || 'fr',
+  },
 });

@@ -217,6 +217,13 @@ model CampaignPatient {
   messages         Json                  @default("[]")
   outcome          ConversationOutcome?
 
+  // ── Outbound delivery tracking ──
+  // The Meta message id (wamid) of the opening template message, used to match
+  // delivery status webhooks back to this patient.
+  outboundMessageId String?
+  // Reflects the latest delivery status reported by Meta for the opening message.
+  deliveryStatus    DeliveryStatus?
+
   createdAt        DateTime              @default(now())
   updatedAt        DateTime              @updatedAt
   contactedAt      DateTime?
@@ -344,6 +351,14 @@ enum BookingRequestStatus {
   PENDING
   CONFIRMED
   REJECTED
+}
+
+enum DeliveryStatus {
+  SENT
+  DELIVERED
+  READ
+  WARNING
+  FAILED
 }
 
 // ─── AI Usage Tracking ────────────────────────────────────────────────────────

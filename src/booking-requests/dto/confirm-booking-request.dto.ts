@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsDateString, IsOptional } from 'class-validator';
+import { IsString, IsNotEmpty, IsDateString, IsOptional, Matches } from 'class-validator';
 
 export class ConfirmBookingRequestDto {
   @IsDateString()
@@ -6,6 +6,9 @@ export class ConfirmBookingRequestDto {
 
   @IsString()
   @IsNotEmpty()
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d$/, {
+    message: 'appointmentTime must be in HH:mm format',
+  })
   appointmentTime!: string; // "HH:mm"
 
   @IsOptional()

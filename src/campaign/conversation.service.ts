@@ -5,6 +5,7 @@ import { WhatsAppService } from '../whatsapp/whatsapp.service';
 import { OllamaProvider } from './providers/ollama.provider';
 import { AIMessage, AIInputMessage, AIToolDefinition, AITextBlock, AIToolUseBlock } from './providers/ai-response.types';
 import {
+  AppointmentStatus,
   CampaignPatientStatus,
   ComplaintSeverity,
   ComplaintType,
@@ -109,7 +110,10 @@ const AI_TOOLS: AIToolDefinition[] = [
     input_schema: {
       type: 'object',
       properties: { reason: { type: 'string', description: 'Clear explanation for the staff member who will take over.' } },
-      required: ['reason'],
+      // `reason` is optional: a local model frequently emits request_handoff with
+      // an empty input ({}). If `reason` were required, the provider would DROP the
+      // tool call and the patient's request for a human would be silently ignored.
+      required: [],
     },
   },
   {
@@ -151,32 +155,74 @@ const TOOL_LEAK_PATTERNS: RegExp[] = [
   /<think>|<\/think>|<\|im_start\|>|<\|im_end\|>/i,
 ];
 
-const SYMPTOM_URGENCY_KEYWORDS = [
-  'mal', 'douleur', 'fièvre', 'fievre', 'saign', 'vertige', 'nausée', 'nausee',
-  'vomi', 'gonfl', 'infection', 'urgence', 'urgent', 'grave', 'hôpital', 'hopital',
-  'malade', 'souffre', 'souffrance', 'aggrav', 'empire',
-  'plainte', 'insatisf', 'déçu', 'decu', 'mécontent', 'mecontent', 'nul',
-  'honteux', 'inacceptable', 'scandaleux', 'jamais revenir',
-  // Additional complaint/abuse indicators (catch colloquial English insults and threats)
-  'shit', 'crazy', 'abuse', 'assault', 'hit', 'attack', 'threat',
-  'pain', 'hurt', 'fever', 'bleed', 'dizzy', 'nausea', 'vomit', 'swelling',
-  'infection', 'emergency', 'urgent', 'serious', 'hospital', 'sick', 'worse', 'worsen',
-  'complaint', 'complain', 'disappointed', 'unhappy', 'terrible', 'awful',
-  'unacceptable', 'ridiculous', 'never come back', 'never coming back',
-];
+// ─── Enum normalization ───────────────────────────────────────────────────────
+// Local models routinely emit enum values in lowercase, spaced, hyphenated or
+// camelCase forms ("medical concern", "medical-concern", "medicalConcern",
+// "complaint", "urgent"). Prisma strictly rejects anything that isn't the exact
+// enum token, and a bare `.toUpperCase()` only fixes the lowercase case — it
+// silently corrupts the spaced/hyphenated/camel forms into an invalid token
+// that fails the DB write. Normalize defensively here and return null when the
+// value genuinely cannot be mapped so callers fail loudly instead of writing
+// wrong data.
 
-function containsSymptomOrUrgencySignal(message: string): boolean {
-  const lower = message.toLowerCase();
-  return SYMPTOM_URGENCY_KEYWORDS.some(kw => lower.includes(kw));
+function normalizeEnumToken<T extends string>(value: unknown, valid: readonly T[]): T | null {
+  if (value === null || value === undefined) return null;
+  const token = String(value)
+    .trim()
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2') // camelCase → snake_case
+    .replace(/[-\s]+/g, '_')                 // hyphens / spaces → underscore
+    .toUpperCase();
+  return (valid as readonly string[]).includes(token) ? (token as T) : null;
 }
 
-// PRODUCTION FIX: dedup window for complaint logging. Previously an exact
-// triggeringMessage match blocked re-logging FOREVER — a patient repeating
-// the same short phrase ("j'ai mal à la tête") weeks later for a genuinely
-// new or worsening episode would silently never get logged again. 24h is
-// long enough to absorb a model retry/double-fire within one conversation,
-// short enough that a later real recurrence still gets captured.
-const COMPLAINT_DEDUP_WINDOW_MS = 24 * 60 * 60 * 1000;
+const COMPLAINT_TYPE_VALUES: readonly ComplaintType[] = [
+  ComplaintType.COMPLAINT,
+  ComplaintType.MEDICAL_CONCERN,
+  ComplaintType.URGENT,
+];
+
+const COMPLAINT_SEVERITY_VALUES: readonly ComplaintSeverity[] = [
+  ComplaintSeverity.LOW,
+  ComplaintSeverity.MEDIUM,
+  ComplaintSeverity.HIGH,
+];
+
+// Local models sometimes invent a "service concern" category for service/behaviour
+// complaints. The schema only has COMPLAINT (service/experience), MEDICAL_CONCERN
+// (health) and URGENT — so map any "service" wording onto COMPLAINT instead of
+// failing the write.
+const COMPLAINT_TYPE_ALIASES: Record<string, ComplaintType> = {
+  SERVICE_CONCERN:   ComplaintType.COMPLAINT,
+  SERVICE_COMPLAINT: ComplaintType.COMPLAINT,
+};
+
+function normalizeComplaintType(value: unknown): ComplaintType | null {
+  if (typeof value === 'string') {
+    const key = value.trim().replace(/[-\s]+/g, '_').toUpperCase();
+    const alias = COMPLAINT_TYPE_ALIASES[key];
+    if (alias) return alias;
+  }
+  return normalizeEnumToken(value, COMPLAINT_TYPE_VALUES);
+}
+
+function normalizeComplaintSeverity(value: unknown): ComplaintSeverity | null {
+  return normalizeEnumToken(value, COMPLAINT_SEVERITY_VALUES);
+}
+
+// Human-readable labels used in staff notifications (the clinic operates in
+// French). Raw enum tokens and internal ids must never leak into a WhatsApp
+// message sent to staff.
+const COMPLAINT_TYPE_LABELS: Record<ComplaintType, string> = {
+  COMPLAINT:        'Plainte service',
+  MEDICAL_CONCERN:  'Préoccupation médicale',
+  URGENT:           'Urgence',
+};
+
+const COMPLAINT_SEVERITY_LABELS: Record<ComplaintSeverity, string> = {
+  LOW:     'Faible',
+  MEDIUM:  'Moyenne',
+  HIGH:    'Élevée',
+};
 
 @Injectable()
 export class ConversationService {
@@ -280,6 +326,7 @@ export class ConversationService {
     let totalOutputTokens = 0;
     let lastUsedModel = 'unknown';
     let complaintLoggedThisTurn = false;
+    let bookingRecordedThisTurn = false;
     let textSent = false;
 
     while (loopCount < MAX_TOOL_LOOPS && !conversationEnded) {
@@ -293,6 +340,10 @@ export class ConversationService {
           ? 'Sorry, I encountered a technical issue. Please try again in a few minutes.'
           : 'Désolé, je rencontre un problème technique. Veuillez réessayer dans quelques minutes.';
         await this.whatsappService.sendText(phone, errMsg);
+        // Persist the (already recorded) user message before bailing out, so a
+        // transient AI outage doesn't silently drop the patient's message from
+        // the conversation history.
+        await this.sessionsService.saveCampaignSession(session);
         return;
       }
 
@@ -346,7 +397,21 @@ export class ConversationService {
       let highSeverityComplaintLogged = false;
       let handoffCalledThisTurn = false;
 
-      for (const toolBlock of toolUseBlocks) {
+      // ── Tool ordering fix ────────────────────────────────────────────────
+      // Side-effect tools (log_complaint, request_booking) MUST run before any
+      // terminal tool (request_handoff, end_conversation). The model is told to
+      // emit them in that order, but a local model can still return
+      // [request_handoff, log_complaint] in a single turn. The previous code
+      // broke out of the loop as soon as a terminal tool set conversationEnded,
+      // which silently DROPPED the complaint/booking side effect that came after
+      // it. Partitioning guarantees side effects always execute first.
+      const SIDE_EFFECT_TOOL_NAMES = new Set(['log_complaint', 'request_booking']);
+      const orderedToolBlocks = [
+        ...toolUseBlocks.filter((b) => SIDE_EFFECT_TOOL_NAMES.has(b.name)),
+        ...toolUseBlocks.filter((b) => !SIDE_EFFECT_TOOL_NAMES.has(b.name)),
+      ];
+
+      for (const toolBlock of orderedToolBlocks) {
         this.logger.log(`Tool: ${toolBlock.name} — ${JSON.stringify(toolBlock.input)}`);
 
         let resultContent = 'Success';
@@ -355,18 +420,20 @@ export class ConversationService {
             const input = toolBlock.input as unknown as LogComplaintInput;
             const wasLogged = await this.executeLogComplaint(
               input, campaignPatient.id, clinic.id, patientMessage, campaignPatient.campaignId, clinic,
+              { name: campaignPatient.patientName, phone: campaignPatient.phone },
             );
             resultContent = 'Complaint logged successfully.';
             if (wasLogged) complaintLoggedThisTurn = true;
 
-            const severityStr = String(input.severity).toUpperCase();
-            if (severityStr === ComplaintSeverity.HIGH) highSeverityComplaintLogged = true;
+            const severity = normalizeComplaintSeverity(input.severity);
+            if (severity === ComplaintSeverity.HIGH) highSeverityComplaintLogged = true;
 
           } else if (toolBlock.name === 'request_booking') {
             await this.executeRequestBooking(
               toolBlock.input as unknown as RequestBookingInput, campaignPatient.id, clinic.id, patientMessage,
             );
             resultContent = 'Booking request recorded.';
+            bookingRecordedThisTurn = true;
 
           } else if (toolBlock.name === 'request_handoff') {
             handoffCalledThisTurn = true;
@@ -439,51 +506,27 @@ export class ConversationService {
       loopCount++;
     }
 
-    // ── Model-driven complaint detection safety net (preferred) ───────────
-    // If the AI did not call log_complaint during its turn, ask the model
-    // itself (via a constrained "classify_complaint" tool) whether the
-    // patient's message should be logged. This avoids brittle keyword rules.
-    if (!complaintLoggedThisTurn) {
-      let classification = null;
-      try {
-        classification = await this.classifyComplaintWithModel(patientMessage, session.language ?? Language.FR, phone);
-      } catch (err: any) {
-        // Enterprise-grade: do NOT fall back to brittle keyword rules. Instead
-        // persist an audit entry and alert staff for manual review.
-        this.logger.error(`Complaint classifier failed for ${phone}: ${err.message} — manual review required`);
-        try {
-          await this.persistAudit(`audit:classifier:${phone}`, { ts: Date.now(), error: String(err), message: patientMessage });
-        } catch { /* best-effort */ }
+    // NOTE: the separate "classify_complaint" second model call was removed.
+    // It doubled per-turn latency (two full model generations per message) and
+    // produced false positives (e.g. flagging "give me my visit details" as a
+    // MEDICAL_CONCERN). The main model now reliably calls log_complaint directly
+    // via the tool loop above, so a redundant second pass is unnecessary.
 
-        if (clinic.notificationPhone) {
-          try {
-            await this.whatsappService.sendText(
-              clinic.notificationPhone,
-              `Classifier failure for patient ${campaignPatient.id} (${phone}). Manual review required. Message: "${patientMessage}"`,
-            );
-          } catch (err2: any) {
-            this.logger.error(`Failed to notify staff of classifier failure for ${phone}: ${err2.message}`);
-          }
-        }
-      }
-
-      if (classification && classification.is_complaint) {
-        this.logger.warn(
-          `Model classification flagged message from ${phone} as complaint (type=${classification.type}, severity=${classification.severity}) — logging`,
-        );
-        try {
-          await this.executeLogComplaint(
-            {
-              type: classification.type ?? ComplaintType.MEDICAL_CONCERN,
-              severity: classification.severity ?? ComplaintSeverity.MEDIUM,
-              summary: classification.summary ?? `Auto-flagged by model classifier — Raw message: "${patientMessage}"`,
-            },
-            campaignPatient.id, clinic.id, patientMessage, campaignPatient.campaignId, clinic, true,
-          );
-        } catch (err: any) {
-          this.logger.error(`Model-driven complaint logging failed for ${phone}: ${err.message}`);
-        }
-      }
+    // ── Guarantee a patient-facing reply ───────────────────────────────────
+    // A small local model can emit only tool calls with an empty `reply` field,
+    // or loop on a side-effect tool without ever writing text (e.g. it keeps
+    // re-calling log_complaint). The patient must NEVER be left silent: if the
+    // turn did not send any text and the conversation is still open, send a
+    // language-appropriate acknowledgment that reflects what actually happened.
+    if (!textSent && !conversationEnded) {
+      const fallback = this.buildFallbackAcknowledgment(
+        session.language ?? Language.FR,
+        complaintLoggedThisTurn,
+        bookingRecordedThisTurn,
+      );
+      this.logger.warn(`No model text produced for ${phone} — sending fallback acknowledgment`);
+      await this.whatsappService.sendText(phone, fallback);
+      session.messages.push({ role: 'assistant', content: fallback, timestamp: Date.now() });
     }
 
     session.turnCount += 1;
@@ -513,6 +556,26 @@ export class ConversationService {
     }
 
     this.logger.log(`Turn ${session.turnCount}/${aiMaxTurns} complete for ${phone} (model: ${lastUsedModel})`);
+  }
+
+  private buildFallbackAcknowledgment(
+    language: Language,
+    complaintLogged: boolean,
+    bookingRecorded: boolean,
+  ): string {
+    if (complaintLogged) {
+      return language === Language.EN
+        ? "Thank you for letting me know. I've noted your feedback and our team will follow up with you shortly."
+        : "Merci de m'avoir fait part de votre retour. J'ai bien noté votre message et notre équipe vous recontactera rapidement.";
+    }
+    if (bookingRecorded) {
+      return language === Language.EN
+        ? "I've recorded your booking request. Our team will contact you shortly to confirm the details."
+        : "J'ai bien enregistré votre demande de rendez-vous. Notre équipe vous contactera rapidement pour confirmer les détails.";
+    }
+    return language === Language.EN
+      ? "I'm here to help. Could you tell me a bit more about what you need?"
+      : "Je suis là pour vous aider. Pouvez-vous m'en dire un peu plus ?";
   }
 
   private buildSystemPrompt(
@@ -556,97 +619,33 @@ export class ConversationService {
 
 TODAY: ${today}
 
-FORMATTING RULES:
-- Never use emojis.
-- Keep every message to 2-4 sentences maximum. This is WhatsApp, not email.
-- Never ask more than one question per message.
-- Never invent medical advice or diagnoses.
-- Never mention other patients.
-- DO NOT use time-specific greetings like "Bonjour" (morning), "Bonsoir" (evening), "Good morning", "Good evening". Use time-neutral greetings like "Salut" (French) or "Hello" (English).
+RULES:
+- No emojis. 2-4 short sentences max. One question per message max. Never mention other patients.
+- Use time-neutral greetings ("Salut"/"Hello"), not "Bonjour"/"Bonsoir"/"Good morning".
+- You are NOT a doctor. NEVER diagnose, suggest treatments, or ask triage questions (e.g. "where does it hurt?", "how long has it lasted?"). If a patient mentions a symptom/pain, log it and reply with empathy ONLY.
+- If the message is unclear, a typo, or gibberish, do NOT read it as a complaint, booking, or goodbye — just ask the patient to clarify.
 
-STRICT MEDICAL GUARDRAIL:
-- You are NOT a doctor. You must NEVER diagnose, suggest treatments, or ask medical triage questions (e.g., "does it come with fever?", "how long has this lasted?", "where exactly does it hurt?", "how did it happen?").
-- If a patient mentions a symptom, pain, or health issue, immediately call log_complaint and respond with empathy ONLY — do not ask about the symptom, its cause, its location, or its duration.
-- DO NOT offer medical advice or attempt to triage the patient.
+TOOLS — key rules (the tool schemas are also listed below):
+- log_complaint: call for ANY dissatisfaction, symptom, pain, health concern, or urgency. type=COMPLAINT for service/staff complaints, MEDICAL_CONCERN for health symptoms, URGENT for emergencies. Do NOT call for a plain request for information (visit details, results, hours) — just answer. It is silent: always also send a warm empathetic text reply. Call once per issue.
+- request_booking: only after collecting reason + preferred date + doctor/specialty (one question at a time). Confirm warmly after.
+- request_handoff: when the patient asks for a human, is very distressed, or severity is HIGH. Call log_complaint FIRST if they also complained. This ends the conversation.
+- end_conversation: only when the patient clearly says goodbye or has nothing more. NEVER close after a single short message ("hi", "ok", "yeah") or a single "I'm fine" — those are engagement, not goodbyes. Ask one gentle follow-up first.
 
-EXAMPLE — follow this pattern exactly:
-Patient: "j'ai mal à la tête depuis hier"
-Correct tool call: log_complaint(type=MEDICAL_CONCERN, severity=MEDIUM, summary="Patient reports headache since yesterday")
-Correct reply: "Je suis désolé d'apprendre que vous avez mal à la tête. J'ai bien noté votre message, notre équipe va vous recontacter si nécessaire."
-Incorrect reply (NEVER do this): "Pourriez-vous me dire où précisément vous ressentez cette douleur ?" or "Comment est-ce arrivé ?"
+NEVER write a tool's name or arguments as visible text — output ONLY the tool call plus a natural-language reply.
 
 PATIENT INFORMATION:
 - Name: ${campaignPatient.patientName}
 - Age: ${campaignPatient.ageYears ?? 'Unknown'}
 - Sex: ${campaignPatient.sexe ?? 'Unknown'}
 - City: ${campaignPatient.ville ?? 'Unknown'}
-- Last visit date: ${visitDate}
-- Reason for last visit: ${campaignPatient.prestation}
-- Treating doctor: ${campaignPatient.medecinTraitant}
+- Last visit: ${visitDate} — ${campaignPatient.prestation} (Dr. ${campaignPatient.medecinTraitant})
 
 PATIENT HISTORY:
  ${historySection}
 
-CLINIC CONTACT:
-- Phone: ${clinic.phone}${clinic.address ? `\n- Address: ${clinic.address}` : ''}
+CLINIC: ${clinic.phone}${clinic.address ? ` — ${clinic.address}` : ''}
 
-YOUR GOAL:
-Follow up on the patient's wellbeing after their recent visit. Listen to their concerns, acknowledge them warmly, and take appropriate action using the tools available.
-
-TOOL USAGE RULES — READ CAREFULLY:
-
-1. log_complaint
-   - Call this when the patient expresses ANY dissatisfaction, complaint, health concern, or urgency.
-   - This includes ANY mention of a symptom, pain, or health issue — even something that sounds minor (e.g. "j'ai mal à la tête", "I have a headache", "je me sens fatigué"). Do NOT wait for the patient to elaborate or ask them clinical questions first — log it immediately with whatever detail they gave you.
-   - You are NOT a doctor and must NEVER ask clinical/triage questions. Simply acknowledge warmly, log the concern via this tool, and let the clinic follow up properly.
-   - This is a SILENT side effect. After calling it, you MUST send a warm, empathetic text response to the patient acknowledging their concern. Do NOT tell the patient you "logged" anything, and do NOT ask them to describe their symptoms further.
-   - IDEMPOTENCY: Only call this once per distinct issue. If you already called it for this issue and received a success response, do NOT call it again.
-
-2. request_booking
-   - Call this when the patient wants to book a new appointment.
-   - BEFORE calling this tool, you MUST collect ALL of the following through conversation:
-     a) REASON — why do they need the appointment? Ask if not mentioned.
-     b) PREFERRED DATE — when do they want to come? Ask if not mentioned. Accept any format ("next week", "le 5 juillet", etc.)
-     c) PREFERRED DOCTOR OR SPECIALTY — do they have a preference? Ask if not mentioned. Accept "no preference" as a valid answer.
-   - Ask for each missing piece ONE AT A TIME — one question per message. Never ask two things at once.
-   - Only call request_booking once ALL THREE are known (doctor/specialty can be "no preference").
-   - This is a SILENT side effect. After calling it, confirm warmly in text that their request has been noted and the team will contact them to confirm the exact appointment.
-   - IDEMPOTENCY: Only call this once per booking request. Do not call it again if already called.
-
-3. request_handoff
-   - Call this when the patient explicitly asks for a human, is very distressed, or the situation is HIGH severity.
-   - IMPORTANT: If the patient also complained, call log_complaint FIRST, then request_handoff, in the SAME turn.
-   - PRIORITY RULE: If the patient explicitly asks to speak to a human/staff member, OR uses words like
-     "maintenant", "urgent", "immédiatement", "right now", "immediately" together with a health concern,
-     you MUST call request_handoff. NEVER call log_complaint alone when the patient has explicitly requested a human.
-   - Before calling this tool, send a warm farewell text to the patient telling them a staff member will be in touch.
-   - This ENDS the AI conversation permanently.
-
-4. end_conversation
-   - Call this when the conversation has reached a natural end.
-   - Before calling this tool, send a warm farewell text to the patient.
-   - This ENDS the AI conversation permanently.
-
-CONVERSATION FLOW:
-- Turn 1: Warm greeting, ask how they are doing since their visit.
-- Turn 2: If they say they are fine, acknowledge warmly and ask ONE follow-up question (e.g. any remaining questions about their treatment, or whether they need to rebook). Do NOT close yet.
-- Turn 3+: If they confirm everything is fine with no further needs, THEN close warmly with end_conversation.
-- If they have a concern at any point: Listen, acknowledge, use tools, respond warmly.
-- If they want to stop or say goodbye explicitly: Respect it immediately. Use end_conversation after a polite farewell.
-- If they are rude or clearly done talking: Close gracefully with end_conversation.
-
-IMPORTANT — DO NOT close the conversation after a single positive reply like "I'm fine" or "yeah all good".
-The patient may still have questions or need a follow-up appointment. Always ask one gentle follow-up before closing.
-Only use end_conversation when the patient has clearly indicated they have nothing more to discuss.
-
-CRITICAL — NEVER use end_conversation because the patient sends a short or repeated message like "hi", "ok", "yeah", "hello", or any single word.
-These are engagement signals, not goodbyes. The patient is still present and talking.
-Only close when the patient explicitly says goodbye ("bye", "merci au revoir", "that's all", "c'est tout") or after confirming they have no further questions or concerns.
-
-If the patient's message is unclear, a typo, or ambiguous (random characters, incomplete words, something you don't understand), do NOT interpret it as a goodbye, complaint, or any specific intent. Simply ask them to clarify what they meant.
-
-NEVER write a tool's name or its arguments as visible text to the patient. Tool calls happen silently and separately from your text reply — the patient must only ever see natural conversational language, never anything resembling code, JSON, or a function name.
-If you decide to call a tool, output ONLY the tool call — do not also describe it, name it, or paraphrase its arguments in your text response.
+GOAL: Follow up on the patient's wellbeing after their visit. Acknowledge warmly, use the tools, respond empathetically.
 
 Current turn: ${session.turnCount + 1}`;
   }
@@ -683,7 +682,7 @@ Current turn: ${session.turnCount + 1}`;
   /**
    * Returns true if a new Complaint row was actually created (false if
    * skipped as a duplicate). Callers use this to know whether the
-   * deterministic keyword safety net still needs to fire.
+   * model-driven classifier safety net still needs to fire.
    */
   private async executeLogComplaint(
     input: LogComplaintInput,
@@ -692,12 +691,13 @@ Current turn: ${session.turnCount + 1}`;
     triggeringMessage: string,
     campaignId: string,
     clinic: { id: string; notificationPhone?: string | null },
+    patient: { name: string; phone: string },
     forceNotifyStaff = false,
   ): Promise<boolean> {
-    // PRODUCTION FIX: dedup is now time-bounded (see COMPLAINT_DEDUP_WINDOW_MS).
-    // Previously an exact triggeringMessage match blocked re-logging forever,
-    // meaning a patient repeating the same short phrase weeks later for a
-    // genuinely new episode would never get logged.
+    // Dedup is time-bounded (see COMPLAINT_DEDUP_WINDOW_MS). An exact
+    // triggeringMessage match blocks re-logging only within the window, so a
+    // patient repeating the same short phrase weeks later for a genuinely new
+    // episode still gets captured.
     const existing = await this.prisma.complaint.findFirst({
       where: {
         campaignPatientId,
@@ -711,102 +711,73 @@ Current turn: ${session.turnCount + 1}`;
       return false;
     }
 
-    // PRODUCTION FIX: Local models often return lowercase enums (e.g. "complaint").
-    // Prisma strictly rejects these. We MUST sanitize to uppercase.
-    const typeStr = String(input.type).toUpperCase() as ComplaintType;
-    const severityStr = String(input.severity).toUpperCase() as ComplaintSeverity;
+    // Normalize enums robustly. Local models emit lowercase, spaced, hyphenated
+    // or camelCase forms; Prisma only accepts the exact enum token. If a value
+    // still can't be mapped, fail loudly — the caller (tool loop) surfaces the
+    // error and the model-driven classifier safety net re-attempts with a valid
+    // enum, so a complaint is never silently dropped or written with wrong data.
+    const type = normalizeComplaintType(input.type);
+    const severity = normalizeComplaintSeverity(input.severity);
+
+    if (!type || !severity) {
+      const message =
+        `log_complaint received unmappable enum(s): type=${JSON.stringify(input.type)} ` +
+        `severity=${JSON.stringify(input.severity)}`;
+      this.logger.error(message);
+      try {
+        await this.persistAudit(`audit:complaint_invalid_enum:${campaignPatientId}`, {
+          ts: Date.now(), input, triggeringMessage, campaignId,
+        });
+      } catch { /* best-effort */ }
+      throw new Error(message);
+    }
+
+    const summary = input.summary?.trim()
+      ? input.summary.trim()
+      : `Auto-logged complaint — Raw message: "${triggeringMessage}"`;
 
     try {
-      // Persist an audit of the attempted complaint creation for observability
-      try { await this.persistAudit(`audit:complaint_attempt:${campaignPatientId}`, { ts: Date.now(), input, triggeringMessage, campaignId }); } catch {}
-
-      await this.prisma.complaint.create({
-        data: { 
-          campaignPatientId, 
-          clinicId, 
-          type: typeStr, 
-          severity: severityStr, 
-          triggeringMessage, 
-          summary: input.summary 
-        },
+      await this.persistAudit(`audit:complaint_attempt:${campaignPatientId}`, {
+        ts: Date.now(), input, triggeringMessage, campaignId,
       });
+    } catch { /* best-effort */ }
 
-      await this.prisma.campaign.update({ 
-        where: { id: campaignId }, 
-        data: { complainedCount: { increment: 1 } } 
-      });
+    await this.prisma.complaint.create({
+      data: {
+        campaignPatientId,
+        clinicId,
+        type,
+        severity,
+        triggeringMessage,
+        summary,
+      },
+    });
 
-      if ((severityStr === ComplaintSeverity.HIGH || forceNotifyStaff) && clinic.notificationPhone) {
-        try {
-          const label = forceNotifyStaff ? 'PLAINTE AUTO-DÉTECTÉE (à vérifier)' : 'ALERTE PLAINTE GRAVE';
-          await this.whatsappService.sendText(
-            clinic.notificationPhone,
-            `${label}\nPatient: ${campaignPatientId}\nType: ${typeStr}\nRésumé: ${input.summary}\nAction requise.`,
-          );
-        } catch (err: any) {
-          this.logger.error(`Failed to send complaint alert: ${err.message}`);
-        }
-      }
+    await this.prisma.campaign.update({
+      where: { id: campaignId },
+      data:  { complainedCount: { increment: 1 } },
+    });
 
-      this.logger.log(`Complaint logged successfully: ${typeStr}/${severityStr} for patient ${campaignPatientId}`);
-      return true;
-    } catch (err: any) {
-      // PRODUCTION FIX: Log the exact Prisma error and attempt a safe fallback
-      this.logger.error(`DATABASE ERROR saving complaint (primary): ${err.message}`);
+    if ((severity === ComplaintSeverity.HIGH || forceNotifyStaff) && clinic.notificationPhone) {
       try {
-        await this.persistAudit(`audit:complaint_error:${campaignPatientId}`, { ts: Date.now(), error: String(err), input, triggeringMessage, campaignId });
-      } catch {}
-
-      // Attempt safe fallback: create a minimal complaint record so nothing is lost
-      try {
-        const fallbackSummary = input.summary ?? `Auto-flagged fallback entry — Raw message: "${triggeringMessage}"`;
-        await this.prisma.complaint.create({
-          data: {
-            campaignPatientId,
-            clinicId,
-            type: ComplaintType.MEDICAL_CONCERN,
-            severity: ComplaintSeverity.MEDIUM,
-            triggeringMessage,
-            summary: fallbackSummary,
-          },
-        });
-
-        // Still try to increment campaign complainedCount
-        try { await this.prisma.campaign.update({ where: { id: campaignId }, data: { complainedCount: { increment: 1 } } }); } catch {}
-
-        // Notify staff that a fallback complaint was created due to DB issues
-        if (clinic.notificationPhone) {
-          try {
-            await this.whatsappService.sendText(
-              clinic.notificationPhone,
-              `Fallback complaint created for patient ${campaignPatientId} due to DB error. Please review. Message: "${triggeringMessage}"`,
-            );
-          } catch (err2: any) {
-            this.logger.error(`Failed to notify staff of fallback complaint for ${campaignPatientId}: ${err2.message}`);
-          }
-        }
-
-        this.logger.log(`Fallback complaint logged for patient ${campaignPatientId}`);
-        return true;
-      } catch (fallbackErr: any) {
-        this.logger.error(`Fallback complaint creation failed: ${fallbackErr.message}`);
-        try { await this.persistAudit(`audit:complaint_error:${campaignPatientId}`, { ts: Date.now(), fallbackError: String(fallbackErr) }); } catch {}
-
-        // As final recourse, notify staff for manual action
-        if (clinic.notificationPhone) {
-          try {
-            await this.whatsappService.sendText(
-              clinic.notificationPhone,
-              `CRITICAL: Failed to create complaint for patient ${campaignPatientId}. Manual action required. Message: "${triggeringMessage}"`,
-            );
-          } catch (err3: any) {
-            this.logger.error(`Failed to notify staff of critical complaint failure: ${err3.message}`);
-          }
-        }
-
-        return false;
+        const label = forceNotifyStaff ? 'PLAINTE AUTO-DÉTECTÉE (à vérifier)' : 'ALERTE PLAINTE GRAVE';
+        await this.whatsappService.sendText(
+          clinic.notificationPhone,
+          `${label}\n` +
+          `Patient : ${patient.name}\n` +
+          `Téléphone : ${patient.phone}\n` +
+          `Type : ${COMPLAINT_TYPE_LABELS[type]}\n` +
+          `Gravité : ${COMPLAINT_SEVERITY_LABELS[severity]}\n` +
+          `Résumé : ${summary}\n` +
+          `Action requise.`,
+        );
+      } catch (err: any) {
+        this.logger.error(`Failed to send complaint alert: ${err.message}`);
       }
     }
+
+    this.logger.log(`Complaint logged successfully: ${type}/${severity} for patient ${campaignPatientId}`);
+    return true;
   }
 
   private async executeRequestBooking(
@@ -815,25 +786,58 @@ Current turn: ${session.turnCount + 1}`;
     clinicId: string,
     rawPatientMessage: string,
   ): Promise<void> {
-    const existing = await this.prisma.bookingRequest.findFirst({
+    // PENDING request already exists → update it in place with the new details.
+    // The patient is refining/editing their request before staff confirms it, so
+    // there is no appointment yet to supersede.
+    const pending = await this.prisma.bookingRequest.findFirst({
       where: { campaignPatientId, status: BookingRequestStatus.PENDING },
     });
 
-    if (existing) {
-      this.logger.log(`Updating existing pending booking request ${existing.id} for patient ${campaignPatientId} with new details.`);
-
-      // PRODUCTION FIX: Update the existing request instead of skipping.
+    if (pending) {
+      this.logger.log(`Updating existing pending booking request ${pending.id} for patient ${campaignPatientId} with new details.`);
       await this.prisma.bookingRequest.update({
-        where: { id: existing.id },
+        where: { id: pending.id },
         data: {
-          preferredSpecialty: input.preferredSpecialty ?? existing.preferredSpecialty,
-          preferredDoctor: input.preferredDoctor ?? existing.preferredDoctor,
-          preferredDateRange: input.preferredDateRange ?? existing.preferredDateRange,
-          reason: input.reason ?? existing.reason,
+          preferredSpecialty: input.preferredSpecialty ?? pending.preferredSpecialty,
+          preferredDoctor: input.preferredDoctor ?? pending.preferredDoctor,
+          preferredDateRange: input.preferredDateRange ?? pending.preferredDateRange,
+          reason: input.reason ?? pending.reason,
           rawPatientRequest: rawPatientMessage,
         },
       });
       return;
+    }
+
+    // A CONFIRMED request (with an associated appointment) already exists. The
+    // patient is asking to change/reschedule. The previous implementation only
+    // looked for PENDING requests, so a date change after confirmation silently
+    // created a SECOND booking request while leaving the old appointment active —
+    // the "old booking never superseded" bug. We must cancel the old appointment
+    // (freeing the slot) and reject the old request before recording the new one.
+    const confirmed = await this.prisma.bookingRequest.findFirst({
+      where: { campaignPatientId, status: BookingRequestStatus.CONFIRMED },
+      include: { appointment: true },
+    });
+
+    if (confirmed) {
+      this.logger.log(
+        `Patient ${campaignPatientId} wants to change a confirmed booking (request ${confirmed.id}) — superseding`,
+      );
+
+      if (confirmed.appointmentId && confirmed.appointment) {
+        await this.prisma.appointment.update({
+          where: { id: confirmed.appointmentId },
+          data: {
+            status: AppointmentStatus.CANCELLED,
+            notes: `Superseded by new booking request on ${new Date().toISOString()}. Original reason: ${confirmed.appointment.notes ?? 'n/a'}`,
+          },
+        });
+      }
+
+      await this.prisma.bookingRequest.update({
+        where: { id: confirmed.id },
+        data: { status: BookingRequestStatus.REJECTED },
+      });
     }
 
     await this.prisma.bookingRequest.create({
@@ -861,6 +865,8 @@ Current turn: ${session.turnCount + 1}`;
   ): Promise<void> {
     session.status = 'handed_off';
 
+    const handoffReason = input.reason?.trim() || 'Patient requested to speak to a human (no reason provided).';
+
     await this.prisma.campaignPatient.update({
       where: { id: campaignPatient.id },
       data: { status: CampaignPatientStatus.COMPLETED, outcome: ConversationOutcome.HANDED_OFF, completedAt: new Date() },
@@ -871,9 +877,13 @@ Current turn: ${session.turnCount + 1}`;
     // Normalize phone keys to avoid routing mismatches between reactive and campaign sessions
     const normalizedPhone = this.normalizePhone(session.phone);
     session.phone = normalizedPhone;
+    // Persist the handed_off campaign session so staff can see incoming messages
+    // (message.processor routes them here via isHandoffCampaignSession). It must
+    // NOT be deleted afterwards — that was the previous bug that caused handed-off
+    // conversations to "leak" back into the reactive booking bot.
     await this.sessionsService.saveCampaignSession(session);
-    // Remove reactive session if present and ensure campaign key is saved
-    await this.sessionsService.deleteCampaignSession(normalizedPhone).catch(() => {});
+    // Only the stale reactive session is removed: it must not shadow the campaign
+    // handoff session for the same phone number.
     await this.sessionsService.delete(normalizedPhone).catch(() => {});
 
     if (clinic.notificationPhone) {
@@ -890,7 +900,7 @@ Current turn: ${session.turnCount + 1}`;
           `Last visit   : ${visitDate}\n` +
           `Visit reason : ${campaignPatient.prestation}\n` +
           `Doctor       : ${campaignPatient.medecinTraitant}\n---------------------------\n` +
-          `Handoff reason : ${input.reason}\n---------------------------\n` +
+          `Handoff reason : ${handoffReason}\n---------------------------\n` +
           `Time : ${now}\nAction required : Contact this patient immediately.`;
 
         await this.whatsappService.sendText(clinic.notificationPhone, notification);
@@ -970,76 +980,6 @@ Current turn: ${session.turnCount + 1}`;
     return sanitized;
   }
 
-  /**
-   * Model-driven classifier: asks the Ollama model to call a constrained
-   * "classify_complaint" tool with { is_complaint, type, severity, summary }.
-   * The OllamaProvider will convert that into a tool_use block which is
-   * then returned here as a parsed object. This avoids brittle keyword
-   * lists and makes the decision model-driven.
-   */
-  private async classifyComplaintWithModel(message: string, language: Language | null, phone: string): Promise<{is_complaint: boolean; type?: ComplaintType; severity?: ComplaintSeverity; summary?: string} | null> {
-    const classifyTool: AIToolDefinition = {
-      name: 'classify_complaint',
-      description: 'Internal classifier: decide whether a user message constitutes a complaint/medical concern/urgent case.',
-      input_schema: {
-        type: 'object',
-        properties: {
-          is_complaint: { type: 'boolean' },
-          type: { type: 'string', enum: ['COMPLAINT', 'MEDICAL_CONCERN', 'URGENT'] },
-          severity: { type: 'string', enum: ['LOW', 'MEDIUM', 'HIGH'] },
-          summary: { type: 'string' },
-        },
-        required: ['is_complaint'],
-      },
-    };
-
-    const systemPrompt = `You are a strict classifier that decides whether a patient's message requires the clinic to log a complaint or medical concern. You MUST output ONLY a tool call to classify_complaint with input { is_complaint: boolean, type: one of COMPLAINT|MEDICAL_CONCERN|URGENT, severity: LOW|MEDIUM|HIGH, summary: short summary }. Do NOT output any visible text to the patient. Be conservative: prefer to flag when unsure.`;
-
-    const messages: AIInputMessage[] = [ { role: 'user', content: message } ];
-
-    // Retry loop for robustness (enterprise-grade): a few fast retries with backoff
-    const maxAttempts = 3;
-    const backoffs = [200, 500, 1000];
-    let lastErr: Error | null = null;
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        const response = await this.ollamaProvider.generate(systemPrompt, messages, [classifyTool]);
-        const toolUseBlocks = response.content.filter((b): b is AIToolUseBlock => b.type === 'tool_use');
-        if (!toolUseBlocks || toolUseBlocks.length === 0) {
-          // Persist audit that classifier returned no tool use
-          await this.persistAudit(`audit:classifier:${phone}`, { ts: Date.now(), note: 'no_tool_use', response: response.content });
-          return null;
-        }
-
-        const classificationInput = toolUseBlocks[0].input as any;
-        const result = {
-          is_complaint: Boolean(classificationInput.is_complaint),
-          type: classificationInput.type as ComplaintType | undefined,
-          severity: classificationInput.severity as ComplaintSeverity | undefined,
-          summary: typeof classificationInput.summary === 'string' ? classificationInput.summary : undefined,
-        };
-
-        // Persist an audit entry of the classifier decision for observability
-        try {
-          await this.persistAudit(`audit:classifier:${phone}`, { ts: Date.now(), input: classificationInput, result });
-        } catch { /* best-effort */ }
-
-        return result;
-      } catch (err: any) {
-        lastErr = err;
-        this.logger.warn(`Classifier attempt ${attempt} failed for ${phone}: ${err.message}`);
-        if (attempt < maxAttempts) {
-          const waitMs = backoffs[Math.min(attempt - 1, backoffs.length - 1)];
-          await new Promise(res => setTimeout(res, waitMs));
-          continue;
-        }
-      }
-    }
-
-    // If we reached here, all attempts failed — throw an error to be handled by caller
-    throw lastErr ?? new Error('Unknown classifier failure');
-  }
-
   private async persistAudit(key: string, payload: any): Promise<void> {
     try {
       const redis = this.sessionsService.getClient();
@@ -1075,6 +1015,24 @@ Current turn: ${session.turnCount + 1}`;
     if (explicitEN.some(p => lower.includes(p))) return Language.EN;
     if (explicitFR.some(p => lower.includes(p))) return Language.FR;
 
+    // Strong, unambiguous language signals (checked before word scoring). These
+    // catch common English phrases the keyword scorer misses — e.g. "i wanna
+    // rebook" scores 0 on both sides because "rebook"/"wanna" aren't in the word
+    // lists and "book" fails the word-boundary test inside "rebook".
+    const strongEn = [
+      'i wanna', 'i want', 'i need', 'i said', 'i would', 'i will', 'i have', 'i am',
+      "i'm", 'can i', 'could i', 'do you', 'are you', 'what the', 'as soon as possible',
+      'thank you', 'wtf', 'wanna', 'gonna', 'rebook', 'asap', 'i don',
+    ];
+    const strongFr = [
+      'je veux', 'je suis', 'je voudrais', "c'est quoi", "qu'est-ce", 'quest ce',
+      'svp', "s'il vous plaît", 's il vous plait', 'rendez-vous', 'rendez vous', 'rdv',
+      'merci beaucoup', 'pourquoi', 'comment ça va', 'comment ca va',
+    ];
+
+    if (strongEn.some(p => lower.includes(p))) return Language.EN;
+    if (strongFr.some(p => lower.includes(p))) return Language.FR;
+
     if (lower.length < 3) return null;
 
     // Common short responses to instantly lock language
@@ -1097,6 +1055,8 @@ Current turn: ${session.turnCount + 1}`;
       ...enShort, 'what', 'when', 'where', 'how', "i'm", 'i am', 'i have', 'i need',
       'done', 'right', 'got it', 'appointment', 'book', 'booking', 'week', 'next', 'pain', 'hurt',
       'afternoon', 'morning', 'again', 'actually', 'doctor', 'hospital', 'need', 'go', 'please',
+      'give', 'want', 'human', 'talk', 'hear', 'said', 'with', 'about', 'the', 'my', 'your',
+      'now', 'before', 'good', 'was', 'not', 'details', 'visit',
     ];
 
     const wb = (word: string) =>

@@ -1,20 +1,13 @@
 import { Processor, WorkerHost, OnWorkerEvent } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Job } from 'bullmq';
-import { CampaignStatus, CampaignPatientStatus, Language, MessageKey } from '@prisma/client';
+import { CampaignStatus, CampaignPatientStatus, DeliveryStatus, Language, MessageKey } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { SessionsService, CampaignSession } from '../sessions/sessions.service';
 import { WhatsAppService } from '../whatsapp/whatsapp.service';
 import { CampaignOutboundJob } from './campaign.service';
 import { QUEUES } from '../queue/queue.constants';
-
-// ─── Template config ───────────────────────────────────────────────────────
-// patient_followup template approved by Meta.
-// Body: "Bonjour {{1}}, nous faisons suite à votre visite du {{2}}. Comment vous sentez-vous depuis ?"
-// {{1}} = patient name
-// {{2}} = visit date (dd/MM/yyyy)
-const OPENING_TEMPLATE_NAME = 'patient_followup';
-const OPENING_TEMPLATE_LANG = 'fr'; // matches the language the template was approved in
 
 @Processor(QUEUES.CAMPAIGN_OUTBOUND)
 export class OutboundProcessor extends WorkerHost {
@@ -24,6 +17,7 @@ export class OutboundProcessor extends WorkerHost {
     private readonly prisma:          PrismaService,
     private readonly sessionsService: SessionsService,
     private readonly whatsappService: WhatsAppService,
+    private readonly configService:   ConfigService,
   ) {
     super();
   }
@@ -128,15 +122,20 @@ export class OutboundProcessor extends WorkerHost {
     // {{1}} = patient name, {{2}} = visit date formatted as dd/MM/yyyy
     const visitDate = new Date(campaignPatient.visitDate).toLocaleDateString('fr-FR');
 
-    // ── 10. Send approved Meta template — works for new contacts ──────────
+    // ── 10. Send approved Meta template — works for new contacts ───────────
     // sendText() fails for contacts who have never messaged the clinic before
     // (outside the 24-hour customer-initiated window).
-    // sendTemplate() uses the approved patient_followup template which bypasses
-    // this restriction and is delivered regardless of prior contact history.
-    await this.whatsappService.sendTemplate(
+    // sendTemplate() uses the approved template which bypasses this restriction
+    // and is delivered regardless of prior contact history. The template name
+    // and language come from config — they are account-specific and must match
+    // the template actually approved in Meta Business Manager.
+    const openingTemplateName = this.configService.get<string>('campaign.openingTemplateName') ?? 'patient_followup';
+    const openingTemplateLanguage = this.configService.get<string>('campaign.openingTemplateLanguage') ?? 'fr';
+
+    const wamId = await this.whatsappService.sendTemplate(
       campaignPatient.phone,
-      OPENING_TEMPLATE_NAME,
-      OPENING_TEMPLATE_LANG,
+      openingTemplateName,
+      openingTemplateLanguage,
       [
         {
           type: 'body',
@@ -149,7 +148,7 @@ export class OutboundProcessor extends WorkerHost {
     );
 
     this.logger.log(
-      `Opening template sent to ${campaignPatient.phone} (${campaignPatient.patientName})`,
+      `Opening template sent to ${campaignPatient.phone} (${campaignPatient.patientName}) — wamid=${wamId}`,
     );
 
     // ── 11. Create campaign Redis session ──────────────────────────────────
@@ -165,7 +164,7 @@ export class OutboundProcessor extends WorkerHost {
       patientSnapshot:   campaignPatient.patientSnapshot as Record<string, any>,
       language:          null,
       messages:          [
-        // Log the opening template message so Claude has full conversation context
+        // Log the opening template message so the model has full conversation context
         { role: 'assistant', content: openingText, timestamp: Date.now() },
       ],
       turnCount:         0,
@@ -181,13 +180,19 @@ export class OutboundProcessor extends WorkerHost {
       `Campaign session created in Redis for ${campaignPatient.phone}`,
     );
 
-    // ── 12. Update CampaignPatient → CONTACTED ─────────────────────────────
+    // ── 12. Update CampaignPatient → CONTACTED + record delivery tracking ──
+    // Only reach this point if sendTemplate() actually succeeded (Meta accepted
+    // the message with a wamid). Record the wamid + initial SENT status so the
+    // delivery webhook can update it to DELIVERED/READ/FAILED later, and so the
+    // dashboard can show true delivery state rather than just "job dispatched".
     await this.prisma.campaignPatient.update({
       where: { id: campaignPatientId },
       data: {
-        status:      CampaignPatientStatus.CONTACTED,
-        contactedAt: new Date(),
-        parkedAt:    null,
+        status:            CampaignPatientStatus.CONTACTED,
+        contactedAt:       new Date(),
+        parkedAt:          null,
+        outboundMessageId: wamId || null,
+        deliveryStatus:    wamId ? DeliveryStatus.SENT : null,
       },
     });
 

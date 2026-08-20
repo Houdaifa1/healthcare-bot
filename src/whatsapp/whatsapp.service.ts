@@ -2,6 +2,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
+import { DeliveryStatus } from '@prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
 import { QUEUES, JOBS } from '../queue/queue.constants';
 import type { MessageJob } from '../queue/message.processor';
 
@@ -9,6 +11,24 @@ import type { MessageJob } from '../queue/message.processor';
 // All outbound requests go to:
 //   POST https://graph.facebook.com/{apiVersion}/{phoneNumberId}/messages
 //   Authorization: Bearer {accessToken}
+
+interface MetaSendError {
+  message?: string;
+  type?: string;
+  code?: number;
+  error_data?: unknown;
+  fbtrace_id?: string;
+}
+
+interface MetaSendResponse {
+  messaging_product?: string;
+  contacts?: { input?: string; wa_id?: string }[];
+  messages?: {
+    id?: string;
+    errors?: { code: number; title?: string; message?: string; error_data?: unknown }[];
+  }[];
+  error?: MetaSendError;
+}
 
 @Injectable()
 export class WhatsAppService {
@@ -21,6 +41,7 @@ export class WhatsAppService {
 
   constructor(
     private readonly configService: ConfigService,
+    private readonly prisma: PrismaService,
     @InjectQueue(QUEUES.MESSAGES) private readonly messageQueue: Queue,
   ) {
     const accessToken   = this.configService.get<string>('whatsapp.accessToken');
@@ -40,7 +61,8 @@ export class WhatsAppService {
 
   /**
    * Parses a verified webhook payload and enqueues one job per inbound message.
-   * Statuses (delivered, read, failed) are acknowledged and ignored.
+   * Delivery statuses (sent/delivered/read/failed) are recorded against the
+   * corresponding CampaignPatient so the dashboard reflects true delivery state.
    */
   async handleIncomingWebhook(body: any): Promise<void> {
     const entries: any[] = body?.entry ?? [];
@@ -90,7 +112,71 @@ export class WhatsAppService {
 
           this.logger.log(`Job queued for ${from} (${name}): "${text}"`);
         }
+
+        // ── Delivery statuses ─────────────────────────────────────────────
+        // Meta reports outbound delivery state (sent/delivered/read/failed) via
+        // the same webhook, keyed by the outbound message id (wamid). We must
+        // record these so the dashboard reflects true delivery, not just "job
+        // dispatched". Previously these were dropped entirely.
+        const statuses: any[] = value?.statuses ?? [];
+        for (const status of statuses) {
+          await this.handleDeliveryStatus(status);
+        }
       }
+    }
+  }
+
+  // ─── Delivery status tracking ──────────────────────────────────────────────
+
+  private async handleDeliveryStatus(status: any): Promise<void> {
+    const wamId: string | undefined = status?.id;
+    const metaStatus: string | undefined = status?.status;
+    if (!wamId || !metaStatus) return;
+
+    const deliveryStatus = this.mapDeliveryStatus(metaStatus);
+    if (!deliveryStatus) {
+      this.logger.warn(`Unrecognised Meta delivery status "${metaStatus}" for wamid ${wamId} — ignoring`);
+      return;
+    }
+
+    try {
+      const updated = await this.prisma.campaignPatient.updateMany({
+        where: { outboundMessageId: wamId },
+        data:  { deliveryStatus },
+      });
+
+      if (updated.count > 0) {
+        this.logger.log(`Delivery status ${deliveryStatus} recorded for wamid ${wamId}`);
+      } else if (deliveryStatus === DeliveryStatus.FAILED) {
+        // A FAILED status for an untracked wamid is worth surfacing — it means
+        // Meta rejected a message we did not (or no longer) track.
+        this.logger.warn(
+          `Received FAILED delivery status for untracked wamid ${wamId}: ${JSON.stringify(status.errors ?? status)}`,
+        );
+      }
+
+      // Surface the actual Meta error code/title so failed deliveries are
+      // diagnosable (e.g. 131026 "Message undeliverable" vs 132001 "template not
+      // found") instead of just a bare "FAILED".
+      if (deliveryStatus === DeliveryStatus.FAILED && Array.isArray(status.errors) && status.errors.length > 0) {
+        const errs = status.errors.map(
+          (e: any) => `code=${e?.code ?? 'n/a'} (${e?.title ?? 'unknown'}): ${e?.message ?? ''}`,
+        );
+        this.logger.warn(`Delivery FAILED for wamid ${wamId} — ${errs.join('; ')}`);
+      }
+    } catch (err: any) {
+      this.logger.error(`Failed to persist delivery status for wamid ${wamId}: ${err.message}`);
+    }
+  }
+
+  private mapDeliveryStatus(status: string): DeliveryStatus | null {
+    switch (status) {
+      case 'sent':      return DeliveryStatus.SENT;
+      case 'delivered': return DeliveryStatus.DELIVERED;
+      case 'read':      return DeliveryStatus.READ;
+      case 'warning':   return DeliveryStatus.WARNING;
+      case 'failed':    return DeliveryStatus.FAILED;
+      default:          return null;
     }
   }
 
@@ -120,10 +206,10 @@ export class WhatsAppService {
   // ─── Outbound helpers — all go through sendRaw() ──────────────────────────
 
   /**
-   * Sends a plain text message.
+   * Sends a plain text message. Returns the Meta message id (wamid).
    */
-  async sendText(to: string, body: string): Promise<void> {
-    await this.sendRaw({
+  async sendText(to: string, body: string): Promise<string> {
+    const wamId = await this.sendRaw({
       messaging_product: 'whatsapp',
       recipient_type:    'individual',
       to:                this.normalisePhone(to),
@@ -131,6 +217,7 @@ export class WhatsAppService {
       text:              { preview_url: false, body },
     });
     this.logger.log(`Text sent to ${to}`);
+    return wamId;
   }
 
   /**
@@ -157,8 +244,8 @@ export class WhatsAppService {
     templateName: string,
     languageCode: string,
     components:   Record<string, unknown>[],
-  ): Promise<void> {
-    await this.sendRaw({
+  ): Promise<string> {
+    const wamId = await this.sendRaw({
       messaging_product: 'whatsapp',
       recipient_type:    'individual',
       to:                this.normalisePhone(to),
@@ -170,6 +257,7 @@ export class WhatsAppService {
       },
     });
     this.logger.log(`Template "${templateName}" sent to ${to}`);
+    return wamId;
   }
 
   /**
@@ -271,7 +359,18 @@ export class WhatsAppService {
 
   // ─── Core HTTP sender ──────────────────────────────────────────────────────
 
-  private async sendRaw(payload: Record<string, unknown>): Promise<void> {
+  /**
+   * Sends a payload to the Meta Cloud API and returns the outbound message id
+   * (wamid) on success. Throws on any failure.
+   *
+   * IMPORTANT: Meta frequently returns HTTP 200 even when a message is NOT
+   * accepted — the real error is embedded in the JSON body either as a
+   * top-level `error` object or as `messages[0].errors[]`. Only checking the
+   * HTTP status (as the previous implementation did) made a rejected send look
+   * successful, so the dashboard optimistically marked patients as CONTACTED
+   * even though nothing ever reached their device.
+   */
+  private async sendRaw(payload: Record<string, unknown>): Promise<string> {
     const response = await fetch(this.baseUrl, {
       method:  'POST',
       headers: {
@@ -294,7 +393,41 @@ export class WhatsAppService {
       throw new Error(msg);
     }
 
+    // Parse the accepted body and surface any per-message / top-level error
+    // that Meta reported alongside an HTTP 200.
+    let parsed: MetaSendResponse | null = null;
+    try {
+      parsed = JSON.parse(responseBody) as MetaSendResponse;
+    } catch {
+      parsed = null;
+    }
+
+    if (parsed?.error) {
+      const err = parsed.error;
+      const msg =
+        `Meta rejected message (code ${err.code ?? 'n/a'}): ${err.message ?? JSON.stringify(err)}`;
+      this.logger.error(msg);
+      throw new Error(msg);
+    }
+
+    const perMessageErrors = parsed?.messages?.find(
+      (m) => Array.isArray(m.errors) && m.errors.length > 0,
+    )?.errors;
+    if (perMessageErrors) {
+      const msg = `Meta rejected message: ${JSON.stringify(perMessageErrors)}`;
+      this.logger.error(msg);
+      throw new Error(msg);
+    }
+
+    const wamId: string = parsed?.messages?.[0]?.id ?? '';
+    if (!wamId) {
+      this.logger.warn(
+        `Meta accepted message but returned no message id: ${responseBody}`,
+      );
+    }
+
     this.logger.log(`Meta API response: ${responseBody}`);
+    return wamId;
   }
 
   // ─── Phone normalisation ───────────────────────────────────────────────────

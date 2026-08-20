@@ -112,43 +112,29 @@ export class OllamaProvider implements AIProvider {
     }
 
     const data = await res.json();
+    const rawContent: string | undefined = data?.message?.content;
 
-    // Accept either an already-parsed object or a JSON string in the API
-    // envelope. Be explicit about unexpected envelopes so operators can
-    // diagnose quickly.
-    const rawContentCandidate: any = data?.message?.content ?? data?.content ?? data?.result ?? null;
-
-    if (rawContentCandidate === null || rawContentCandidate === undefined) {
-      this.logger.error(`Ollama returned unexpected envelope: ${JSON.stringify(data)}`);
-      throw new Error('Ollama returned empty or unexpected content envelope');
+    if (!rawContent || !rawContent.trim()) {
+      throw new Error('Ollama returned empty content');
     }
 
     let parsed: StrictModelResponse;
-    if (typeof rawContentCandidate === 'object') {
-      parsed = rawContentCandidate as StrictModelResponse;
-    } else if (typeof rawContentCandidate === 'string') {
-      const rawContent = rawContentCandidate;
-      if (!rawContent.trim()) {
-        throw new Error('Ollama returned empty content');
-      }
-
-      try {
-        parsed = JSON.parse(rawContent);
-      } catch (err: any) {
-        this.logger.error(
-          `Ollama did not return valid JSON despite format schema. ` +
-          `Check "ollama --version" — structured outputs require >= 0.5. Raw: ${rawContent}`,
-        );
-        throw new Error(`Ollama structured output failed to parse: ${err.message}`);
-      }
-    } else {
-      this.logger.error(`Ollama returned content of unexpected type: ${typeof rawContentCandidate}`);
-      throw new Error('Ollama returned content of unexpected type');
+    try {
+      parsed = JSON.parse(rawContent);
+    } catch (err: any) {
+      // With format-constrained decoding this should never happen. If it does,
+      // it means the Ollama version doesn't actually support structured
+      // outputs (pre-0.5) and silently ignored the `format` field — fail loud,
+      // don't try to guess-recover.
+      this.logger.error(
+        `Ollama did not return valid JSON despite format schema. ` +
+        `Check "ollama --version" — structured outputs require >= 0.5. Raw: ${rawContent}`,
+      );
+      throw new Error(`Ollama structured output failed to parse: ${err.message}`);
     }
 
     if (typeof parsed.reply !== 'string' || !Array.isArray(parsed.tool_calls)) {
-      this.logger.error(`Ollama response violated the contract shape. Parsed: ${JSON.stringify(parsed)}`);
-      throw new Error(`Ollama response violated the contract shape.`);
+      throw new Error(`Ollama response violated the contract shape. Raw: ${rawContent}`);
     }
 
     const content: AIContentBlock[] = [];

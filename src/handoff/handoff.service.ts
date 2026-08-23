@@ -1,19 +1,45 @@
 import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
-import { SessionsService, CampaignSession } from '../sessions/sessions.service';
+import { SessionsService } from '../sessions/sessions.service';
 import { WhatsAppService } from '../whatsapp/whatsapp.service';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  BookingSource,
+  HandoffStatus,
+  CampaignPatientStatus,
+  ConversationOutcome,
+  Language,
+} from '@prisma/client';
 
 export interface HandoffSessionData {
-  campaignPatientId: string;
-  campaignId:        string;
-  patientName:       string;
+  id:                 string;
+  source:             BookingSource;
+  campaignPatientId:  string | null;
+  campaignId:         string | null;
+  patientName:        string;
+  phone:              string;
+  language:           string | null;
+  messages:           { role: string; content: string; timestamp: number }[];
+  turnCount:          number;
+  handoffReason:      string;
+  handedOffAt:        number;
+  lastActivityAt:     number;
+}
+
+export interface CreateHandoffInput {
+  clinicId:          string;
+  source:             BookingSource;
   phone:             string;
-  language:          string | null;
-  messages:          { role: string; content: string; timestamp: number }[];
-  turnCount:         number;
-  handoffReason:     string;
-  handedOffAt:       number;
-  lastActivityAt:    number;
+  patientName?:      string | null;
+  campaignPatientId?: string | null;
+  reason?:           string | null;
+  language?:         Language | null;
+  // Optional extra context shown in the admin alert when available (CAMPAIGN
+  // handoffs have this from ClinOps history; INBOUND ones typically don't).
+  ageYears?:         number | null;
+  ville?:            string | null;
+  visitDate?:        Date | null;
+  prestation?:       string | null;
+  medecinTraitant?:  string | null;
 }
 
 @Injectable()
@@ -26,110 +52,225 @@ export class HandoffService {
     private readonly prisma:         PrismaService,
   ) {}
 
-  async getHandoffSessions(): Promise<HandoffSessionData[]> {
-    const keys = await this.sessionsService.scanCampaignKeys();
-    if (keys.length === 0) return [];
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CREATE — single entry point for both inbound and campaign flows.
+  // Persists the Handoff row and sends the admin the exact same WhatsApp alert
+  // regardless of source.
+  // ═══════════════════════════════════════════════════════════════════════════
 
-    const results: HandoffSessionData[] = [];
-    const redis = this.sessionsService.getClient();
+  async createHandoff(input: CreateHandoffInput) {
+    const handoff = await this.prisma.handoff.create({
+      data: {
+        clinicId:          input.clinicId,
+        source:            input.source,
+        phone:             input.phone,
+        patientName:       input.patientName ?? null,
+        campaignPatientId: input.campaignPatientId ?? null,
+        reason:            input.reason ?? null,
+        language:          input.language ?? null,
+      },
+    });
 
-    for (const key of keys) {
+    const clinic = await this.prisma.clinic.findUnique({
+      where: { id: input.clinicId },
+      select: { notificationPhone: true },
+    });
+
+    if (clinic?.notificationPhone) {
       try {
-        const raw = await redis.get(key);
-        if (!raw) continue;
+        const now = new Date().toLocaleString('fr-MA', { timeZone: 'Africa/Casablanca' });
 
-        const session: CampaignSession = JSON.parse(raw);
-        if (session.status !== 'handed_off' && session.status !== 'admin_handling') continue;
+        // Same template for both sources — the visit-history block only
+        // appears when that context actually exists (CAMPAIGN handoffs carry
+        // it from ClinOps; INBOUND ones don't have prior-visit data to show).
+        const visitBlock =
+          input.visitDate || input.prestation || input.medecinTraitant || input.ageYears != null || input.ville
+            ? `Age       : ${input.ageYears ?? 'N/A'} years\n` +
+              `City      : ${input.ville ?? 'N/A'}\n---------------------------\n` +
+              `Last visit   : ${input.visitDate ? input.visitDate.toLocaleDateString('fr-FR') : 'N/A'}\n` +
+              `Visit reason : ${input.prestation ?? 'N/A'}\n` +
+              `Doctor       : ${input.medecinTraitant ?? 'N/A'}\n---------------------------\n`
+            : '';
 
-        const patient = await this.prisma.campaignPatient.findUnique({
-          where: { id: session.campaignPatientId },
-          select: { id: true, patientName: true, campaignId: true },
-        });
+        const notification =
+          `PATIENT HANDOFF REQUIRED\n---------------------------\n` +
+          `Name      : ${input.patientName ?? 'Unknown'}\n` +
+          `Phone     : ${input.phone}\n---------------------------\n` +
+          visitBlock +
+          `Handoff reason : ${input.reason ?? 'No reason provided.'}\n---------------------------\n` +
+          `Time : ${now}\nAction required : Contact this patient immediately.`;
 
-        if (!patient) continue;
-
-        // Get the last AI message that triggered the handoff
-        const lastAiMsg = [...session.messages]
-          .reverse()
-          .find(m => m.role === 'assistant');
-
-        results.push({
-          campaignPatientId: session.campaignPatientId,
-          campaignId:        patient.campaignId,
-          patientName:       patient.patientName,
-          phone:             session.phone,
-          language:          session.language,
-          messages:          session.messages,
-          turnCount:         session.turnCount,
-          handoffReason:     lastAiMsg?.content ?? 'No reason recorded',
-          handedOffAt:       session.startedAt,
-          lastActivityAt:    session.lastActivityAt,
-        });
+        await this.whatsappService.sendText(clinic.notificationPhone, notification);
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
-        this.logger.warn(`Failed to parse campaign session key "${key}": ${msg}`);
+        this.logger.error(`Failed to notify staff of handoff: ${msg}`);
       }
     }
 
-    results.sort((a, b) => b.handedOffAt - a.handedOffAt);
-    this.logger.log(`Found ${results.length} handoff session(s)`);
-    return results;
+    this.logger.log(`Handoff ${handoff.id} created for ${input.phone} (source: ${input.source})`);
+    return handoff;
   }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // READ — active handoffs across both sources, for the admin dashboard.
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  async getHandoffSessions(): Promise<HandoffSessionData[]> {
+    const rows = await this.prisma.handoff.findMany({
+      where: { status: { in: [HandoffStatus.OPEN, HandoffStatus.ADMIN_HANDLING] } },
+      include: { campaignPatient: { select: { campaignId: true } } },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return rows.map((row) => {
+      const messages = (row.messages as HandoffSessionData['messages']) ?? [];
+      return {
+        id:                row.id,
+        source:            row.source,
+        campaignPatientId: row.campaignPatientId,
+        campaignId:        row.campaignPatient?.campaignId ?? null,
+        patientName:       row.patientName ?? 'Unknown',
+        phone:             row.phone,
+        language:          row.language,
+        messages,
+        turnCount:         messages.length,
+        handoffReason:     row.reason ?? 'No reason recorded',
+        handedOffAt:       row.createdAt.getTime(),
+        lastActivityAt:    row.lastActivityAt.getTime(),
+      };
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SEND MESSAGE — staff replies to a handed-off patient from the dashboard.
+  // ═══════════════════════════════════════════════════════════════════════════
 
   async sendMessage(phone: string, message: string): Promise<void> {
     if (!message?.trim()) {
       throw new BadRequestException('Message cannot be empty');
     }
 
-    const session = await this.sessionsService.getCampaignSession(phone);
-    if (!session) {
-      throw new NotFoundException(`No campaign session found for ${phone}`);
-    }
-
-    if (session.status !== 'handed_off' && session.status !== 'admin_handling') {
-      throw new BadRequestException(
-        `Session for ${phone} is in status "${session.status}" — not a handoff session`,
-      );
+    const handoff = await this.findOpenHandoffByPhone(phone);
+    if (!handoff) {
+      throw new NotFoundException(`No active handoff found for ${phone}`);
     }
 
     await this.whatsappService.sendText(phone, message.trim());
 
-    session.messages.push({
-      role:      'assistant',
-      content:   message.trim(),
-      timestamp: Date.now(),
+    const messages = [
+      ...((handoff.messages as HandoffSessionData['messages']) ?? []),
+      { role: 'assistant', content: message.trim(), timestamp: Date.now() },
+    ];
+
+    await this.prisma.handoff.update({
+      where: { id: handoff.id },
+      data: { messages, lastActivityAt: new Date() },
     });
 
-    await this.sessionsService.saveCampaignSession(session);
+    // Campaign handoffs also mirror into the pre-existing Redis/CampaignPatient
+    // transcript, which other campaign-side views/logic still read from.
+    if (handoff.source === BookingSource.CAMPAIGN) {
+      const session = await this.sessionsService.getCampaignSession(phone);
+      if (session) {
+        session.messages.push({ role: 'assistant', content: message.trim(), timestamp: Date.now() });
+        await this.sessionsService.saveCampaignSession(session);
+      }
+      if (handoff.campaignPatientId) {
+        await this.prisma.campaignPatient.update({
+          where: { id: handoff.campaignPatientId },
+          data: { messages: messages as any },
+        }).catch(() => {
+          this.logger.warn(`Failed to persist message to CampaignPatient for ${phone}`);
+        });
+      }
+    }
 
-    // Also persist to DB
-    await this.prisma.campaignPatient.update({
-      where: { id: session.campaignPatientId },
-      data:  { messages: session.messages as any },
-    }).catch(() => {
-      this.logger.warn(`Failed to persist message to DB for ${phone}`);
-    });
-
-    this.logger.log(`Staff message sent to ${phone} via handoff`);
+    this.logger.log(`Staff message sent to ${phone} via handoff ${handoff.id}`);
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // RECORD PATIENT REPLY — called while a handoff is open, for either source,
+  // so the transcript captures what the patient said while waiting for staff.
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  async recordPatientMessage(phone: string, text: string): Promise<boolean> {
+    const handoff = await this.findOpenHandoffByPhone(phone);
+    if (!handoff) return false;
+
+    const messages = [
+      ...((handoff.messages as HandoffSessionData['messages']) ?? []),
+      { role: 'user', content: text, timestamp: Date.now() },
+    ];
+
+    await this.prisma.handoff.update({
+      where: { id: handoff.id },
+      data: { messages, lastActivityAt: new Date() },
+    });
+
+    if (handoff.source === BookingSource.CAMPAIGN && handoff.campaignPatientId) {
+      await this.prisma.campaignPatient.update({
+        where: { id: handoff.campaignPatientId },
+        data: { messages: messages as any },
+      }).catch(() => {
+        this.logger.warn(`Failed to persist handoff message to CampaignPatient for ${phone}`);
+      });
+    }
+
+    return true;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // RESOLVE — staff marks a handoff done from the dashboard.
+  // ═══════════════════════════════════════════════════════════════════════════
+
   async resolveHandoff(phone: string): Promise<void> {
-    const session = await this.sessionsService.getCampaignSession(phone);
-    if (!session) {
-      this.logger.warn(`resolveHandoff: no campaign session found for ${phone}`);
+    const handoff = await this.findOpenHandoffByPhone(phone);
+    if (!handoff) {
+      this.logger.warn(`resolveHandoff: no active handoff found for ${phone}`);
       return;
     }
 
-    if (session.status !== 'handed_off' && session.status !== 'admin_handling') {
-      this.logger.warn(
-        `resolveHandoff: session ${phone} is "${session.status}" — not handed_off`,
-      );
-      return;
+    await this.prisma.handoff.update({
+      where: { id: handoff.id },
+      data: { status: HandoffStatus.RESOLVED, resolvedAt: new Date() },
+    });
+
+    if (handoff.source === BookingSource.CAMPAIGN) {
+      const session = await this.sessionsService.getCampaignSession(phone);
+      if (session) {
+        session.status = 'completed';
+        await this.sessionsService.saveCampaignSession(session);
+      }
+      if (handoff.campaignPatientId) {
+        await this.prisma.campaignPatient.update({
+          where: { id: handoff.campaignPatientId },
+          data: {
+            status:      CampaignPatientStatus.COMPLETED,
+            outcome:     ConversationOutcome.HANDED_OFF,
+            completedAt: new Date(),
+          },
+        }).catch(() => {
+          this.logger.warn(`Failed to update CampaignPatient status on resolve for ${phone}`);
+        });
+      }
     }
 
-    session.status = 'completed';
-    await this.sessionsService.saveCampaignSession(session);
+    this.logger.log(`Handoff ${handoff.id} resolved for ${phone}`);
+  }
 
-    this.logger.log(`Handoff resolved for ${phone}`);
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Whether a phone currently has an open handoff — used by inbound routing to
+  // keep the reactive orchestrator paused until staff resolve it.
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  async hasOpenHandoff(phone: string): Promise<boolean> {
+    return (await this.findOpenHandoffByPhone(phone)) !== null;
+  }
+
+  private async findOpenHandoffByPhone(phone: string) {
+    return this.prisma.handoff.findFirst({
+      where: { phone, status: { in: [HandoffStatus.OPEN, HandoffStatus.ADMIN_HANDLING] } },
+      orderBy: { createdAt: 'desc' },
+    });
   }
 }

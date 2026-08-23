@@ -6,7 +6,7 @@ import { FAQService } from '../../bot-content/faq.service';
 import { BotMessageService } from '../../bot-content/bot-message.service';
 import { MessageKey } from '@prisma/client';
 import { AiService, Intent } from '../../ai/ai.service';
-import { PrismaService } from '../../prisma/prisma.service';
+import { WelcomeMenuService } from '../../bot-content/welcome-menu.service';
 
 @Injectable()
 export class FaqHandler {
@@ -16,7 +16,7 @@ export class FaqHandler {
     private readonly faqService: FAQService,
     private readonly botMessageService: BotMessageService,
     private readonly aiService: AiService,
-    private readonly prisma: PrismaService,
+    private readonly welcomeMenuService: WelcomeMenuService,
   ) { }
 
   /**
@@ -31,17 +31,21 @@ export class FaqHandler {
     const faqs = await this.faqService.findActive(clinicId, lang);
 
     if (faqs.length === 0) {
-      const message = await this.botMessageService.getSafe(clinicId, MessageKey.FAQ_NOT_FOUND, {}, lang, 'No FAQs available.');
-      const btnMenu = await this.botMessageService.getSafe(clinicId, MessageKey.BUTTON_MENU, {}, lang, 'Menu');
+      const [message, btnMenu] = await Promise.all([
+        this.botMessageService.getSafe(clinicId, MessageKey.FAQ_NOT_FOUND, {}, lang, 'No FAQs available.'),
+        this.botMessageService.getSafe(clinicId, MessageKey.BUTTON_MENU, {}, lang, 'Menu'),
+      ]);
       await this.whatsappService.sendButtons(phone, message, [
         { id: 'menu', title: btnMenu },
       ]);
       return;
     }
 
-    const header = await this.botMessageService.getSafe(clinicId, MessageKey.FAQ_INTRO, {}, lang, 'Frequently Asked Questions');
-    const body = await this.botMessageService.getSafe(clinicId, MessageKey.FAQ_LIST_PROMPT, {}, lang, 'Select a question:');
-    const buttonLabel = await this.botMessageService.getSafe(clinicId, MessageKey.HEADER_SELECT_FAQ, {}, lang, 'View questions');
+    const [header, body, buttonLabel] = await Promise.all([
+      this.botMessageService.getSafe(clinicId, MessageKey.FAQ_INTRO, {}, lang, 'Frequently Asked Questions'),
+      this.botMessageService.getSafe(clinicId, MessageKey.FAQ_LIST_PROMPT, {}, lang, 'Select a question:'),
+      this.botMessageService.getSafe(clinicId, MessageKey.HEADER_SELECT_FAQ, {}, lang, 'View questions'),
+    ]);
 
     // Split FAQs into sections of max 10 rows (Meta limit)
     const rows = faqs.map((f, i) => ({
@@ -140,9 +144,11 @@ export class FaqHandler {
     }
 
     // ── No match found — return to FAQ list ───────────────────────────────
-    const notFound = await this.botMessageService.getSafe(clinicId, MessageKey.FAQ_NOT_FOUND, {}, lang, 'I could not find an answer.');
-    const btnFaqList = await this.botMessageService.getSafe(clinicId, MessageKey.BUTTON_FAQ_LIST, {}, lang, 'Back to questions');
-    const btnMenu = await this.botMessageService.getSafe(clinicId, MessageKey.BUTTON_MENU, {}, lang, 'Menu');
+    const [notFound, btnFaqList, btnMenu] = await Promise.all([
+      this.botMessageService.getSafe(clinicId, MessageKey.FAQ_NOT_FOUND, {}, lang, 'I could not find an answer.'),
+      this.botMessageService.getSafe(clinicId, MessageKey.BUTTON_FAQ_LIST, {}, lang, 'Back to questions'),
+      this.botMessageService.getSafe(clinicId, MessageKey.BUTTON_MENU, {}, lang, 'Menu'),
+    ]);
     await this.whatsappService.sendButtons(phone, notFound, [
       { id: 'faq_list', title: btnFaqList },
       { id: 'menu', title: btnMenu },
@@ -163,8 +169,10 @@ export class FaqHandler {
     const followUp = await this.botMessageService.getSafe(clinicId, MessageKey.FAQ_FOLLOW_UP, {}, lang, 'Anything else?');
 
     if (hasMoreFaqs) {
-      const btnFaqList = await this.botMessageService.getSafe(clinicId, MessageKey.BUTTON_FAQ_LIST, {}, lang, 'More questions');
-      const btnMenu = await this.botMessageService.getSafe(clinicId, MessageKey.BUTTON_MENU, {}, lang, 'Menu');
+      const [btnFaqList, btnMenu] = await Promise.all([
+        this.botMessageService.getSafe(clinicId, MessageKey.BUTTON_FAQ_LIST, {}, lang, 'More questions'),
+        this.botMessageService.getSafe(clinicId, MessageKey.BUTTON_MENU, {}, lang, 'Menu'),
+      ]);
       await this.whatsappService.sendButtons(phone, followUp, [
         { id: 'faq_list', title: btnFaqList },
         { id: 'menu', title: btnMenu },
@@ -181,23 +189,6 @@ export class FaqHandler {
     session.state = SessionState.IDLE;
     session.data.languageConfirmed = false; // re-detect language on next message
     await this.sessionsService.save(session);
-
-    const lang = session.data.language;
-    const clinicId = session.data.clinicId;
-
-    const clinic = await this.prisma.clinic.findUnique({
-      where: { id: clinicId },
-      select: { name: true },
-    });
-
-    const message = await this.botMessageService.getSafe(clinicId, MessageKey.WELCOME, { clinicName: clinic?.name ?? '' }, lang, 'Welcome!');
-    const btnBook = await this.botMessageService.getSafe(clinicId, MessageKey.BUTTON_BOOK_APP, {}, lang, 'Book appointment');
-    const btnFaq = await this.botMessageService.getSafe(clinicId, MessageKey.BUTTON_FAQ, {}, lang, 'FAQ');
-    const btnAgent = await this.botMessageService.getSafe(clinicId, MessageKey.BUTTON_AGENT, {}, lang, 'Talk to agent');
-    await this.whatsappService.sendButtons(phone, message, [
-      { id: 'book_appointment', title: btnBook },
-      { id: 'faq', title: btnFaq },
-      { id: 'human_agent', title: btnAgent },
-    ]);
+    await this.welcomeMenuService.show(phone, session);
   }
 }

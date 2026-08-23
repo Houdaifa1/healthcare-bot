@@ -10,7 +10,7 @@ import { QUEUES } from '../queue/queue.constants';
     BullModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => {
-        const redisUrl = configService.get<string>('REDIS_URL');
+        const redisUrl = configService.get<string>('redis.url');
         const isUpstash = redisUrl?.includes('upstash.io');
         return {
           connection: {

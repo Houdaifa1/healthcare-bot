@@ -10,6 +10,7 @@ import {
   BookingRequest,
   BookingRequestStatus,
   AppointmentStatus,
+  BookingSource,
 } from '@prisma/client';
 import { ConfirmBookingRequestDto } from './dto/confirm-booking-request.dto';
 import { RejectBookingRequestDto } from './dto/reject-booking-request.dto';
@@ -34,7 +35,7 @@ export class BookingRequestsService {
       campaignId?: string;
       status?: BookingRequestStatus;
     },
-  ): Promise<BookingRequest[]> {
+  ): Promise<any[]> {
     const where: Record<string, any> = { clinicId };
 
     if (filters.campaignId) {
@@ -49,7 +50,7 @@ export class BookingRequestsService {
       `Finding booking requests for clinic ${clinicId} with filters: ${JSON.stringify(filters)}`,
     );
 
-    return this.prisma.bookingRequest.findMany({
+    const rows = await this.prisma.bookingRequest.findMany({
       where,
       include: {
         campaignPatient: {
@@ -76,13 +77,15 @@ export class BookingRequestsService {
       },
       orderBy: { createdAt: 'desc' },
     });
+
+    return rows.map((row) => this.withDisplayPatient(row));
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
   // FIND ONE — single booking request scoped to clinicId
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async findOne(clinicId: string, id: string): Promise<BookingRequest> {
+  async findOne(clinicId: string, id: string): Promise<any> {
     const bookingRequest = await this.prisma.bookingRequest.findFirst({
       where: { id, clinicId },
       include: {
@@ -105,7 +108,30 @@ export class BookingRequestsService {
       throw new NotFoundException(`Booking request ${id} not found`);
     }
 
-    return bookingRequest;
+    return this.withDisplayPatient(bookingRequest);
+  }
+
+  // Inbound requests have no CampaignPatient row (no campaign, no walk-in
+  // record) — patient identity lives directly on the BookingRequest instead.
+  // The dashboard's existing "Patient" column only ever read
+  // `campaignPatient.patientName`, so for INBOUND rows we synthesize the same
+  // shape from the row's own fields rather than requiring a frontend change.
+  private withDisplayPatient(row: any): any {
+    if (row.source === BookingSource.INBOUND && !row.campaignPatient) {
+      return {
+        ...row,
+        campaignPatient: {
+          id:              null,
+          patientName:     row.patientName,
+          phone:           row.patientPhone,
+          campaignId:      null,
+          visitDate:       null,
+          prestation:      row.preferredSpecialty,
+          medecinTraitant: row.preferredDoctor,
+        },
+      };
+    }
+    return row;
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -131,20 +157,48 @@ export class BookingRequestsService {
       );
     }
 
-    // Load the campaign patient to get patient name and phone for the appointment
-    const campaignPatient = await this.prisma.campaignPatient.findUnique({
-      where: { id: bookingRequest.campaignPatientId },
-    });
+    // CAMPAIGN requests carry patient identity via CampaignPatient; INBOUND
+    // requests carry it directly on the BookingRequest itself (no CampaignPatient
+    // row exists for a walk-in WhatsApp patient).
+    let patientName: string;
+    let patientPhone: string;
+    let fallbackDoctorName: string | undefined;
+    let fallbackSpecialtyName: string | undefined;
 
-    if (!campaignPatient) {
-      this.logger.error(
-        `CampaignPatient ${bookingRequest.campaignPatientId} not found for booking request ${id}`,
-      );
-      throw new NotFoundException('Campaign patient not found');
+    if (bookingRequest.source === BookingSource.INBOUND) {
+      if (!bookingRequest.patientName || !bookingRequest.patientPhone) {
+        throw new NotFoundException('Inbound booking request is missing patient identity');
+      }
+      patientName = bookingRequest.patientName;
+      patientPhone = bookingRequest.patientPhone;
+    } else {
+      const campaignPatient = await this.prisma.campaignPatient.findUnique({
+        where: { id: bookingRequest.campaignPatientId! },
+      });
+
+      if (!campaignPatient) {
+        this.logger.error(
+          `CampaignPatient ${bookingRequest.campaignPatientId} not found for booking request ${id}`,
+        );
+        throw new NotFoundException('Campaign patient not found');
+      }
+      patientName = campaignPatient.patientName;
+      patientPhone = campaignPatient.phone;
+      fallbackDoctorName = campaignPatient.medecinTraitant;
+      fallbackSpecialtyName = campaignPatient.prestation;
     }
 
-    // ── Validate the requested date/time ─────────────────────────────────
-    const appointmentDate = new Date(dto.appointmentDate);
+    // ── Resolve the appointment date/time ─────────────────────────────────
+    // INBOUND requests already carry the exact slot the patient picked — staff
+    // can confirm as-is without re-entering it, but may still override via dto.
+    const appointmentDateInput = dto.appointmentDate ?? bookingRequest.requestedDate ?? undefined;
+    const appointmentTimeInput = dto.appointmentTime ?? bookingRequest.requestedTime ?? undefined;
+
+    if (!appointmentDateInput || !appointmentTimeInput) {
+      throw new BadRequestException('appointmentDate and appointmentTime are required');
+    }
+
+    const appointmentDate = new Date(appointmentDateInput);
     if (Number.isNaN(appointmentDate.getTime())) {
       throw new BadRequestException('appointmentDate is not a valid date');
     }
@@ -190,14 +244,14 @@ export class BookingRequestsService {
           clinicId,
           doctorId,
           appointmentDate,
-          appointmentTime: dto.appointmentTime,
+          appointmentTime: appointmentTimeInput,
           status: { in: [AppointmentStatus.PENDING, AppointmentStatus.CONFIRMED] },
         },
       });
 
       if (conflicting) {
         throw new ConflictException(
-          `The selected slot (${dto.appointmentDate} ${dto.appointmentTime}) is already booked for this doctor`,
+          `The selected slot (${appointmentDateInput} ${appointmentTimeInput}) is already booked for this doctor`,
         );
       }
     }
@@ -207,16 +261,17 @@ export class BookingRequestsService {
     const appointment = await this.prisma.appointment.create({
       data: {
         clinicId,
-        patientName:      campaignPatient.patientName,
-        patientPhone:     campaignPatient.phone,
+        patientName,
+        patientPhone,
         appointmentDate,
-        appointmentTime:  dto.appointmentTime,
+        appointmentTime:  appointmentTimeInput,
         status:           AppointmentStatus.CONFIRMED,
         doctorId,
         specialtyId,
-        doctorName:       bookingRequest.preferredDoctor  ?? campaignPatient.medecinTraitant,
-        specialtyName:    bookingRequest.preferredSpecialty ?? campaignPatient.prestation,
+        doctorName:       bookingRequest.preferredDoctor    ?? fallbackDoctorName,
+        specialtyName:    bookingRequest.preferredSpecialty ?? fallbackSpecialtyName,
         notes:            bookingRequest.reason ?? undefined,
+        source:           bookingRequest.source,
       },
     });
 
@@ -237,11 +292,11 @@ export class BookingRequestsService {
     // Send WhatsApp notification if a message was provided
     if (dto.message?.trim()) {
       try {
-        await this.whatsappService.sendText(campaignPatient.phone, dto.message.trim());
-        this.logger.log(`Confirmation message sent to ${campaignPatient.phone}`);
+        await this.whatsappService.sendText(patientPhone, dto.message.trim());
+        this.logger.log(`Confirmation message sent to ${patientPhone}`);
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
-        this.logger.error(`Failed to send confirmation message to ${campaignPatient.phone}: ${msg}`);
+        this.logger.error(`Failed to send confirmation message to ${patientPhone}: ${msg}`);
       }
     }
 
@@ -281,9 +336,11 @@ export class BookingRequestsService {
       );
     }
 
-    const campaignPatient = await this.prisma.campaignPatient.findUnique({
-      where: { id: bookingRequest.campaignPatientId },
-    });
+    const patientPhone = bookingRequest.source === BookingSource.INBOUND
+      ? bookingRequest.patientPhone
+      : (await this.prisma.campaignPatient.findUnique({
+          where: { id: bookingRequest.campaignPatientId! },
+        }))?.phone;
 
     this.logger.log(
       `Rejecting booking request ${id} for clinic ${clinicId}`,
@@ -295,13 +352,13 @@ export class BookingRequestsService {
     });
 
     // Send WhatsApp notification if a message was provided and not silent
-    if (dto?.message?.trim() && !dto?.silent && campaignPatient?.phone) {
+    if (dto?.message?.trim() && !dto?.silent && patientPhone) {
       try {
-        await this.whatsappService.sendText(campaignPatient.phone, dto.message.trim());
-        this.logger.log(`Rejection message sent to ${campaignPatient.phone}`);
+        await this.whatsappService.sendText(patientPhone, dto.message.trim());
+        this.logger.log(`Rejection message sent to ${patientPhone}`);
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
-        this.logger.error(`Failed to send rejection message to ${campaignPatient.phone}: ${msg}`);
+        this.logger.error(`Failed to send rejection message to ${patientPhone}: ${msg}`);
       }
     }
 

@@ -86,3 +86,27 @@ export interface ClinOpsCreateRDVRequest {
   motif:             string;
   medecinTraitant:   string;
 }
+
+// ── createNewPatient request body ─────────────────────────────────────────────
+// NOTE: endpoint not yet implemented in ClinOpsService (live mode only) —
+// type exists for completeness pending live-mode work.
+export interface ClinOpsCreatePatientRequest {
+  nom:                 string;               // max 50 chars, letters only
+  prenom:              string;               // max 50 chars, letters only
+  sexe:                string;               // "M" | "F"
+  type_identite:       string;               // "CIN" | "PASSEPORT" | "CARTE SEJOUR" | "PAS D'IDENTITE"
+  numero_identite?:    string;                // required unless type_identite = "PAS D'IDENTITE"
+  telephone_prefix:    string;               // e.g. "+212"
+  telephone:           string;               // digits only, max 16
+  date_naissance:      string;               // YYYY-MM-DD
+  ville_naissance:     string;               // max 100 chars
+  ville:               string;               // max 100 chars
+  pays:                string;               // max 100 chars, default "Maroc"
+  adresse_principale:  string;               // max 300 chars
+}
+
+export interface ClinOpsCreatePatientResponse {
+  success:    boolean;
+  message:    string;
+  patient_id: number;
+}

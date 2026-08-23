@@ -6,6 +6,11 @@ import { DeliveryStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { QUEUES, JOBS } from '../queue/queue.constants';
 import type { MessageJob } from '../queue/message.processor';
+import type {
+  WebhookPayload,
+  WebhookMessage,
+  WebhookStatus,
+} from './dto/webhook.dto';
 
 // ─── Meta Cloud API base URL ───────────────────────────────────────────────
 // All outbound requests go to:
@@ -64,11 +69,11 @@ export class WhatsAppService {
    * Delivery statuses (sent/delivered/read/failed) are recorded against the
    * corresponding CampaignPatient so the dashboard reflects true delivery state.
    */
-  async handleIncomingWebhook(body: any): Promise<void> {
-    const entries: any[] = body?.entry ?? [];
+  async handleIncomingWebhook(body: WebhookPayload): Promise<void> {
+    const entries = body?.entry ?? [];
 
     for (const entry of entries) {
-      const changes: any[] = entry?.changes ?? [];
+      const changes = entry?.changes ?? [];
 
       for (const change of changes) {
         if (change?.field !== 'messages') continue;
@@ -77,22 +82,21 @@ export class WhatsAppService {
         if (!value) continue;
 
         // ── Inbound messages ──────────────────────────────────────────────
-        const messages: any[] = value?.messages ?? [];
-        const contacts: any[] = value?.contacts ?? [];
+        const messages = value?.messages ?? [];
+        const contacts = value?.contacts ?? [];
 
         for (const msg of messages) {
           // Only process inbound text and interactive replies
-          const type: string = msg?.type;
-          if (!['text', 'interactive'].includes(type)) continue;
+          if (msg.type !== 'text' && msg.type !== 'interactive') continue;
 
-          const from: string = msg?.from; // E.164 without '+', e.g. "212644645877"
+          const from = msg.from; // E.164 without '+', e.g. "212644645877"
           if (!from) continue;
 
           const text = this.extractText(msg);
           if (!text) continue;
 
           // Resolve display name from contacts array (best-effort)
-          const contact = contacts.find((c: any) => c?.wa_id === from);
+          const contact = contacts.find((c) => c?.wa_id === from);
           const name: string = contact?.profile?.name ?? 'Patient';
 
           const job: MessageJob = {
@@ -118,7 +122,7 @@ export class WhatsAppService {
         // the same webhook, keyed by the outbound message id (wamid). We must
         // record these so the dashboard reflects true delivery, not just "job
         // dispatched". Previously these were dropped entirely.
-        const statuses: any[] = value?.statuses ?? [];
+        const statuses = value?.statuses ?? [];
         for (const status of statuses) {
           await this.handleDeliveryStatus(status);
         }
@@ -128,9 +132,9 @@ export class WhatsAppService {
 
   // ─── Delivery status tracking ──────────────────────────────────────────────
 
-  private async handleDeliveryStatus(status: any): Promise<void> {
-    const wamId: string | undefined = status?.id;
-    const metaStatus: string | undefined = status?.status;
+  private async handleDeliveryStatus(status: WebhookStatus): Promise<void> {
+    const wamId = status.id;
+    const metaStatus = status.status;
     if (!wamId || !metaStatus) return;
 
     const deliveryStatus = this.mapDeliveryStatus(metaStatus);
@@ -158,9 +162,9 @@ export class WhatsAppService {
       // Surface the actual Meta error code/title so failed deliveries are
       // diagnosable (e.g. 131026 "Message undeliverable" vs 132001 "template not
       // found") instead of just a bare "FAILED".
-      if (deliveryStatus === DeliveryStatus.FAILED && Array.isArray(status.errors) && status.errors.length > 0) {
+      if (deliveryStatus === DeliveryStatus.FAILED && status.errors && status.errors.length > 0) {
         const errs = status.errors.map(
-          (e: any) => `code=${e?.code ?? 'n/a'} (${e?.title ?? 'unknown'}): ${e?.message ?? ''}`,
+          (e) => `code=${e?.code ?? 'n/a'} (${e?.title ?? 'unknown'}): ${e?.message ?? ''}`,
         );
         this.logger.warn(`Delivery FAILED for wamid ${wamId} — ${errs.join('; ')}`);
       }
@@ -182,13 +186,13 @@ export class WhatsAppService {
 
   // ─── Text extraction ───────────────────────────────────────────────────────
 
-  private extractText(msg: any): string | null {
+  private extractText(msg: WebhookMessage): string | null {
     if (msg.type === 'text') {
-      return msg?.text?.body?.trim() ?? null;
+      return msg.text?.body?.trim() ?? null;
     }
 
     if (msg.type === 'interactive') {
-      const interactive = msg?.interactive;
+      const interactive = msg.interactive;
       // button_reply: user tapped a quick-reply button
       if (interactive?.type === 'button_reply') {
         // Use the button ID so handlers can match by id (e.g. "lang_fr")
@@ -284,7 +288,9 @@ export class WhatsAppService {
     }
 
     const safeButtons = buttons.slice(0, 3).map((b) => {
-      // BUG 15: Log warning when button title is truncated
+      // Meta hard-truncates button titles over 20 chars — warn so the
+      // underlying BotMessage/label gets fixed instead of shipping silently
+      // truncated text to patients.
       if (b.title.length > 20) {
         this.logger.warn(
           `Button "${b.id}" title "${b.title}" truncated. Fix value in DB.`,

@@ -17,6 +17,7 @@ import { ConfigService } from '@nestjs/config';
 import type { Request, Response } from 'express';
 import * as crypto from 'crypto';
 import { WhatsAppService } from './whatsapp.service';
+import type { WebhookPayload } from './dto/webhook.dto';
 
 @Controller('webhook')
 export class WhatsAppController {
@@ -58,7 +59,7 @@ export class WhatsAppController {
   async receiveWebhook(
     @Req() req: RawBodyRequest<Request>,
     @Headers('x-hub-signature-256') signature: string,
-    @Body() body: any,
+    @Body() body: WebhookPayload,
   ): Promise<string> {
     // ── Signature verification using raw bytes ────────────────────────────
     this.verifySignature(signature, req.rawBody);

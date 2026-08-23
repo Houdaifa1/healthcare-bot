@@ -16,7 +16,7 @@
   {
     "language": "FR",
     "question": "Où êtes-vous situés ?",
-    "answer": "Nous sommes situés à {{clinicAddress}}.",
+    "answer": "Vous pouvez retrouver notre adresse dans la section \"Ma Clinique\" ou en nous contactant directement.",
     "keywords": ["adresse", "situé", "localisation", "où", "trouver", "plan"],
     "displayOrder": 3
   },

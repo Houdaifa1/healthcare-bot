@@ -16,7 +16,7 @@
   {
     "language": "EN",
     "question": "Where are you located?",
-    "answer": "We are located at {{clinicAddress}}.",
+    "answer": "You can find our address in the \"My Clinic\" section or by contacting us directly.",
     "keywords": ["address", "location", "where", "directions", "find", "map"],
     "displayOrder": 3
   },

@@ -6,11 +6,12 @@ import { AvailabilityService } from '../../bot-content/availability.service';
 import { BotMessageService } from '../../bot-content/bot-message.service';
 import { MessageKey } from '@prisma/client';
 import { DoctorService } from '../../bot-content/doctor.service';
-import { Doctor } from '@prisma/client';
-import { format } from 'date-fns';
-import { fr } from 'date-fns/locale';
+import { ClinOpsDoctor } from '../../clinops/clinops.types';
 import { SpecialtyHandler } from './specialty.handler';
-import { AiService, Intent } from '../../ai/ai.service';
+import { WelcomeMenuService } from '../../bot-content/welcome-menu.service';
+import { BookingNavigationHelper } from './booking-navigation.helper';
+import { resolveByIdOrIndex } from './resolve-by-id-or-index.util';
+import { formatDateButtonLabel } from './date-format.util';
 
 @Injectable()
 export class DoctorHandler {
@@ -21,20 +22,12 @@ export class DoctorHandler {
     private readonly botMessageService: BotMessageService,
     private readonly doctorService: DoctorService,
     private readonly specialtyHandler: SpecialtyHandler,
-    private readonly aiService: AiService,
+    private readonly welcomeMenuService: WelcomeMenuService,
+    private readonly nav: BookingNavigationHelper,
   ) { }
 
   async handle(phone: string, text: string, session: Session): Promise<void> {
-    const trimmed = text.trim().toLowerCase();
-
-    // Allow returning to main menu from any booking step
-    if (trimmed === 'menu') {
-      session.state = SessionState.IDLE;
-      session.data.languageConfirmed = false;
-      await this.sessionsService.save(session);
-      await this.specialtyHandler.showWelcomeMenu(phone, session);
-      return;
-    }
+    if (await this.nav.handleMenuCommand(phone, text, session)) return;
 
     if (!session.data.specialtyId) {
       const msg = await this.botMessageService.getSafe(
@@ -46,47 +39,28 @@ export class DoctorHandler {
     }
 
     const doctors = await this.doctorService.findBySpecialty(
-      session.data.clinicId,
-      session.data.specialtyId,
+      String(session.data.specialtyId),
     );
 
-    const doctor = this.resolveDoctor(text, doctors);
+    const doctor = resolveByIdOrIndex(text, doctors, {
+      prefix: 'doctor_',
+      idField: 'doctorId',
+      labelField: 'doctorLabel',
+    });
 
     if (!doctor) {
-      const intent = await this.aiService.detectIntent(text, session.state, session.data.language);
-
-      if (intent === Intent.CANCEL || intent === Intent.GREETING) {
-        session.state = SessionState.IDLE;
-        session.data.languageConfirmed = false;
-        await this.sessionsService.save(session);
-        await this.specialtyHandler.showWelcomeMenu(phone, session);
-        return;
-      }
-
-      if (intent === Intent.HUMAN_AGENT) {
-        session.state = SessionState.AWAITING_HANDOFF;
-        await this.sessionsService.save(session);
-        const message = await this.botMessageService.getSafe(
-          session.data.clinicId, MessageKey.HANDOFF_TRIGGERED, {}, session.data.language, 'Connecting you with our team.'
-        );
-        await this.whatsappService.sendText(phone, message);
-        return;
-      }
-
+      if (await this.nav.handleUnresolvedSelection(phone, text, session)) return;
       await this.showDoctorList(phone, session, doctors);
       return;
     }
 
-    session.data.doctorId = doctor.id;
+    // Save exact doctorName (doctorLabel) and doctorId in session
+    session.data.doctorId = doctor.doctorId;
+    session.data.doctorName = doctor.doctorLabel;
     session.state = SessionState.BOOKING_DATE;
     await this.sessionsService.save(session);
 
-    const availableDates = await this.availabilityService.getAvailableDates(
-      doctor.id,
-      3,
-      new Date(),
-      session.data.timezone,
-    );
+    const availableDates = await this.availabilityService.getAvailableDates(doctor.doctorLabel, 3);
 
     if (availableDates.length === 0) {
       const message = await this.botMessageService.getSafe(
@@ -106,25 +80,18 @@ export class DoctorHandler {
     await this.whatsappService.sendButtons(
       phone,
       message,
-      availableDates.map((date) => {
-        const d = new Date(date);
-        const label = format(d, 'eeee dd MMMM', {
-          locale: session.data.language === 'FR' ? fr : undefined,
-        });
-        return {
-          id: `date_${date}`,
-          title: label.charAt(0).toUpperCase() + label.slice(1),
-        };
-      }),
+      availableDates.map((item) => ({
+        id: `date_${item.date}`,
+        title: formatDateButtonLabel(item.date, session.data.language),
+      })),
     );
   }
 
-  private async showDoctorList(
+  async showDoctorList(
     phone: string,
     session: Session,
-    doctors: Doctor[],
+    doctors: ClinOpsDoctor[],
   ): Promise<void> {
-    // BUG 8: Empty doctors → specific message, escape to specialty list
     if (doctors.length === 0) {
       const message = await this.botMessageService.getSafe(
         session.data.clinicId,
@@ -140,13 +107,10 @@ export class DoctorHandler {
       return;
     }
 
-    const message = await this.botMessageService.getSafe(
-      session.data.clinicId, MessageKey.SELECT_DOCTOR, { specialty: '' }, session.data.language, 'Here are the available doctors:'
-    );
-
-    const headerDoctors = await this.botMessageService.getSafe(
-      session.data.clinicId, MessageKey.HEADER_DOCTORS, {}, session.data.language, 'Doctors'
-    );
+    const [message, headerDoctors] = await Promise.all([
+      this.botMessageService.getSafe(session.data.clinicId, MessageKey.SELECT_DOCTOR, { specialty: '' }, session.data.language, 'Here are the available doctors:'),
+      this.botMessageService.getSafe(session.data.clinicId, MessageKey.HEADER_DOCTORS, {}, session.data.language, 'Doctors'),
+    ]);
 
     await this.whatsappService.sendInteractiveList(
       phone,
@@ -157,34 +121,11 @@ export class DoctorHandler {
         {
           title: headerDoctors,
           rows: doctors.map((d) => ({
-            id: `doctor_${d.id}`,
-            title: d.name,
+            id: `doctor_${d.doctorId}`,
+            title: d.doctorLabel,
           })),
         },
       ],
     );
-  }
-
-  /**
-   * Tries to match user input to a doctor by:
-   * 1. Exact "doctor_<id>" prefix
-   * 2. Numbered choice ("1", "2", …)
-   * 3. Case-insensitive name match
-   */
-  private resolveDoctor(text: string, doctors: Doctor[]): Doctor | null {
-    const trimmed = text.trim();
-
-    if (trimmed.startsWith('doctor_')) {
-      const id = trimmed.replace('doctor_', '');
-      return doctors.find((d) => d.id === id) ?? null;
-    }
-
-    const index = parseInt(trimmed, 10);
-    if (!isNaN(index) && index >= 1 && index <= doctors.length) {
-      return doctors[index - 1];
-    }
-
-    const normalised = trimmed.toLowerCase();
-    return doctors.find((d) => d.name.toLowerCase() === normalised) ?? null;
   }
 }

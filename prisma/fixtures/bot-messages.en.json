@@ -8,6 +8,7 @@
   { "key": "SELECT_TIME",        "language": "EN", "body": "Please choose a time slot:" },
   { "key": "CONFIRM_BOOKING",    "language": "EN", "body": "📋 Summary:\n👤 {{patientName}}\n👨‍⚕️ {{doctorName}}\n📅 {{date}} at {{time}}\n\nConfirm?" },
   { "key": "BOOKING_SUCCESS",    "language": "EN", "body": "✅ Appointment confirmed! {{doctorName}} will see you on {{date}} at {{time}}." },
+  { "key": "BOOKING_REQUEST_RECEIVED", "language": "EN", "body": "🙏 Your appointment request with {{doctorName}} on {{date}} at {{time}} has been received. Our team will confirm it shortly." },
   { "key": "BOOKING_CANCELLED",  "language": "EN", "body": "❌ Appointment cancelled. See you soon!" },
   { "key": "FAQ_INTRO",          "language": "EN", "body": "Here are the answers to your questions:" },
   { "key": "FAQ_NOT_FOUND",      "language": "EN", "body": "I couldn't find an answer. Would you like to speak to an agent?" },

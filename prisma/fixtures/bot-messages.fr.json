@@ -8,6 +8,7 @@
   { "key": "SELECT_TIME",        "language": "FR", "body": "Choisissez un créneau horaire :" },
   { "key": "CONFIRM_BOOKING",    "language": "FR", "body": "📋 Récapitulatif :\n👤 {{patientName}}\n👨‍⚕️ {{doctorName}}\n📅 {{date}} à {{time}}\n\nConfirmez-vous ?" },
   { "key": "BOOKING_SUCCESS",    "language": "FR", "body": "✅ Rendez-vous confirmé ! {{doctorName}} vous attend le {{date}} à {{time}}." },
+  { "key": "BOOKING_REQUEST_RECEIVED", "language": "FR", "body": "🙏 Votre demande de rendez-vous avec {{doctorName}} le {{date}} à {{time}} a bien été reçue. Notre équipe va la confirmer très prochainement." },
   { "key": "BOOKING_CANCELLED",  "language": "FR", "body": "❌ Rendez-vous annulé. À bientôt !" },
   { "key": "FAQ_INTRO",          "language": "FR", "body": "Voici les réponses à vos questions :" },
   { "key": "FAQ_NOT_FOUND",      "language": "FR", "body": "Je n'ai pas trouvé de réponse. Voulez-vous parler à un agent ?" },

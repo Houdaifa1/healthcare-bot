@@ -1,7 +1,6 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { Session, SessionState } from '../sessions/sessions.service';
-import { SessionsService } from '../sessions/sessions.service';
 import {
   IdleHandler,
   LanguageSelectHandler,
@@ -20,10 +19,7 @@ export class OrchestratorService implements OnModuleInit {
   private readonly logger = new Logger(OrchestratorService.name);
   private handlers = new Map<SessionState, any>();
 
-  constructor(
-    private readonly moduleRef: ModuleRef,
-    private readonly sessionsService: SessionsService,
-  ) {}
+  constructor(private readonly moduleRef: ModuleRef) {}
 
   onModuleInit() {
     this.registerHandlers();
@@ -63,16 +59,5 @@ export class OrchestratorService implements OnModuleInit {
         `No handler found for state: ${session.state} for ${phone}`,
       );
     }
-  }
-
-  async transition(
-    session: Session,
-    newState: SessionState,
-  ): Promise<void> {
-    this.logger.log(
-      `Transitioning ${session.phone} from ${session.state} to ${newState}`,
-    );
-    session.state = newState;
-    await this.sessionsService.save(session);
   }
 }

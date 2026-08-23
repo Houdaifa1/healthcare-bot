@@ -1,14 +1,13 @@
 import { Injectable } from '@nestjs/common';
-import { Session, SessionState } from '../../sessions/sessions.service';
+import { Session } from '../../sessions/sessions.service';
 import { WhatsAppService } from '../../whatsapp/whatsapp.service';
 import { SessionsService } from '../../sessions/sessions.service';
 import { BotMessageService } from '../../bot-content/bot-message.service';
-import { AppointmentsService } from '../../appointments/appointments.service';
-import { DoctorService } from '../../bot-content/doctor.service';
-import { MessageKey } from '@prisma/client';
+import { ClinOpsService } from '../../clinops/clinops.service';
+import { PrismaService } from '../../prisma/prisma.service';
+import { MessageKey, BookingSource } from '@prisma/client';
 import { AiService, Intent } from '../../ai/ai.service';
-import { format, parseISO } from 'date-fns';
-import { fr } from 'date-fns/locale';
+import { formatFriendlyDate } from './date-format.util';
 
 @Injectable()
 export class ConfirmHandler {
@@ -16,18 +15,14 @@ export class ConfirmHandler {
     private readonly whatsappService: WhatsAppService,
     private readonly sessionsService: SessionsService,
     private readonly botMessageService: BotMessageService,
-    private readonly appointmentsService: AppointmentsService,
-    private readonly doctorService: DoctorService,
+    private readonly clinOpsService: ClinOpsService,
+    private readonly prisma: PrismaService,
     private readonly aiService: AiService,
   ) {}
 
   async handle(phone: string, text: string, session: Session): Promise<void> {
     const trimmed = text.trim().toLowerCase();
 
-    // ── Check button IDs first — no AI needed for explicit button taps ────
-    // confirm_yes / confirm_no are the button IDs sent by Meta when user taps
-    // the confirm/cancel buttons. Always resolve these without AI to avoid
-    // misclassification or infinite reshowConfirmation loops.
     if (trimmed === 'confirm_yes') {
       await this.processConfirmation(phone, session);
       return;
@@ -38,7 +33,6 @@ export class ConfirmHandler {
       return;
     }
 
-    // ── Free-text: use AI intent detection ────────────────────────────────
     const intent = await this.aiService.detectIntent(
       text,
       session.state,
@@ -54,66 +48,65 @@ export class ConfirmHandler {
     }
   }
 
-  private formatDate(isoDate: string, language: string): string {
-    try {
-      const d = parseISO(isoDate);
-      return format(d, 'eeee dd MMMM yyyy', {
-        locale: language === 'FR' ? fr : undefined,
-      });
-    } catch {
-      return isoDate;
-    }
-  }
-
   private async processConfirmation(phone: string, session: Session): Promise<void> {
-    if (
-      !session.data.doctorId ||
-      !session.data.specialtyId ||
-      !session.data.patientName ||
-      !session.data.selectedDate ||
-      !session.data.selectedTime
-    ) {
+    const { doctorName, patientName, selectedDate, selectedTime, specialtyLabel, clinicId, language } = session.data;
+
+    if (!doctorName || !patientName || !selectedDate || !selectedTime) {
       const msg = await this.botMessageService.getSafe(
-        session.data.clinicId, MessageKey.ERROR_MISSING_INFO, {}, session.data.language, 'Missing information. Please start over.'
+        clinicId, MessageKey.ERROR_MISSING_INFO, {}, language, 'Missing information. Please start over.'
       );
       await this.whatsappService.sendText(phone, msg);
       await this.sessionsService.reset(phone);
       return;
     }
 
-    // Strip @lid and @s.whatsapp.net suffixes to store clean phone
     const cleanPhone = phone.replace(/@(lid|s\.whatsapp\.net)$/, '');
-    await this.appointmentsService.createAppointment(session.data.clinicId, {
-      clinicId: session.data.clinicId,
-      doctorId: session.data.doctorId,
-      specialtyId: session.data.specialtyId,
-      patientName: session.data.patientName,
-      patientPhone: cleanPhone,
-      appointmentDate: session.data.selectedDate,
-      appointmentTime: session.data.selectedTime,
+
+    // Best-effort lookup so a returning patient's ClinOps identity travels with
+    // the review-queue entry; not required for the booking request to exist.
+    const searchResult = await this.clinOpsService.searchPatients({
+      numeroTelephone: `+${cleanPhone}`,
+    }).catch(() => []);
+
+    const clinopsPatientId = searchResult?.[0]?.patient_id;
+
+    // Human-readable "preferred date" for the admin dashboard — inbound
+    // requests already have an exact slot, unlike campaign's free-text
+    // preferredDateRange, but the dashboard column reads this same field.
+    const preferredDateRange = `${selectedDate} ${selectedTime}`;
+
+    // Land in the same source-agnostic review queue outbound/campaign bookings
+    // use — staff confirm/reject from the admin dashboard, same table, same UI.
+    await this.prisma.bookingRequest.create({
+      data: {
+        clinicId,
+        source: BookingSource.INBOUND,
+        patientName,
+        patientPhone: cleanPhone,
+        language,
+        clinopsPatientId,
+        preferredDoctor: doctorName,
+        preferredSpecialty: specialtyLabel,
+        preferredDateRange,
+        requestedDate: selectedDate,
+        requestedTime: selectedTime,
+        reason: specialtyLabel,
+        rawPatientRequest: `WhatsApp booking request: ${doctorName}${specialtyLabel ? ` (${specialtyLabel})` : ''} on ${selectedDate} at ${selectedTime}`,
+      },
     });
 
-    const doctor = await this.doctorService.findById(session.data.doctorId);
-    if (!doctor) {
-      const msg = await this.botMessageService.getSafe(
-        session.data.clinicId, MessageKey.ERROR_DOCTOR_NOT_FOUND, {}, session.data.language, 'Doctor not found. Please start over.'
-      );
-      await this.whatsappService.sendText(phone, msg);
-      await this.sessionsService.reset(phone);
-      return;
-    }
-
-    const friendlyDate = this.formatDate(session.data.selectedDate, session.data.language);
+    const friendlyDate = formatFriendlyDate(selectedDate, language);
 
     const message = await this.botMessageService.getSafe(
-      session.data.clinicId,
-      MessageKey.BOOKING_SUCCESS,
+      clinicId,
+      MessageKey.BOOKING_REQUEST_RECEIVED,
       {
-        doctorName: doctor.name,
+        doctorName: doctorName,
         date: friendlyDate,
-        time: session.data.selectedTime,
+        time: selectedTime,
       },
-      session.data.language,
+      language,
+      `Your appointment request with ${doctorName} on ${friendlyDate} at ${selectedTime} has been received. Our team will confirm it shortly.`,
     );
     await this.whatsappService.sendText(phone, message);
     await this.sessionsService.reset(phone);
@@ -128,34 +121,33 @@ export class ConfirmHandler {
   }
 
   private async reshowConfirmation(phone: string, session: Session): Promise<void> {
-    if (!session.data.doctorId || !session.data.selectedDate || !session.data.selectedTime) {
+    const { doctorName, selectedDate, selectedTime, clinicId, language, patientName, specialtyLabel } = session.data;
+
+    if (!doctorName || !selectedDate || !selectedTime) {
       await this.sessionsService.reset(phone);
       return;
     }
 
-    const doctor = await this.doctorService.findById(session.data.doctorId);
-    if (!doctor) {
-      await this.sessionsService.reset(phone);
-      return;
-    }
-
-    const friendlyDate = this.formatDate(session.data.selectedDate, session.data.language);
+    const friendlyDate = formatFriendlyDate(selectedDate, language);
 
     const message = await this.botMessageService.getSafe(
-      session.data.clinicId,
+      clinicId,
       MessageKey.CONFIRM_BOOKING,
       {
-        patientName: session.data.patientName ?? '',
-        doctorName: doctor.name,
+        patientName: patientName ?? '',
+        doctorName: doctorName,
         date: friendlyDate,
-        time: session.data.selectedTime,
-        specialty: '',
+        time: selectedTime,
+        specialty: specialtyLabel ?? '',
       },
-      session.data.language,
+      language,
+      `Please confirm your appointment with ${doctorName} on ${friendlyDate} at ${selectedTime}.`,
     );
 
-    const btnConfirm = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_CONFIRM, {}, session.data.language, 'Confirm');
-    const btnCancel = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_CANCEL, {}, session.data.language, 'Cancel');
+    const [btnConfirm, btnCancel] = await Promise.all([
+      this.botMessageService.getSafe(clinicId, MessageKey.BUTTON_CONFIRM, {}, language, 'Confirm'),
+      this.botMessageService.getSafe(clinicId, MessageKey.BUTTON_CANCEL, {}, language, 'Cancel'),
+    ]);
     await this.whatsappService.sendButtons(phone, message, [
       { id: 'confirm_yes', title: btnConfirm },
       { id: 'confirm_no', title: btnCancel },

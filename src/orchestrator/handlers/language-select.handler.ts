@@ -1,18 +1,16 @@
 import { Injectable } from '@nestjs/common';
 import { Session, SessionState } from '../../sessions/sessions.service';
-import { WhatsAppService } from '../../whatsapp/whatsapp.service';
-import { BotMessageService } from '../../bot-content/bot-message.service';
-import { MessageKey, Language } from '@prisma/client';
+import { Language } from '@prisma/client';
 import { SessionsService } from '../../sessions/sessions.service';
-import { IdleHandler } from './idle.handler';
+import { WelcomeMenuService } from '../../bot-content/welcome-menu.service';
+import { LanguagePromptService } from '../../bot-content/language-prompt.service';
 
 @Injectable()
 export class LanguageSelectHandler {
   constructor(
-    private readonly whatsappService: WhatsAppService,
-    private readonly botMessageService: BotMessageService,
     private readonly sessionsService: SessionsService,
-    private readonly idleHandler: IdleHandler,
+    private readonly welcomeMenuService: WelcomeMenuService,
+    private readonly languagePromptService: LanguagePromptService,
   ) {}
 
   async handle(phone: string, text: string, session: Session): Promise<void> {
@@ -40,7 +38,7 @@ export class LanguageSelectHandler {
       session.data.languageConfirmed = true;
       session.state = SessionState.IDLE;
       await this.sessionsService.save(session);
-      await this.idleHandler.showWelcomeMenu(phone, session);
+      await this.welcomeMenuService.show(phone, session);
       return;
     }
 
@@ -49,19 +47,11 @@ export class LanguageSelectHandler {
       session.data.languageConfirmed = true;
       session.state = SessionState.IDLE;
       await this.sessionsService.save(session);
-      await this.idleHandler.showWelcomeMenu(phone, session);
+      await this.welcomeMenuService.show(phone, session);
       return;
     }
 
     // Ambiguous — ask again
-    const message = await this.botMessageService.getSafe(
-      session.data.clinicId, MessageKey.LANGUAGE_PROMPT, {}, session.data.language, 'Choose your language:'
-    );
-    const btnFr = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_FRENCH, {}, session.data.language, 'Français');
-    const btnEn = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_ENGLISH, {}, session.data.language, 'English');
-    await this.whatsappService.sendButtons(phone, message, [
-      { id: 'lang_fr', title: btnFr },
-      { id: 'lang_en', title: btnEn },
-    ]);
+    await this.languagePromptService.show(phone, session);
   }
 }

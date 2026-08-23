@@ -5,6 +5,7 @@ import { OrchestratorService } from '../orchestrator/orchestrator.service';
 import { SessionsService, SessionState } from '../sessions/sessions.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ConversationService } from '../campaign/conversation.service';
+import { HandoffService } from '../handoff/handoff.service';
 
 export interface MessageJob {
   from:      string;
@@ -23,6 +24,7 @@ export class MessageProcessor extends WorkerHost {
     private readonly sessionsService:       SessionsService,
     private readonly prisma:               PrismaService,
     private readonly conversationService:  ConversationService,
+    private readonly handoffService:       HandoffService,
   ) {
     super();
   }
@@ -80,24 +82,41 @@ export class MessageProcessor extends WorkerHost {
     }
 
     // ── 4. Load or create reactive session ────────────────────────────────
-    const { session } = await this.sessionsService.getOrCreate(
+    const session = await this.sessionsService.getOrCreate(
       from,
       clinic.id,
       clinic.defaultLanguage,
-      clinic.timezone,
     );
 
-    // ── 4a. Stale-state guard ──────────────────────────────────────────────
+    // ── 4a. Inbound handoff gate ────────────────────────────────────────────
+    // While an inbound handoff is OPEN/ADMIN_HANDLING, park the patient's
+    // replies on the Handoff record (visible to staff on the dashboard)
+    // instead of routing them to the orchestrator — mirrors how campaign
+    // handoffs are gated via isHandoffCampaignSession above. The reactive
+    // session only resets to IDLE once staff resolve the handoff from the
+    // dashboard (or the patient types "menu", handled inside HandoffHandler).
     if (session.state === SessionState.AWAITING_HANDOFF) {
-      this.logger.log(`Reactive session for ${from} stuck in AWAITING_HANDOFF — resetting to IDLE`);
-      await this.sessionsService.reset(from);
-      const { session: freshSession } = await this.sessionsService.getOrCreate(
-        from,
-        clinic.id,
-        clinic.defaultLanguage,
-        clinic.timezone,
-      );
-      Object.assign(session, freshSession);
+      const stillOpen = await this.handoffService.hasOpenHandoff(from);
+      // Let "menu" fall through to HandoffHandler's own AWAITING_HANDOFF
+      // branch so the patient can still explicitly escape back to the menu;
+      // everything else is parked on the Handoff record for staff to see.
+      if (stillOpen && text.trim().toLowerCase() !== 'menu') {
+        await this.handoffService.recordPatientMessage(from, text);
+        this.logger.log(`Phone ${from} is in an open inbound handoff — storing patient reply for staff`);
+        return;
+      }
+      if (!stillOpen) {
+        this.logger.log(`Reactive session for ${from} was AWAITING_HANDOFF but no open handoff remains — resetting to IDLE`);
+        await this.sessionsService.reset(from);
+        const freshSession = await this.sessionsService.getOrCreate(
+          from,
+          clinic.id,
+          clinic.defaultLanguage,
+        );
+        Object.assign(session, freshSession);
+      }
+      // stillOpen && text === 'menu' falls through as-is — HandoffHandler's
+      // own AWAITING_HANDOFF branch (below, via step 5) resets it to IDLE.
     }
 
     // ── 5. Route to reactive orchestrator ─────────────────────────────────

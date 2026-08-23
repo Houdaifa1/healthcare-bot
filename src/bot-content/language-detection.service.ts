@@ -13,12 +13,10 @@ export class LanguageDetectionService {
    * The caller (IdleHandler) will transition to LANGUAGE_SELECT when null
    * so the user can explicitly choose.
    *
-   * Falls back to AI (Gemini) when keyword detection is ambiguous.
+   * Falls back to the local AI classifier when keyword detection is
+   * ambiguous (src/ai/ai.service.ts).
    */
-  async detect(
-    text: string,
-    clinicDefaultLanguage: Language,
-  ): Promise<Language | null> {
+  async detect(text: string): Promise<Language | null> {
     const normalized = text.toLowerCase().trim();
 
     // Whole-word matches only — prevents 'en' inside 'rendez-vous', 'bien', etc.

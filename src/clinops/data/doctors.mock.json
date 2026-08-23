@@ -1,10 +1,78 @@
 [
-  { "doctorId": 10, "doctorLabel": "DR Miloud BAKOUCHE",    "specialite_id": 1 },
-  { "doctorId": 11, "doctorLabel": "DR Khalid MANSOURI",    "specialite_id": 1 },
-  { "doctorId": 15, "doctorLabel": "DR Ahmed BENALI",       "specialite_id": 2 },
-  { "doctorId": 16, "doctorLabel": "DR Yassine LAHRICHI",   "specialite_id": 2 },
-  { "doctorId": 20, "doctorLabel": "DR Nadia BENCHEKROUN",  "specialite_id": 3 },
-  { "doctorId": 21, "doctorLabel": "DR Sanaa EL OUAFI",     "specialite_id": 3 },
-  { "doctorId": 25, "doctorLabel": "DR Rachid BOUHALI",     "specialite_id": 4 },
-  { "doctorId": 30, "doctorLabel": "DR Imane TAZI",         "specialite_id": 5 }
+  {
+    "doctorId": 10,
+    "doctorLabel": "DR Miloud BAKOUCHE",
+    "specialite_id": 1,
+    "workingDays": [1, 2, 3, 4, 5],
+    "dailyWindows": [
+      { "heure_debut": "08:00:00", "heure_fin": "12:00:00" },
+      { "heure_debut": "14:00:00", "heure_fin": "17:00:00" }
+    ]
+  },
+  {
+    "doctorId": 11,
+    "doctorLabel": "DR Khalid MANSOURI",
+    "specialite_id": 1,
+    "workingDays": [1, 3, 5],
+    "dailyWindows": [
+      { "heure_debut": "09:00:00", "heure_fin": "13:00:00" }
+    ]
+  },
+  {
+    "doctorId": 15,
+    "doctorLabel": "DR Ahmed BENALI",
+    "specialite_id": 2,
+    "workingDays": [2, 3, 4, 5, 6],
+    "dailyWindows": [
+      { "heure_debut": "08:00:00", "heure_fin": "12:00:00" },
+      { "heure_debut": "14:00:00", "heure_fin": "18:00:00" }
+    ]
+  },
+  {
+    "doctorId": 16,
+    "doctorLabel": "DR Yassine LAHRICHI",
+    "specialite_id": 2,
+    "workingDays": [1, 2, 4],
+    "dailyWindows": [
+      { "heure_debut": "14:00:00", "heure_fin": "18:00:00" }
+    ]
+  },
+  {
+    "doctorId": 20,
+    "doctorLabel": "DR Nadia BENCHEKROUN",
+    "specialite_id": 3,
+    "workingDays": [1, 2, 3, 4, 5],
+    "dailyWindows": [
+      { "heure_debut": "09:00:00", "heure_fin": "13:00:00" },
+      { "heure_debut": "15:00:00", "heure_fin": "18:00:00" }
+    ]
+  },
+  {
+    "doctorId": 21,
+    "doctorLabel": "DR Sanaa EL OUAFI",
+    "specialite_id": 3,
+    "workingDays": [3, 4, 6],
+    "dailyWindows": [
+      { "heure_debut": "08:00:00", "heure_fin": "12:00:00" }
+    ]
+  },
+  {
+    "doctorId": 25,
+    "doctorLabel": "DR Rachid BOUHALI",
+    "specialite_id": 4,
+    "workingDays": [1, 3, 5],
+    "dailyWindows": [
+      { "heure_debut": "08:00:00", "heure_fin": "11:00:00" },
+      { "heure_debut": "13:00:00", "heure_fin": "16:00:00" }
+    ]
+  },
+  {
+    "doctorId": 30,
+    "doctorLabel": "DR Imane TAZI",
+    "specialite_id": 5,
+    "workingDays": [2, 4],
+    "dailyWindows": [
+      { "heure_debut": "10:00:00", "heure_fin": "14:00:00" }
+    ]
+  }
 ]

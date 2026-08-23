@@ -57,22 +57,6 @@ export class BotMessageService {
   }
 
   /**
-   * Same as get() but returns null instead of throwing.
-   * Use sparingly — prefer get() with proper error handling upstream.
-   */
-  async getOrNull(
-    clinicId: string,
-    key: MessageKey,
-    language: Language = Language.FR,
-  ): Promise<string | null> {
-    try {
-      return await this.get(clinicId, key, undefined, language);
-    } catch {
-      return null;
-    }
-  }
-
-  /**
    * Safe version of get() — never throws.
    * Handlers should use this for every BotMessage call to prevent crashes.
    * If the key is missing from DB, it logs an error and returns the fallback text.

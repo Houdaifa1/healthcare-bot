@@ -4,13 +4,9 @@ import { WhatsAppService } from '../../whatsapp/whatsapp.service';
 import { SessionsService } from '../../sessions/sessions.service';
 import { BotMessageService } from '../../bot-content/bot-message.service';
 import { MessageKey } from '@prisma/client';
-import { DoctorService } from '../../bot-content/doctor.service';
-import { SpecialtyService } from '../../bot-content/specialty.service';
 import { AvailabilityService } from '../../bot-content/availability.service';
-import { format, parseISO } from 'date-fns';
-import { fr } from 'date-fns/locale';
-import { PrismaService } from '../../prisma/prisma.service';
-import { AiService, Intent } from '../../ai/ai.service';
+import { BookingNavigationHelper } from './booking-navigation.helper';
+import { formatFriendlyDate } from './date-format.util';
 
 const META_MAX_SECTIONS = 10;
 const META_MAX_ROWS_PER_SECTION = 10;
@@ -25,27 +21,16 @@ export class TimeHandler {
     private readonly whatsappService: WhatsAppService,
     private readonly sessionsService: SessionsService,
     private readonly botMessageService: BotMessageService,
-    private readonly doctorService: DoctorService,
-    private readonly specialtyService: SpecialtyService,
     private readonly availabilityService: AvailabilityService,
-    private readonly prisma: PrismaService,
-    private readonly aiService: AiService,
+    private readonly nav: BookingNavigationHelper,
   ) { }
 
   async handle(phone: string, text: string, session: Session): Promise<void> {
-    const trimmed = text.trim().toLowerCase();
+    if (await this.nav.handleMenuCommand(phone, text, session)) return;
 
-    if (trimmed === 'menu') {
-      session.state = SessionState.IDLE;
-      session.data.languageConfirmed = false;
-      await this.sessionsService.save(session);
-      await this.showWelcomeMenu(phone, session);
-      return;
-    }
+    const { doctorName, specialtyLabel, selectedDate, clinicId, language } = session.data;
 
-    const { doctorId, specialtyId, selectedDate, clinicId, language } = session.data;
-
-    if (!doctorId || !specialtyId || !selectedDate) {
+    if (!doctorName || !selectedDate) {
       const msg = await this.botMessageService.getSafe(
         clinicId, MessageKey.ERROR_MISSING_INFO, {}, language, 'Missing information. Please start over.',
       );
@@ -54,30 +39,11 @@ export class TimeHandler {
       return;
     }
 
-    const time = await this.resolveTime(text, doctorId, selectedDate);
+    const time = await this.resolveTime(text, doctorName, selectedDate);
 
     if (!time) {
-      const intent = await this.aiService.detectIntent(text, session.state, session.data.language);
-
-      if (intent === Intent.CANCEL || intent === Intent.GREETING) {
-        session.state = SessionState.IDLE;
-        session.data.languageConfirmed = false;
-        await this.sessionsService.save(session);
-        await this.showWelcomeMenu(phone, session);
-        return;
-      }
-
-      if (intent === Intent.HUMAN_AGENT) {
-        session.state = SessionState.AWAITING_HANDOFF;
-        await this.sessionsService.save(session);
-        const message = await this.botMessageService.getSafe(
-          clinicId, MessageKey.HANDOFF_TRIGGERED, {}, language, 'Connecting you with our team.'
-        );
-        await this.whatsappService.sendText(phone, message);
-        return;
-      }
-
-      await this.showTimeList(phone, session, doctorId, selectedDate);
+      if (await this.nav.handleUnresolvedSelection(phone, text, session)) return;
+      await this.showTimeList(phone, session, doctorName, selectedDate);
       return;
     }
 
@@ -85,40 +51,20 @@ export class TimeHandler {
     session.state = SessionState.BOOKING_CONFIRM;
     await this.sessionsService.save(session);
 
-    const doctor = await this.doctorService.findById(doctorId);
-    if (!doctor) {
-      const msg = await this.botMessageService.getSafe(
-        clinicId, MessageKey.ERROR_DOCTOR_NOT_FOUND, {}, language, 'Doctor not found. Please start over.',
-      );
-      await this.whatsappService.sendText(phone, msg);
-      await this.sessionsService.reset(phone);
-      return;
-    }
-
-    const matchedSpecialty = await this.specialtyService.findById(specialtyId, language);
-    if (!matchedSpecialty) {
-      const msg = await this.botMessageService.getSafe(
-        clinicId, MessageKey.ERROR_SPECIALTY_NOT_FOUND, {}, language, 'Specialty not found. Please start over.',
-      );
-      await this.whatsappService.sendText(phone, msg);
-      await this.sessionsService.reset(phone);
-      return;
-    }
-
-    const friendlyDate = this.formatDate(selectedDate, language);
-    const specialtyLabels = matchedSpecialty.labels as Record<string, string>;
+    const friendlyDate = formatFriendlyDate(selectedDate, language);
 
     const message = await this.botMessageService.getSafe(
       clinicId,
       MessageKey.CONFIRM_BOOKING,
       {
         patientName: session.data.patientName ?? '',
-        doctorName: doctor.name,
+        doctorName: doctorName,
         date: friendlyDate,
         time,
-        specialty: specialtyLabels?.[language] ?? specialtyLabels?.['FR'] ?? matchedSpecialty.slug,
+        specialty: specialtyLabel ?? '',
       },
       language,
+      `Please confirm your appointment with ${doctorName} on ${friendlyDate} at ${time}.`,
     );
 
     const [btnConfirm, btnCancel] = await Promise.all([
@@ -132,22 +78,15 @@ export class TimeHandler {
     ]);
   }
 
-  // ─── Time list display ────────────────────────────────────────────────────
-
   private async showTimeList(
     phone: string,
     session: Session,
-    doctorId: string,
+    doctorName: string,
     date: string,
   ): Promise<void> {
     const { clinicId, language } = session.data;
 
-    const allSlots = await this.availabilityService.getAvailableSlots(doctorId, date);
-
-    this.logger.log(
-      `[TimeHandler] slots for doctor=${doctorId} date=${date}: ${allSlots.length}` +
-      (allSlots.length > 0 ? ` [${allSlots[0]} – ${allSlots[allSlots.length - 1]}]` : ''),
-    );
+    const allSlots = await this.availabilityService.getAvailableSlots(doctorName, date);
 
     if (allSlots.length === 0) {
       const message = await this.botMessageService.getSafe(
@@ -157,13 +96,6 @@ export class TimeHandler {
       session.state = SessionState.BOOKING_DATE;
       await this.sessionsService.save(session);
       return;
-    }
-
-    if (allSlots.length > META_MAX_DISPLAYABLE_SLOTS) {
-      this.logger.warn(
-        `[TimeHandler] ${allSlots.length} slots exceeds Meta cap (${META_MAX_DISPLAYABLE_SLOTS}). ` +
-        `Only first ${META_MAX_DISPLAYABLE_SLOTS} will be shown for doctor=${doctorId} date=${date}.`,
-      );
     }
 
     const displaySlots = allSlots.slice(0, META_MAX_DISPLAYABLE_SLOTS);
@@ -189,15 +121,8 @@ export class TimeHandler {
         ? `P${pageNum}/${totalPages}: ${from}-${to}`
         : `${from} - ${to}`;
 
-      if (sectionTitle.length > SECTION_TITLE_MAX) {
-        this.logger.error(
-          `[TimeHandler] Section title "${sectionTitle}" (${sectionTitle.length} chars) exceeds ` +
-          `Meta's ${SECTION_TITLE_MAX}-char limit.`,
-        );
-      }
-
       sections.push({
-        title: sectionTitle,
+        title: sectionTitle.slice(0, SECTION_TITLE_MAX),
         rows: chunk.map((t) => ({ id: `time_${t}`, title: t })),
       });
     }
@@ -211,28 +136,20 @@ export class TimeHandler {
     );
   }
 
-  // ─── Time resolution ──────────────────────────────────────────────────────
-
-  private async resolveTime(text: string, doctorId: string, date: string): Promise<string | null> {
+  private async resolveTime(text: string, doctorName: string, date: string): Promise<string | null> {
     const trimmed = text.trim();
 
     if (trimmed.startsWith('time_')) {
       const candidate = trimmed.slice('time_'.length);
       if (!/^\d{2}:\d{2}$/.test(candidate)) return null;
-      const slots = await this.availabilityService.getAvailableSlots(doctorId, date);
-      if (!slots.includes(candidate)) {
-        this.logger.warn(
-          `[TimeHandler] Stale list-reply "time_${candidate}" not in current slots ` +
-          `for doctor=${doctorId} date=${date}`,
-        );
-        return null;
-      }
+      const slots = await this.availabilityService.getAvailableSlots(doctorName, date);
+      if (!slots.includes(candidate)) return null;
       return candidate;
     }
 
     if (/^\d{1,2}:\d{2}$/.test(trimmed)) {
       const padded = trimmed.length === 4 ? `0${trimmed}` : trimmed;
-      const slots = await this.availabilityService.getAvailableSlots(doctorId, date);
+      const slots = await this.availabilityService.getAvailableSlots(doctorName, date);
       if (slots.includes(padded)) return padded;
       if (slots.includes(trimmed)) return trimmed;
       return null;
@@ -240,47 +157,10 @@ export class TimeHandler {
 
     const index = parseInt(trimmed, 10);
     if (!isNaN(index) && index >= 1) {
-      const slots = await this.availabilityService.getAvailableSlots(doctorId, date);
+      const slots = await this.availabilityService.getAvailableSlots(doctorName, date);
       if (index <= slots.length) return slots[index - 1];
     }
 
     return null;
-  }
-
-  // ─── Formatting ───────────────────────────────────────────────────────────
-
-  private formatDate(isoDate: string, language: string): string {
-    try {
-      const d = parseISO(isoDate);
-      return format(d, 'eeee dd MMMM yyyy', {
-        locale: language === 'FR' ? fr : undefined,
-      });
-    } catch {
-      return isoDate;
-    }
-  }
-
-  private async showWelcomeMenu(phone: string, session: Session): Promise<void> {
-    const clinic = await this.prisma.clinic.findUnique({
-      where: { id: session.data.clinicId },
-      select: { name: true },
-    });
-
-    const message = await this.botMessageService.getSafe(
-      session.data.clinicId,
-      MessageKey.WELCOME,
-      { clinicName: clinic?.name ?? '' },
-      session.data.language,
-      'Welcome! How can I help you?',
-    );
-
-    const btnBook = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_BOOK_APP, {}, session.data.language, 'Book appointment');
-    const btnFaq = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_FAQ, {}, session.data.language, 'FAQ');
-    const btnAgent = await this.botMessageService.getSafe(session.data.clinicId, MessageKey.BUTTON_AGENT, {}, session.data.language, 'Talk to agent');
-    await this.whatsappService.sendButtons(phone, message, [
-      { id: 'book_appointment', title: btnBook },
-      { id: 'faq', title: btnFaq },
-      { id: 'human_agent', title: btnAgent },
-    ]);
   }
 }

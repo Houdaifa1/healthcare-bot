@@ -5,6 +5,7 @@ import { QUEUES } from './queue.constants';
 import { OrchestratorModule } from '../orchestrator/orchestrator.module';
 import { SessionsModule } from '../sessions/sessions.module';
 import { CampaignModule } from '../campaign/campaign.module';
+import { HandoffModule } from '../handoff/handoff.module';
 
 @Module({
   imports: [
@@ -12,6 +13,7 @@ import { CampaignModule } from '../campaign/campaign.module';
     OrchestratorModule,
     SessionsModule,
     CampaignModule,
+    HandoffModule,
   ],
   providers: [MessageProcessor],
   exports:   [BullModule],

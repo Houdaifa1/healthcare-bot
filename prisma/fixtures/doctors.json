@@ -1,8 +1,0 @@
-[
-  { "name": "Dr. Sarah Benali",   "specialtySlug": "general",    "displayOrder": 1 },
-  { "name": "Dr. Karim Hassani",  "specialtySlug": "general",    "displayOrder": 2 },
-  { "name": "Dr. Nadia Tazi",     "specialtySlug": "cardiology", "displayOrder": 1 },
-  { "name": "Dr. Omar Alaoui",    "specialtySlug": "cardiology", "displayOrder": 2 },
-  { "name": "Dr. Leila Chraibi",  "specialtySlug": "pediatrics", "displayOrder": 1 },
-  { "name": "Dr. Youssef Idrissi","specialtySlug": "pediatrics", "displayOrder": 2 }
-]

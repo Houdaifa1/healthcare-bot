@@ -18,18 +18,6 @@ export default () => ({
     apiVersion:    process.env.META_API_VERSION || 'v20.0',
   },
 
-  ai: {
-    apiKey: process.env.GROQ_API_KEY,
-  },
-
-  anthropic: {
-    apiKey: process.env.ANTHROPIC_API_KEY,
-  },
-
-  openrouter: {
-    apiKey: process.env.OPENROUTER_API_KEY,
-  },
-
   jwt: {
     secret: process.env.JWT_SECRET,
   },

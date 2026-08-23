@@ -17,16 +17,18 @@ export enum SessionState {
   AWAITING_HANDOFF  = 'AWAITING_HANDOFF',
 }
 
+
 export interface SessionData {
-  clinicId:          string;
-  timezone:          string;
-  language:          Language;
+  clinicId: string;
+  language: Language;
   languageConfirmed: boolean;
-  patientName?:      string;
-  specialtyId?:      string;
-  doctorId?:         string;
-  selectedDate?:     string;
-  selectedTime?:     string;
+  patientName?: string;
+  specialtyId?: number | string;
+  specialtyLabel?: string;
+  doctorId?: number | string;
+  doctorName?: string;
+  selectedDate?: string;
+  selectedTime?: string;
 }
 
 export interface Session {
@@ -35,11 +37,6 @@ export interface Session {
   data:      SessionData;
   updatedAt: number;
   version:   number;
-}
-
-export interface SessionResult {
-  session: Session;
-  isNew:   boolean;
 }
 
 // ─── Campaign conversation session (AI follow-up flow) ───────────────────────
@@ -78,7 +75,7 @@ export class SessionsService implements OnModuleDestroy {
   private readonly redis:  Redis;
 
   constructor(private readonly configService: ConfigService) {
-    const redisUrl  = this.configService.get<string>('REDIS_URL') ?? 'redis://localhost:6379';
+    const redisUrl  = this.configService.get<string>('redis.url')!;
     const isUpstash = redisUrl.includes('upstash.io');
 
     this.redis = new Redis(redisUrl, {
@@ -159,8 +156,7 @@ export class SessionsService implements OnModuleDestroy {
     phone:           string,
     clinicId:        string,
     defaultLanguage: Language,
-    timezone:        string,
-  ): Promise<SessionResult> {
+  ): Promise<Session> {
     const normalizedPhone = this.normalizePhone(phone);
     const raw = await this.redis.get(this.reactiveKey(normalizedPhone));
 
@@ -171,16 +167,16 @@ export class SessionsService implements OnModuleDestroy {
         session = JSON.parse(raw) as Session;
       } catch {
         this.logger.warn(`Corrupted session for ${normalizedPhone} — resetting`);
-        const fresh = this.buildFreshReactiveSession(normalizedPhone, clinicId, defaultLanguage, timezone);
+        const fresh = this.buildFreshReactiveSession(normalizedPhone, clinicId, defaultLanguage);
         await this.saveReactive(fresh);
-        return { session: fresh, isNew: true };
+        return fresh;
       }
 
       if (!session.data) {
         this.logger.warn(`Session ${normalizedPhone} missing data field — resetting`);
-        const fresh = this.buildFreshReactiveSession(normalizedPhone, clinicId, defaultLanguage, timezone);
+        const fresh = this.buildFreshReactiveSession(normalizedPhone, clinicId, defaultLanguage);
         await this.saveReactive(fresh);
-        return { session: fresh, isNew: true };
+        return fresh;
       }
 
       if (!session.version || session.version !== SESSION_VERSION) {
@@ -188,24 +184,23 @@ export class SessionsService implements OnModuleDestroy {
           `Session version mismatch for ${normalizedPhone} ` +
           `(got ${session.version ?? 'none'}, expected ${SESSION_VERSION}) — resetting`,
         );
-        const fresh = this.buildFreshReactiveSession(normalizedPhone, clinicId, defaultLanguage, timezone);
+        const fresh = this.buildFreshReactiveSession(normalizedPhone, clinicId, defaultLanguage);
         await this.saveReactive(fresh);
-        return { session: fresh, isNew: true };
+        return fresh;
       }
 
-      return { session, isNew: false };
+      return session;
     }
 
-    const fresh = this.buildFreshReactiveSession(normalizedPhone, clinicId, defaultLanguage, timezone);
+    const fresh = this.buildFreshReactiveSession(normalizedPhone, clinicId, defaultLanguage);
     await this.saveReactive(fresh);
-    return { session: fresh, isNew: true };
+    return fresh;
   }
 
   private buildFreshReactiveSession(
     phone:           string,
     clinicId:        string,
     defaultLanguage: Language,
-    timezone:        string,
   ): Session {
     return {
       phone: this.normalizePhone(phone),
@@ -213,7 +208,6 @@ export class SessionsService implements OnModuleDestroy {
       version: SESSION_VERSION,
       data: {
         clinicId,
-        timezone,
         language:          defaultLanguage,
         languageConfirmed: false,
       },
@@ -255,7 +249,6 @@ export class SessionsService implements OnModuleDestroy {
       version: SESSION_VERSION,
       data: {
         clinicId:          parsed.data.clinicId,
-        timezone:          parsed.data.timezone,
         language:          parsed.data.language,
         languageConfirmed: false,
       },
@@ -266,21 +259,6 @@ export class SessionsService implements OnModuleDestroy {
 
   async delete(phone: string): Promise<void> {
     await this.redis.del(this.reactiveKey(phone));
-  }
-
-  async scanKeys(): Promise<string[]> {
-    return new Promise((resolve, reject) => {
-      const stream = this.redis.scanStream({ match: 'session:*', count: 100 });
-      const keys: string[] = [];
-
-      stream.on('data', (resultKeys: string[]) => {
-        for (const key of resultKeys) {
-          if (typeof key === 'string') keys.push(key);
-        }
-      });
-      stream.on('end',   () => resolve(keys));
-      stream.on('error', (err) => reject(err));
-    });
   }
 
   // ═══════════════════════════════════════════════════════════════════════════

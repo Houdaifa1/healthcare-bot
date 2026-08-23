@@ -6,6 +6,8 @@ import {
   NotImplementedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { PrismaService } from '../prisma/prisma.service';
+import { AppointmentStatus, BookingRequestStatus } from '@prisma/client';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
@@ -18,10 +20,14 @@ import {
   ClinOpsCreateRDVRequest,
 } from './clinops.types';
 
-// Mock-only doctor shape — extends the API type with a specialty filter field
-// that exists only in the JSON files and never leaves this service.
+// Mock-only doctor shape — extends the API type with fields that exist only
+// in the JSON files and never leave this service: the specialty filter, and
+// a per-doctor weekly schedule used to simulate realistic, varied
+// availability instead of one identical static slot list for every doctor.
 interface ClinOpsDoctorMock extends ClinOpsDoctor {
   specialite_id: number;
+  workingDays:   number[];          // JS Date.getDay() values: 0=Sun..6=Sat
+  dailyWindows:  ClinOpsTimeSlot[]; // this doctor's daily availability windows on a working day
 }
 
 @Injectable()
@@ -34,9 +40,11 @@ export class ClinOpsService {
   private readonly mockPatientHistories: Record<string, ClinOpsPatientHistory>;
   private readonly mockDoctors: ClinOpsDoctorMock[];
   private readonly mockSpecialties: ClinOpsSpecialty[];
-  private readonly mockAvailability: ClinOpsTimeSlot[];
 
-  constructor(private readonly configService: ConfigService) {
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly prisma: PrismaService,
+  ) {
     this.mode = this.configService.get<string>('clinops.mode') === 'live'
       ? 'live'
       : 'mock';
@@ -48,7 +56,6 @@ export class ClinOpsService {
       this.mockPatientHistories = this.loadJson<Record<string, ClinOpsPatientHistory>>('patient-history.mock.json');
       this.mockDoctors         = this.loadJson<ClinOpsDoctorMock[]>('doctors.mock.json');
       this.mockSpecialties     = this.loadJson<ClinOpsSpecialty[]>('specialties.mock.json');
-      this.mockAvailability    = this.loadJson<ClinOpsTimeSlot[]>('availability.mock.json');
 
       this.logger.log(
         `Mock data loaded: ${this.mockPatients.length} patients, ` +
@@ -71,9 +78,11 @@ export class ClinOpsService {
 
     const { cin_passeport, date_derniere_consultation, motif, numeroTelephone, OnlyVerifiedNumbers } = filters;
 
-    if (!cin_passeport && !motif && !numeroTelephone && !OnlyVerifiedNumbers) {
+    // Per the doc, OnlyVerifiedNumbers is a modifier on the other filters, not
+    // itself a qualifying filter — it must not satisfy this requirement alone.
+    if (!cin_passeport && !motif && !numeroTelephone) {
       throw new BadRequestException(
-        'At least one filter is required (cin_passeport, motif, numeroTelephone, or OnlyVerifiedNumbers)',
+        'Au moins un filtre requis (cin_passeport, motif, ou numeroTelephone)',
       );
     }
 
@@ -179,7 +188,10 @@ export class ClinOpsService {
         'ClinOps live mode is not yet implemented. Set CLINOPS_MODE=mock.',
       );
     }
-    if (!specialite_id || !Number.isInteger(specialite_id)) {
+    if (specialite_id == null) {
+      throw new BadRequestException('Le paramètre specialite_id est requis');
+    }
+    if (!Number.isInteger(specialite_id)) {
       throw new BadRequestException('specialite_id doit être un entier');
     }
     // Strip the mock-only specialite_id field before returning — callers get clean ClinOpsDoctor shapes
@@ -204,8 +216,23 @@ export class ClinOpsService {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date_prevue)) {
       throw new BadRequestException('Format de date invalide (YYYY-MM-DD)');
     }
-    // Mock: return all slots regardless of doctor/date — real impl filters by schedule
-    return this.mockAvailability;
+    const doctor = this.mockDoctors.find(
+      d => d.doctorLabel.toLowerCase() === nom_medecin.toLowerCase(),
+    );
+    if (!doctor) {
+      throw new BadRequestException('Aucun médecin trouvé avec ce nom');
+    }
+
+    // Per-doctor weekly schedule: no slots at all on a day this doctor
+    // doesn't work, otherwise their own daily windows (which vary per
+    // doctor — see doctors.mock.json). Discrete bookable times and
+    // already-requested-slot exclusion are computed by the caller
+    // (AvailabilityService), which expands these windows.
+    const weekday = new Date(`${date_prevue}T00:00:00`).getDay();
+    if (!doctor.workingDays.includes(weekday)) {
+      return [];
+    }
+    return doctor.dailyWindows;
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -231,9 +258,53 @@ export class ClinOpsService {
     if (!/^\d{2}:\d{2}$/.test(heure)) {
       throw new BadRequestException("Format d'heure invalide (HH:MM)");
     }
-    // Mock: return all doctors of the given specialty (ignore actual schedule)
-    return this.mockDoctors
-      .filter(d => d.specialite_id === specialite_id)
+
+    const weekday = new Date(`${date}T00:00:00`).getDay();
+
+    // Only doctors of this specialty who actually work this weekday, within
+    // one of their daily windows at this exact hour, are candidates at all.
+    const candidates = this.mockDoctors.filter(
+      d =>
+        d.specialite_id === specialite_id &&
+        d.workingDays.includes(weekday) &&
+        d.dailyWindows.some(w => heure >= w.heure_debut.slice(0, 5) && heure < w.heure_fin.slice(0, 5)),
+    );
+    if (candidates.length === 0) return [];
+
+    // Exclude doctors already booked at this exact date/time — checked against
+    // the local review-queue/appointment tables so a slot a patient just
+    // requested (PENDING) or staff already confirmed (CONFIRMED) stops
+    // appearing as available, per the doc's "non bloqués par...rendez-vous
+    // existants" requirement.
+    const doctorNames = candidates.map(d => d.doctorLabel);
+    const [conflictingRequests, conflictingAppointments] = await Promise.all([
+      this.prisma.bookingRequest.findMany({
+        where: {
+          preferredDoctor: { in: doctorNames },
+          requestedDate: date,
+          requestedTime: heure,
+          status: { in: [BookingRequestStatus.PENDING, BookingRequestStatus.CONFIRMED] },
+        },
+        select: { preferredDoctor: true },
+      }),
+      this.prisma.appointment.findMany({
+        where: {
+          doctorName: { in: doctorNames },
+          appointmentTime: heure,
+          appointmentDate: new Date(`${date}T00:00:00`),
+          status: { in: [AppointmentStatus.PENDING, AppointmentStatus.CONFIRMED] },
+        },
+        select: { doctorName: true },
+      }),
+    ]);
+
+    const bookedNames = new Set([
+      ...conflictingRequests.map(r => r.preferredDoctor),
+      ...conflictingAppointments.map(a => a.doctorName),
+    ]);
+
+    return candidates
+      .filter(d => !bookedNames.has(d.doctorLabel))
       .map(({ doctorId, doctorLabel }) => ({ doctorId, doctorLabel }));
   }
 
@@ -243,7 +314,7 @@ export class ClinOpsService {
 
   async createNewRDV(
     request: ClinOpsCreateRDVRequest,
-  ): Promise<{ success: boolean; message: string; patient_id?: number }> {
+  ): Promise<{ success: boolean; message: string }> {
     if (this.mode === 'live') {
       throw new NotImplementedException(
         'ClinOps live mode is not yet implemented. Set CLINOPS_MODE=mock.',
@@ -252,6 +323,10 @@ export class ClinOpsService {
 
     if (!request.datePrevue || !request.motif || !request.medecinTraitant) {
       throw new BadRequestException('datePrevue, motif et medecinTraitant sont requis');
+    }
+
+    if (!this.mockDoctors.some(d => d.doctorLabel.toLowerCase() === request.medecinTraitant.toLowerCase())) {
+      throw new BadRequestException('Aucun médecin trouvé avec ce nom');
     }
 
     const hasPatientId      = request.patientId != null;
@@ -265,8 +340,7 @@ export class ClinOpsService {
       );
     }
 
-    const patient_id = request.patientId ?? Math.floor(Math.random() * 9000) + 1000;
-    return { success: true, message: 'Rendez-vous créé avec succès', patient_id };
+    return { success: true, message: 'Rendez-vous créé avec succès' };
   }
 
   // ═══════════════════════════════════════════════════════════════════════════

@@ -34,6 +34,7 @@ model Clinic {
   appointments           Appointment[]
   adminUsers             AdminUser[]
   campaigns              Campaign[]
+  handoffs               Handoff[]
 }
 
 // ─── Bot Message Templates ───────────────────────────────────────────────────
@@ -107,6 +108,7 @@ model Appointment {
   notes           String?
   doctorName      String?
   specialtyName   String?
+  source          BookingSource     @default(CAMPAIGN)
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt
   clinic          Clinic            @relation(fields: [clinicId], references: [id])
@@ -234,6 +236,7 @@ model CampaignPatient {
   campaign         Campaign              @relation(fields: [campaignId], references: [id])
   complaints       Complaint[]
   bookingRequests  BookingRequest[]
+  handoffs         Handoff[]
 }
 
 // ─── Complaint ────────────────────────────────────────────────────────────────
@@ -258,15 +261,29 @@ model Complaint {
 }
 
 // ─── Booking Request ──────────────────────────────────────────────────────────
+// Source-agnostic review queue: campaign (AI-negotiated, loose preferences) and
+// inbound (patient picked an exact doctor/date/time interactively) both land
+// here as PENDING, and staff confirm/reject from the same admin dashboard.
 model BookingRequest {
   id                 String               @id @default(cuid())
-  campaignPatientId  String
+  source             BookingSource        @default(CAMPAIGN)
+  campaignPatientId  String?              // CAMPAIGN only
   clinicId           String
   appointmentId      String?              @unique
+
+  // INBOUND only — no CampaignPatient row exists to hang identity off
+  patientName        String?
+  patientPhone       String?
+  language           Language?
+  clinopsPatientId   Int?
 
   preferredSpecialty String?
   preferredDoctor    String?
   preferredDateRange String?
+  // INBOUND only — the exact slot the patient already picked
+  requestedDate      String?
+  requestedTime      String?
+
   reason             String?
   rawPatientRequest  String
 
@@ -276,8 +293,32 @@ model BookingRequest {
   updatedAt          DateTime             @updatedAt
   confirmedAt        DateTime?
 
-  campaignPatient    CampaignPatient      @relation(fields: [campaignPatientId], references: [id])
+  campaignPatient    CampaignPatient?     @relation(fields: [campaignPatientId], references: [id])
   appointment        Appointment?         @relation(fields: [appointmentId], references: [id])
+}
+
+// ─── Handoff ──────────────────────────────────────────────────────────────────
+// Unified "patient wants a human" record for both inbound and campaign flows.
+// Durable counterpart to the previous Redis-only tracking — dashboard-visible
+// and auditable regardless of source.
+model Handoff {
+  id                String        @id @default(cuid())
+  clinicId          String
+  source            BookingSource
+  phone             String
+  patientName       String?
+  campaignPatientId String?       // CAMPAIGN only
+  reason            String?
+  language          Language?
+  status            HandoffStatus @default(OPEN)
+  messages          Json          @default("[]")
+
+  createdAt         DateTime      @default(now())
+  lastActivityAt    DateTime      @default(now())
+  resolvedAt        DateTime?
+
+  clinic            Clinic           @relation(fields: [clinicId], references: [id])
+  campaignPatient   CampaignPatient? @relation(fields: [campaignPatientId], references: [id])
 }
 
 // ─── Enums ────────────────────────────────────────────────────────────────────
@@ -353,6 +394,17 @@ enum BookingRequestStatus {
   REJECTED
 }
 
+enum BookingSource {
+  INBOUND
+  CAMPAIGN
+}
+
+enum HandoffStatus {
+  OPEN
+  ADMIN_HANDLING
+  RESOLVED
+}
+
 enum DeliveryStatus {
   SENT
   DELIVERED
@@ -385,6 +437,7 @@ enum MessageKey {
   SELECT_TIME
   CONFIRM_BOOKING
   BOOKING_SUCCESS
+  BOOKING_REQUEST_RECEIVED
   BOOKING_CANCELLED
   FAQ_INTRO
   FAQ_NOT_FOUND

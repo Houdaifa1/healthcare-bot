@@ -36,6 +36,14 @@ interface AdminUserFixture {
   role: string;
 }
 
+interface FaqFixture {
+  language: string;
+  question: string;
+  answer: string;
+  keywords: string[];
+  displayOrder: number;
+}
+
 function loadFixture<T>(filename: string): T {
   // __dirname is /app/dist/src/prisma at runtime — fixtures are at /app/prisma/fixtures
   const filepath = join(__dirname, '..', '..', '..', 'prisma', 'fixtures', filename);
@@ -108,7 +116,45 @@ async function main() {
 
   console.log(`✅ Bot messages: ${inserted} inserted, ${skipped} already existed (preserved)`);
 
-  // ── 3. Admin user ─────────────────────────────────────────────────────
+  // ── 3. FAQs ────────────────────────────────────────────────────────────
+  // Only inserts (clinicId, language, question) combos that don't exist yet.
+  // Never overwrites — admin edits via dashboard are preserved.
+  const faqsFR = loadFixture<FaqFixture[]>('faqs.fr.json');
+  const faqsEN = loadFixture<FaqFixture[]>('faqs.en.json');
+  const allFaqs = [...faqsFR, ...faqsEN];
+
+  let faqsInserted = 0;
+  let faqsSkipped = 0;
+
+  for (const faq of allFaqs) {
+    const exists = await prisma.fAQ.findFirst({
+      where: {
+        clinicId: clinic.id,
+        language: faq.language as any,
+        question: faq.question,
+      },
+    });
+
+    if (!exists) {
+      await prisma.fAQ.create({
+        data: {
+          clinicId:     clinic.id,
+          language:     faq.language as any,
+          question:     faq.question,
+          answer:       faq.answer,
+          keywords:     faq.keywords,
+          displayOrder: faq.displayOrder,
+        },
+      });
+      faqsInserted++;
+    } else {
+      faqsSkipped++;
+    }
+  }
+
+  console.log(`✅ FAQs: ${faqsInserted} inserted, ${faqsSkipped} already existed (preserved)`);
+
+  // ── 4. Admin user ─────────────────────────────────────────────────────
   // Created once from env vars. Never updated by seed.
   // Password changes must be done via dashboard or direct DB update.
   const adminUserData = loadFixture<AdminUserFixture>('admin-user.json');

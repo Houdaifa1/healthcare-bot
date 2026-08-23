@@ -10,6 +10,7 @@ import { OllamaProvider } from './providers/ollama.provider';
 import { ClinOpsModule } from '../clinops/clinops.module';
 import { SessionsModule } from '../sessions/sessions.module';
 import { WhatsAppModule } from '../whatsapp/whatsapp.module';
+import { HandoffModule } from '../handoff/handoff.module';
 import { QUEUES } from '../queue/queue.constants';
 
 // ScheduleModule.forRoot() is registered in AppModule — no need to register
@@ -22,6 +23,7 @@ import { QUEUES } from '../queue/queue.constants';
     ClinOpsModule,
     SessionsModule,
     WhatsAppModule,
+    HandoffModule,
   ],
   controllers: [CampaignController],
   providers: [

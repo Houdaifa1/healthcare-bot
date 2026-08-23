@@ -200,4 +200,4 @@ export class OllamaProvider implements AIProvider {
     );
     return missing.length > 0 ? { ok: false, missing } : { ok: true };
   }
-}
+} 

@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { SessionsService, CampaignSession, CampaignMessage } from '../sessions/sessions.service';
 import { WhatsAppService } from '../whatsapp/whatsapp.service';
+import { HandoffService } from '../handoff/handoff.service';
 import { OllamaProvider } from './providers/ollama.provider';
 import { AIMessage, AIInputMessage, AIToolDefinition, AITextBlock, AIToolUseBlock } from './providers/ai-response.types';
 import {
@@ -13,6 +14,7 @@ import {
   Language,
   MessageKey,
   BookingRequestStatus,
+  BookingSource,
 } from '@prisma/client';
 
 // ─── Tool input shapes ────────────────────────────────────────────────────────
@@ -232,6 +234,7 @@ export class ConversationService {
     private readonly prisma: PrismaService,
     private readonly sessionsService: SessionsService,
     private readonly whatsappService: WhatsAppService,
+    private readonly handoffService: HandoffService,
     private readonly ollamaProvider: OllamaProvider,
   ) {
     this.logger.log('ConversationService initialized — Ollama local model only, no cloud fallback');
@@ -886,28 +889,20 @@ Current turn: ${session.turnCount + 1}`;
     // handoff session for the same phone number.
     await this.sessionsService.delete(normalizedPhone).catch(() => {});
 
-    if (clinic.notificationPhone) {
-      try {
-        const visitDate = new Date(campaignPatient.visitDate).toLocaleDateString('fr-FR');
-        const now = new Date().toLocaleString('fr-MA', { timeZone: 'Africa/Casablanca' });
-
-        const notification =
-          `PATIENT HANDOFF REQUIRED\n---------------------------\n` +
-          `Name      : ${campaignPatient.patientName}\n` +
-          `Phone     : ${campaignPatient.phone}\n` +
-          `Age       : ${campaignPatient.ageYears ?? 'N/A'} years\n` +
-          `City      : ${campaignPatient.ville ?? 'N/A'}\n---------------------------\n` +
-          `Last visit   : ${visitDate}\n` +
-          `Visit reason : ${campaignPatient.prestation}\n` +
-          `Doctor       : ${campaignPatient.medecinTraitant}\n---------------------------\n` +
-          `Handoff reason : ${handoffReason}\n---------------------------\n` +
-          `Time : ${now}\nAction required : Contact this patient immediately.`;
-
-        await this.whatsappService.sendText(clinic.notificationPhone, notification);
-      } catch (err: any) {
-        this.logger.error(`Failed to notify staff of handoff: ${err.message}`);
-      }
-    }
+    await this.handoffService.createHandoff({
+      clinicId: clinic.id,
+      source: BookingSource.CAMPAIGN,
+      phone: normalizedPhone,
+      patientName: campaignPatient.patientName,
+      campaignPatientId: campaignPatient.id,
+      reason: handoffReason,
+      language: session.language,
+      ageYears: campaignPatient.ageYears,
+      ville: campaignPatient.ville,
+      visitDate: campaignPatient.visitDate,
+      prestation: campaignPatient.prestation,
+      medecinTraitant: campaignPatient.medecinTraitant,
+    });
 
     this.logger.log(`Handoff executed for patient ${campaignPatient.id} — session kept alive for staff`);
   }

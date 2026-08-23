@@ -64,7 +64,7 @@
       {
         "date_admission": "2026-06-04T08:45:00",
         "motif_admission": "Radiographie thoracique",
-        "medecin_traitant": "DR Miloud BAKOUCHE",
+        "medecin_traitant": "DR Rachid BOUHALI",
         "actes_realises": ["Radiographie thoracique", "Consultation pneumologie"],
         "produits_pharmaceutiques": ["Amoxicilline 1g", "Ibuprofène 400mg"],
         "avis_medicaux": ["Réévaluation dans 2 semaines"]
@@ -155,16 +155,58 @@
       }
     ]
   },
+  "CIN1011": {
+    "patient": "Meryem SEKKAT",
+    "solde_impaye": 0.00,
+    "admissions": [
+      {
+        "date_admission": "2026-06-11T09:15:00",
+        "motif_admission": "Consultation cardiologie",
+        "medecin_traitant": "DR Yassine LAHRICHI",
+        "actes_realises": ["ECG", "Consultation cardiologie"],
+        "produits_pharmaceutiques": ["Bisoprolol 5mg"],
+        "avis_medicaux": ["Contrôle dans 3 mois"]
+      }
+    ]
+  },
+  "CIN1012": {
+    "patient": "Zineb LAAROUSSI",
+    "solde_impaye": 150.00,
+    "admissions": [
+      {
+        "date_admission": "2026-06-12T10:30:00",
+        "motif_admission": "Consultation gynécologie",
+        "medecin_traitant": "DR Sanaa EL OUAFI",
+        "actes_realises": ["Consultation gynécologie", "Échographie pelvienne"],
+        "produits_pharmaceutiques": [],
+        "avis_medicaux": []
+      }
+    ]
+  },
+  "CIN1013": {
+    "patient": "Abdelali NASSIRI",
+    "solde_impaye": 0.00,
+    "admissions": [
+      {
+        "date_admission": "2026-06-13T13:45:00",
+        "motif_admission": "Consultation endocrinologie",
+        "medecin_traitant": "DR Imane TAZI",
+        "actes_realises": ["Consultation endocrinologie", "Glycémie à jeun", "HbA1c"],
+        "produits_pharmaceutiques": ["Metformine 850mg"],
+        "avis_medicaux": ["Diabète type 2 — poursuite traitement"]
+      }
+    ]
+  },
   "CIN9999": {
     "patient": "Nara Hosni",
     "solde_impaye": 0.00,
     "admissions": [
       {
         "date_admission": "2026-06-20T14:30:00",
-        "motif_admission": "Consultation générale",
-        "medecin_traitant": "DR Miloud BAKOUCHE",
-        "actes_realises": ["Consultation", "Bilan sanguin"],
-        "produits_pharmaceutiques": ["Paracétamol 1000mg"],
+        "motif_admission": "Consultation cardiologie",
+        "medecin_traitant": "DR Ahmed BENALI",
+        "actes_realises": ["ECG", "Consultation cardiologie"],
+        "produits_pharmaceutiques": ["Aspirine 100mg"],
         "avis_medicaux": []
       }
     ]
@@ -175,10 +217,10 @@
     "admissions": [
       {
         "date_admission": "2026-06-22T14:30:00",
-        "motif_admission": "Consultation générale",
-        "medecin_traitant": "DR Miloud BAKOUCHE",
-        "actes_realises": ["Consultation", "Bilan sanguin"],
-        "produits_pharmaceutiques": ["Paracétamol 1000mg"],
+        "motif_admission": "Consultation neurologie",
+        "medecin_traitant": "DR Khalid MANSOURI",
+        "actes_realises": ["Consultation neurologie"],
+        "produits_pharmaceutiques": [],
         "avis_medicaux": []
       }
     ]

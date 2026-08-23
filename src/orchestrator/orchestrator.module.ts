@@ -4,9 +4,9 @@ import { SessionsModule } from '../sessions/sessions.module';
 import { WhatsAppModule } from '../whatsapp/whatsapp.module';
 import { BotContentModule } from '../bot-content/bot-content.module';
 import { HandoffModule } from '../handoff/handoff.module';
-import { AppointmentsModule } from '../appointments/appointments.module';
 import { AiModule } from '../ai/ai.module';
 import { PrismaModule } from '../prisma/prisma.module';
+import { ClinOpsModule } from '../clinops/clinops.module';
 import {
   IdleHandler,
   LanguageSelectHandler,
@@ -19,6 +19,7 @@ import {
   FaqHandler,
   HandoffHandler,
 } from './handlers';
+import { BookingNavigationHelper } from './handlers/booking-navigation.helper';
 
 @Module({
   imports: [
@@ -26,9 +27,9 @@ import {
     WhatsAppModule,
     BotContentModule,
     HandoffModule,
-    AppointmentsModule,
     AiModule,
-    PrismaModule, // needed by handlers to fetch clinic name
+    PrismaModule,
+    ClinOpsModule,
   ],
   providers: [
     OrchestratorService,
@@ -42,6 +43,7 @@ import {
     ConfirmHandler,
     FaqHandler,
     HandoffHandler,
+    BookingNavigationHelper,
   ],
   exports: [OrchestratorService],
 })

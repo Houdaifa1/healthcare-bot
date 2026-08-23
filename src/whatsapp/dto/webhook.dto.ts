@@ -1,52 +1,63 @@
-export class WebhookDto {
-  object: string;
-  entry: EntryDto[];
+// Shapes for Meta's WhatsApp Cloud API webhook payload (POST /webhook).
+// Plain interfaces, not class-validator DTOs — the payload arrives from an
+// external, HMAC-signature-verified source (see WhatsAppController) rather
+// than a client we control the shape of, so every field here is optional or
+// defensively read with `?.` in whatsapp.service.ts instead of being
+// validated at the boundary. This exists purely to replace `any`-typed
+// walking of the payload with real type-checking.
+
+export interface WebhookPayload {
+  object?: string;
+  entry?: WebhookEntry[];
 }
 
-export class EntryDto {
-  id: string;
-  changes: ChangeDto[];
+export interface WebhookEntry {
+  id?: string;
+  changes?: WebhookChange[];
 }
 
-export class ChangeDto {
-  value: ChangeValueDto;
-  field: string;
+export interface WebhookChange {
+  field?: string;
+  value?: WebhookChangeValue;
 }
 
-export class ChangeValueDto {
-  messaging_product: string;
-  metadata: MetadataDto;
-  contacts?: ContactDto[];
-  messages?: WhatsAppMessageDto[];
-  statuses?: StatusDto[];
+export interface WebhookChangeValue {
+  messaging_product?: string;
+  metadata?: { display_phone_number?: string; phone_number_id?: string };
+  contacts?: WebhookContact[];
+  messages?: WebhookMessage[];
+  statuses?: WebhookStatus[];
 }
 
-export class MetadataDto {
-  display_phone_number: string;
-  phone_number_id: string;
+export interface WebhookContact {
+  profile?: { name?: string };
+  wa_id?: string;
 }
 
-export class ContactDto {
-  profile: { name: string };
-  wa_id: string;
-}
-
-export class WhatsAppMessageDto {
-  from: string;
-  id: string;
-  timestamp: string;
-  type: 'text' | 'interactive' | 'image' | 'audio';
-  text?: { body: string };
+export interface WebhookMessage {
+  from?: string;
+  id?: string;
+  timestamp?: string;
+  type?: 'text' | 'interactive' | 'image' | 'audio';
+  text?: { body?: string };
   interactive?: {
-    type: 'button_reply' | 'list_reply';
-    button_reply?: { id: string; title: string };
-    list_reply?: { id: string; title: string };
+    type?: 'button_reply' | 'list_reply';
+    button_reply?: { id?: string; title?: string };
+    list_reply?: { id?: string; title?: string };
   };
 }
 
-export class StatusDto {
-  id: string;
-  status: 'sent' | 'delivered' | 'read' | 'failed';
-  timestamp: string;
-  recipient_id: string;
+export interface WebhookStatus {
+  id?: string;
+  status?: 'sent' | 'delivered' | 'read' | 'warning' | 'failed';
+  timestamp?: string;
+  recipient_id?: string;
+  errors?: WebhookStatusError[];
+}
+
+export interface WebhookStatusError {
+  code?: number;
+  title?: string;
+  message?: string;
+  error_data?: unknown;
 }

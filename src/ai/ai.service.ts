@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { intentDetectionPrompt } from './prompts/intent-detection.prompt';
 import { languageDetectionPrompt } from './prompts/language-detection.prompt';
 import { faqMatchPrompt } from './prompts/faq-match.prompt';
@@ -36,8 +36,19 @@ const REQUEST_TIMEOUT_MS = 10_000;
 const CIRCUIT_FAILURE_THRESHOLD = 3;
 const CIRCUIT_COOLDOWN_MS = 30_000;
 
+// Deliberately short, matching src/campaign/providers/ollama.provider.ts:
+// holding this model resident costs real GPU memory, and most inbound
+// traffic clusters into short bursts rather than a constant trickle. 10m
+// covers a patient sending a few messages in one sitting; a longer gap pays
+// one cold reload on the next message, bounded by REQUEST_TIMEOUT_MS above
+// (this model is much smaller than the conversation model — cold loads
+// measured well under REQUEST_TIMEOUT_MS in testing, so unlike the
+// conversation model that timeout doesn't need raising).
+const OLLAMA_KEEP_ALIVE = process.env.OLLAMA_KEEP_ALIVE ?? '10m';
+const WARMUP_TIMEOUT_MS = 120_000;
+
 @Injectable()
-export class AiService {
+export class AiService implements OnModuleInit {
   private readonly logger = new Logger(AiService.name);
 
   private consecutiveFailures = 0;
@@ -45,6 +56,52 @@ export class AiService {
 
   constructor() {
     this.logger.log(`Local AI classifier ready — Ollama model "${OLLAMA_MODEL}" at ${OLLAMA_URL}`);
+  }
+
+  /**
+   * Background warm-up at boot — see OllamaProvider.onModuleInit() for the
+   * full rationale. Without this, the classifier's own 10s REQUEST_TIMEOUT_MS
+   * (deliberately kept low so a hung call doesn't stall the single-worker
+   * message queue) is nowhere near enough to cover a cold model load, and the
+   * first ambiguous message of any session falls straight to the keyword
+   * fallback / UNKNOWN instead of getting a real classification.
+   */
+  onModuleInit(): void {
+    this.warmUp().catch(() => { /* already logged inside warmUp */ });
+  }
+
+  private async warmUp(): Promise<void> {
+    const startedAt = Date.now();
+    const controller = new AbortController();
+    const timeoutHandle = setTimeout(() => controller.abort(), WARMUP_TIMEOUT_MS);
+
+    try {
+      const res = await fetch(OLLAMA_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: OLLAMA_MODEL,
+          messages: [],
+          keep_alive: OLLAMA_KEEP_ALIVE,
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error(`Ollama error ${res.status}: ${await res.text().catch(() => '')}`);
+      }
+
+      this.logger.log(`Warmed up classifier model "${OLLAMA_MODEL}" in ${Date.now() - startedAt}ms`);
+    } catch (err: any) {
+      const reason = err.name === 'AbortError'
+        ? `timed out after ${WARMUP_TIMEOUT_MS}ms`
+        : err.message;
+      this.logger.warn(
+        `Warm-up failed for classifier model "${OLLAMA_MODEL}" — first real classification may cold-start instead: ${reason}`,
+      );
+    } finally {
+      clearTimeout(timeoutHandle);
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -86,6 +143,7 @@ export class AiService {
           messages: [{ role: 'user', content: prompt }],
           format: schema,
           stream: false,
+          keep_alive: OLLAMA_KEEP_ALIVE,
           options: { temperature: 0 },
         }),
       });

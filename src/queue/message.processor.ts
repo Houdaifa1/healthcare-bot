@@ -6,6 +6,7 @@ import { SessionsService, SessionState } from '../sessions/sessions.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ConversationService } from '../campaign/conversation.service';
 import { HandoffService } from '../handoff/handoff.service';
+import { WhatsAppService } from '../whatsapp/whatsapp.service';
 
 export interface MessageJob {
   from:      string;
@@ -25,6 +26,7 @@ export class MessageProcessor extends WorkerHost {
     private readonly prisma:               PrismaService,
     private readonly conversationService:  ConversationService,
     private readonly handoffService:       HandoffService,
+    private readonly whatsappService:      WhatsAppService,
   ) {
     super();
   }
@@ -53,6 +55,9 @@ export class MessageProcessor extends WorkerHost {
     const hasCampaign = await this.sessionsService.hasActiveCampaignSession(from);
     if (hasCampaign) {
       this.logger.log(`Phone ${from} has active campaign session — routing to ConversationService`);
+      // A reply is always coming here, so show typing now — Ollama tool-calling
+      // is the slow step this is meant to cover.
+      await this.whatsappService.sendTypingIndicator(messageId);
       await this.conversationService.handleReply(from, text);
       return;
     }
@@ -133,6 +138,9 @@ export class MessageProcessor extends WorkerHost {
     }
 
     // ── 5. Route to reactive orchestrator ─────────────────────────────────
+    // Every reactive state handler eventually replies (menu, booking steps,
+    // AI-classified FAQ, etc.), so typing is safe to show unconditionally here.
+    await this.whatsappService.sendTypingIndicator(messageId);
     try {
       await this.orchestratorService.handleMessage(from, text, session);
     } catch (error: any) {

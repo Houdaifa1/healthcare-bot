@@ -321,10 +321,7 @@ export class CampaignService {
   async stop(clinicId: string, id: string): Promise<Campaign> {
     const campaign = await this.findOneRaw(clinicId, id);
 
-    if (
-      campaign.status !== CampaignStatus.RUNNING &&
-      campaign.status !== CampaignStatus.PAUSED
-    ) {
+    if (campaign.status !== CampaignStatus.RUNNING) {
       throw new ConflictException(
         `Campaign "${campaign.name}" cannot be stopped from status ${campaign.status}`,
       );
@@ -346,12 +343,6 @@ export class CampaignService {
     if (campaign.status === CampaignStatus.RUNNING) {
       throw new ConflictException(
         `Campaign "${campaign.name}" is RUNNING — stop it before deleting`,
-      );
-    }
-
-    if (campaign.status === CampaignStatus.PAUSED) {
-      throw new ConflictException(
-        `Campaign "${campaign.name}" is PAUSED — stop or resume it before deleting`,
       );
     }
 

@@ -315,15 +315,11 @@ export class ConversationService {
       });
     }
 
-    // Pausing/stopping a campaign must also stop the bot from continuing to
-    // talk to patients already mid-conversation — pausing only the outbound
-    // blast queue (see OutboundProcessor) isn't enough, since a patient can
-    // reply hours after their message was sent. The message is still
-    // recorded above so staff see it, but no AI reply is generated or sent.
-    if (
-      campaignPatient.campaign?.status === CampaignStatus.PAUSED ||
-      campaignPatient.campaign?.status === CampaignStatus.STOPPED
-    ) {
+    // Stopping a campaign must also stop the bot from continuing to talk to
+    // patients already mid-conversation — since a patient can reply hours
+    // after their message was sent. The message is still recorded above so
+    // staff see it, but no AI reply is generated or sent.
+    if (campaignPatient.campaign?.status === CampaignStatus.STOPPED) {
       this.logger.log(
         `Campaign ${campaignPatient.campaignId} is ${campaignPatient.campaign.status} — recording reply from ${phone} without an AI response`,
       );
@@ -413,12 +409,30 @@ export class ConversationService {
 
       const rawTextReply = textBlocks.map(b => b.text).join(' ').trim();
 
-      const textReply = this.sanitizeTextReply(rawTextReply, phone, session.language);
+      let textReply = this.sanitizeTextReply(rawTextReply, phone, session.language);
 
-      const sendTextOnce = async () => {
-        if (textSent || !textReply) return;
-        textSent = true;
+      // fallbackKey: a local model can return an empty `reply` alongside a
+      // tool call (the schema only requires the field to be a string, not
+      // non-empty). Without a fallback, a terminal tool (handoff/end) would
+      // silently leave the patient with NO message at all at exactly the
+      // moment they most need one. When the model's own reply is empty, this
+      // pulls the clinic's DB-editable, language-correct message for that
+      // situation instead — the same messages staff already edit in the
+      // dashboard, previously unused by any code path.
+      const sendTextOnce = async (fallbackKey?: MessageKey) => {
+        if (textSent) return;
+        if (!textReply && fallbackKey) {
+          textReply = (await this.fetchBotMessage(clinic.id, fallbackKey, session.language ?? Language.FR)) ?? '';
+        }
+        if (!textReply) return;
+        // Mark sent only AFTER the send actually succeeds. Marking it first
+        // (the previous order) meant a transient WhatsApp API failure here
+        // would permanently block any retry of this message for the rest of
+        // the turn — including inside request_handoff/end_conversation,
+        // which are called right after this and would then run with no
+        // message ever having reached the patient and no way to recover.
         await this.whatsappService.sendText(phone, textReply);
+        textSent = true;
         // This is the ONLY place session.messages receives an 'assistant'
         // entry — always sanitized, human-readable text, never raw tool
         // JSON. This is what future turns will see as conversation history.
@@ -427,6 +441,7 @@ export class ConversationService {
 
       const toolResults: { type: 'tool_result'; tool_use_id: string; content: string }[] = [];
       let highSeverityComplaintLogged = false;
+      let urgentComplaintLoggedThisTurn = false;
       let handoffCalledThisTurn = false;
 
       // ── Tool ordering fix ────────────────────────────────────────────────
@@ -459,6 +474,7 @@ export class ConversationService {
 
             const severity = normalizeComplaintSeverity(input.severity);
             if (severity === ComplaintSeverity.HIGH) highSeverityComplaintLogged = true;
+            if (normalizeComplaintType(input.type) === ComplaintType.URGENT) urgentComplaintLoggedThisTurn = true;
 
           } else if (toolBlock.name === 'request_booking') {
             await this.executeRequestBooking(
@@ -469,7 +485,7 @@ export class ConversationService {
 
           } else if (toolBlock.name === 'request_handoff') {
             handoffCalledThisTurn = true;
-            await sendTextOnce();
+            await sendTextOnce(MessageKey.CAMPAIGN_HANDOFF_MESSAGE);
             await this.executeRequestHandoff(
               toolBlock.input as unknown as RequestHandoffInput, session, campaignPatient, clinic,
             );
@@ -477,7 +493,7 @@ export class ConversationService {
             conversationEnded = true;
 
           } else if (toolBlock.name === 'end_conversation') {
-            await sendTextOnce();
+            await sendTextOnce(MessageKey.CAMPAIGN_FAREWELL_MESSAGE);
             await this.closeConversation(
               session, campaignPatient.id, campaignPatient.campaignId,
               (toolBlock.input as unknown as EndConversationInput).outcome,
@@ -496,7 +512,7 @@ export class ConversationService {
 
       if (highSeverityComplaintLogged && !handoffCalledThisTurn && !conversationEnded) {
         this.logger.warn(`HIGH severity complaint logged without request_handoff for ${phone} — auto-escalating`);
-        await sendTextOnce();
+        await sendTextOnce(MessageKey.CAMPAIGN_HANDOFF_MESSAGE);
         try {
           await this.executeRequestHandoff(
             { reason: 'Auto-escalated by system: HIGH severity complaint logged without explicit handoff.' },
@@ -512,6 +528,39 @@ export class ConversationService {
 
       if (toolUseBlocks.length === 0) {
         await sendTextOnce();
+        break;
+      }
+
+      // PERFORMANCE FIX: non-terminal tools (log_complaint, request_booking)
+      // already come back from generate() with a reply alongside the tool
+      // call in the SAME response — the tool prompts explicitly say "this is
+      // a silent side effect, always follow it with a warm reply" meaning
+      // same turn, not a follow-up turn. Sending it now avoids a second,
+      // fully sequential Ollama round-trip (the queue is single-concurrency,
+      // so this doubled latency for every patient system-wide, not just this
+      // conversation) for a call whose only purpose was fetching a reply the
+      // model had already written. Only fall through to the loop-again path
+      // below if the model genuinely returned no text this turn.
+      if (textReply) {
+        await sendTextOnce();
+        break;
+      }
+
+      // Same guarantee as the terminal tools above, extended to the two
+      // non-terminal cases where a canned-but-correct message is clearly
+      // better than making the patient wait through another full model call:
+      // an URGENT complaint needs an immediate acknowledgement, and a
+      // recorded booking request needs a clear confirmation. Ordinary
+      // (non-urgent) complaints with an empty reply still fall through to
+      // the loop-again path below — there's no urgency forcing an instant
+      // reply, so giving the model another turn to phrase something natural
+      // is the better trade-off there.
+      if (urgentComplaintLoggedThisTurn) {
+        await sendTextOnce(MessageKey.CAMPAIGN_URGENT_MESSAGE);
+        break;
+      }
+      if (bookingRecordedThisTurn) {
+        await sendTextOnce(MessageKey.CAMPAIGN_REBOOK_CONFIRM);
         break;
       }
 

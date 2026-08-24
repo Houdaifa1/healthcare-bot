@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "bot-dashboard",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "/Users/macbookpro/projects/bot-dashboard", "run", "dev"],
+      "port": 5173
+    }
+  ]
+}

@@ -16,6 +16,12 @@
     "outDir": "./dist",
     "types": ["node"],
     "baseUrl": "./",
+    "paths": {
+      "@platform/*": ["src/platform/*"],
+      "@integrations/*": ["src/integrations/*"],
+      "@operations/*": ["src/operations/*"],
+      "@conversation/*": ["src/conversation/*"]
+    },
     "ignoreDeprecations": "5.0",
     "incremental": true,
     "skipLibCheck": true,

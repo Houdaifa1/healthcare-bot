@@ -42,6 +42,24 @@ export class ComplaintsController {
     return this.complaintsService.findOne(req.user.clinicId, id);
   }
 
+  // PATCH /api/admin/v1/complaints/patient/:campaignPatientId/status
+  //
+  // Bulk "resolve all for this patient". MUST stay declared above
+  // `@Patch(':id/status')` — Nest matches routes in declaration order, so the
+  // literal segment `patient` would otherwise be swallowed by the `:id` param.
+  @Patch('patient/:campaignPatientId/status')
+  updateStatusForPatient(
+    @Request() req: any,
+    @Param('campaignPatientId') campaignPatientId: string,
+    @Body() dto: UpdateComplaintStatusDto,
+  ) {
+    return this.complaintsService.updateStatusForPatient(
+      req.user.clinicId,
+      campaignPatientId,
+      dto.status,
+    );
+  }
+
   // PATCH /api/admin/v1/complaints/:id/status
   @Patch(':id/status')
   updateStatus(

@@ -193,6 +193,11 @@ export class OutboundProcessor extends WorkerHost {
         parkedAt:          null,
         outboundMessageId: wamId || null,
         deliveryStatus:    wamId ? DeliveryStatus.SENT : null,
+        // Persist the opening message immediately so the dashboard's
+        // conversation view shows it right away — otherwise it stays empty
+        // until the patient's first reply triggers ConversationService to
+        // persist the Redis session (opening line + reply) to Postgres.
+        messages:          session.messages as any,
       },
     });
 

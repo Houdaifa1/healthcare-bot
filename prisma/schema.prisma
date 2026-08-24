@@ -163,10 +163,13 @@ model Campaign {
   status            CampaignStatus   @default(DRAFT)
   scheduledStartAt  DateTime?
 
-  filterDateFrom    DateTime?
-  filterDateTo      DateTime?
-  filterDoctor      String?
-  filterMotif       String?
+  filterDateFrom       DateTime?
+  filterDateTo         DateTime?
+  filterDoctors        String[]      @default([])
+  filterMotifs         String[]      @default([])
+  filterCinPassports   String[]      @default([])
+  filterPhoneNumbers   String[]      @default([])
+  onlyVerifiedNumbers  Boolean       @default(true)
 
   notificationPhone     String?
   delayHours            Int?

@@ -8,6 +8,7 @@ import { AIMessage, AIInputMessage, AIToolDefinition, AITextBlock, AIToolUseBloc
 import {
   AppointmentStatus,
   CampaignPatientStatus,
+  CampaignStatus,
   ComplaintSeverity,
   ComplaintType,
   ConversationOutcome,
@@ -300,6 +301,34 @@ export class ConversationService {
     );
     if (!isDuplicate) {
       session.messages.push({ role: 'user', content: patientMessage, timestamp: Date.now() });
+
+      // Persist right away, before the AI turn runs. The model call plus its
+      // tool loop can take many seconds on a local model, and the dashboard's
+      // conversation view reads from Postgres — without this the patient's
+      // message stays invisible to staff until the whole turn completes.
+      await this.sessionsService.saveCampaignSession(session);
+      await this.prisma.campaignPatient.update({
+        where: { id: campaignPatient.id },
+        data: { messages: session.messages as any },
+      }).catch((err: any) => {
+        this.logger.warn(`Failed to persist inbound message for ${phone}: ${err.message}`);
+      });
+    }
+
+    // Pausing/stopping a campaign must also stop the bot from continuing to
+    // talk to patients already mid-conversation — pausing only the outbound
+    // blast queue (see OutboundProcessor) isn't enough, since a patient can
+    // reply hours after their message was sent. The message is still
+    // recorded above so staff see it, but no AI reply is generated or sent.
+    if (
+      campaignPatient.campaign?.status === CampaignStatus.PAUSED ||
+      campaignPatient.campaign?.status === CampaignStatus.STOPPED
+    ) {
+      this.logger.log(
+        `Campaign ${campaignPatient.campaignId} is ${campaignPatient.campaign.status} — recording reply from ${phone} without an AI response`,
+      );
+      await this.sessionsService.saveCampaignSession(session);
+      return;
     }
 
     const aiMaxTurns = campaignPatient.campaign?.aiMaxTurns ?? clinic.aiMaxTurns;
@@ -897,6 +926,7 @@ Current turn: ${session.turnCount + 1}`;
       campaignPatientId: campaignPatient.id,
       reason: handoffReason,
       language: session.language,
+      messages: session.messages,
       ageYears: campaignPatient.ageYears,
       ville: campaignPatient.ville,
       visitDate: campaignPatient.visitDate,

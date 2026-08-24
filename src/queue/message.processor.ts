@@ -61,23 +61,36 @@ export class MessageProcessor extends WorkerHost {
     const isHandoff = await this.sessionsService.isHandoffCampaignSession(from);
     if (isHandoff) {
       this.logger.log(`Phone ${from} is in handoff/admin_handling — storing patient reply for staff`);
-      
+
+      // Record on the Handoff row first — that table is what the dashboard's
+      // live-session view actually reads. recordPatientMessage() also mirrors
+      // the transcript onto CampaignPatient for the campaign-side views.
+      const recorded = await this.handoffService.recordPatientMessage(from, text);
+      if (!recorded) {
+        this.logger.warn(`No open Handoff row for ${from} despite handoff session status`);
+      }
+
+      // Keep the Redis campaign session transcript in sync too: staff replies
+      // are mirrored there by HandoffService.sendMessage(), and it is the AI's
+      // context if the conversation is ever handed back to the bot.
       const session = await this.sessionsService.getCampaignSession(from);
       if (session) {
         session.messages.push({ role: 'user', content: text, timestamp: Date.now() });
         session.lastActivityAt = Date.now();
         await this.sessionsService.saveCampaignSession(session);
 
-        // Also persist to DB so it shows up in the campaign patient history
-        await this.prisma.campaignPatient.update({
-          where: { id: session.campaignPatientId },
-          data: { messages: session.messages as any },
-        }).catch(() => {
-          this.logger.warn(`Failed to persist handoff message to DB for ${from}`);
-        });
-
-        this.logger.log(`Handoff message from ${from} stored in session — staff will see it`);
+        // Only needed when there was no Handoff row to mirror through above.
+        if (!recorded) {
+          await this.prisma.campaignPatient.update({
+            where: { id: session.campaignPatientId },
+            data: { messages: session.messages as any },
+          }).catch(() => {
+            this.logger.warn(`Failed to persist handoff message to DB for ${from}`);
+          });
+        }
       }
+
+      this.logger.log(`Handoff message from ${from} stored — staff will see it`);
       return;
     }
 

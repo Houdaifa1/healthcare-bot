@@ -627,13 +627,31 @@ export class ConversationService {
       this.logger.warn(`Failed to log AI usage: ${err.message}`);
     }
 
-    await this.prisma.campaignPatient.update({
-      where: { id: campaignPatient.id },
-      data: { messages: session.messages as any, turnCount: session.turnCount },
-    });
+    // PRODUCTION FIX: this write happens AFTER the patient has already
+    // received their reply via WhatsApp (sendTextOnce, above). Previously
+    // unguarded — a transient DB error here threw uncaught out of
+    // handleReply, and since the campaign routing call site in
+    // message.processor.ts has no try/catch, BullMQ retried the whole job
+    // (5 attempts, per whatsapp.service.ts). A retry re-runs this entire
+    // turn from scratch: the patient's message is outside the 10s duplicate
+    // window by the time a retry fires, so the AI generates and sends a
+    // SECOND reply, and repliedCount/completedCount get double-incremented.
+    // Once the patient-facing send has already happened, losing this
+    // bookkeeping write is far cheaper than duplicating the conversation.
+    try {
+      await this.prisma.campaignPatient.update({
+        where: { id: campaignPatient.id },
+        data: { messages: session.messages as any, turnCount: session.turnCount },
+      });
 
-    if (!conversationEnded) {
-      await this.sessionsService.saveCampaignSession(session);
+      if (!conversationEnded) {
+        await this.sessionsService.saveCampaignSession(session);
+      }
+    } catch (err: any) {
+      this.logger.error(
+        `Failed to persist turn state for ${phone} after reply was already sent — ` +
+        `next turn may see stale turnCount/history: ${err.message}`,
+      );
     }
 
     this.logger.log(`Turn ${session.turnCount}/${aiMaxTurns} complete for ${phone} (model: ${lastUsedModel})`);
@@ -994,17 +1012,33 @@ Current turn: ${session.turnCount + 1}`;
   ): Promise<void> {
     session.status = 'completed';
 
-    await this.prisma.campaignPatient.update({
-      where: { id: campaignPatientId },
-      data: { status: CampaignPatientStatus.COMPLETED, outcome, completedAt: new Date() },
-    });
+    // PRODUCTION FIX: every caller of closeConversation() already sent the
+    // farewell text to the patient before calling this (sendTextOnce, or the
+    // turn-limit branch's own sendText). If any write below throws uncaught,
+    // BullMQ retries the whole inbound job and re-runs this turn from
+    // scratch — re-sending a SECOND farewell and double-incrementing
+    // completedCount. Worst case on failure here is a stale 'active' session
+    // lingering in Redis (the next reply would re-enter the AI loop instead
+    // of staying closed) — an inconsistency to fix by hand if it ever fires,
+    // but far better than duplicating the goodbye the patient already got.
+    try {
+      await this.prisma.campaignPatient.update({
+        where: { id: campaignPatientId },
+        data: { status: CampaignPatientStatus.COMPLETED, outcome, completedAt: new Date() },
+      });
 
-    await this.prisma.campaign.update({ where: { id: campaignId }, data: { completedCount: { increment: 1 } } });
+      await this.prisma.campaign.update({ where: { id: campaignId }, data: { completedCount: { increment: 1 } } });
 
-    await this.sessionsService.deleteCampaignSession(session.phone);
-    await this.sessionsService.delete(session.phone);
+      await this.sessionsService.deleteCampaignSession(session.phone);
+      await this.sessionsService.delete(session.phone);
 
-    this.logger.log(`Conversation closed for patient ${campaignPatientId} — outcome: ${outcome}`);
+      this.logger.log(`Conversation closed for patient ${campaignPatientId} — outcome: ${outcome}`);
+    } catch (err: any) {
+      this.logger.error(
+        `Failed to fully close conversation for patient ${campaignPatientId} after farewell was already sent — ` +
+        `session may be left in a stale state, check manually: ${err.message}`,
+      );
+    }
   }
 
   /**

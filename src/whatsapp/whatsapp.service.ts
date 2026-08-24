@@ -225,6 +225,33 @@ export class WhatsAppService {
   }
 
   /**
+   * Shows the WhatsApp typing indicator, keyed to the inbound message being
+   * replied to. Per Meta's docs this doubles as a read receipt for that
+   * message, and clears itself automatically — either when the real reply is
+   * sent or after 25s, whichever comes first. There is no separate "stop
+   * typing" call.
+   *
+   * Only call this on a path that is actually about to send a reply — Meta's
+   * own guidance is to never show typing if no response is coming. Silently
+   * no-ops on failure (wrong API version, invalid message id, etc.) since
+   * this is a UX nicety, never allowed to block or fail message processing.
+   */
+  async sendTypingIndicator(inboundMessageId: string): Promise<void> {
+    if (!inboundMessageId) return;
+
+    try {
+      await this.sendStatusUpdate({
+        messaging_product: 'whatsapp',
+        status:            'read',
+        message_id:        inboundMessageId,
+        typing_indicator:  { type: 'text' },
+      });
+    } catch (err: any) {
+      this.logger.warn(`Typing indicator failed for message ${inboundMessageId}: ${err.message}`);
+    }
+  }
+
+  /**
    * Sends an approved Meta template message.
    * Used for the campaign opening message so new contacts (24h window not open)
    * can receive it without being blocked by Meta.
@@ -361,6 +388,49 @@ export class WhatsAppService {
       },
     });
     this.logger.log(`List sent to ${to}`);
+  }
+
+  // ─── Status updates (read receipts / typing indicator) ────────────────────
+
+  /**
+   * Sends a status-update payload (read receipt, optionally with a typing
+   * indicator) to the same /messages endpoint. Unlike an actual message send,
+   * Meta's success response here is `{"success": true}` — there is no
+   * `messages[]` array to echo an id from — so this does not reuse sendRaw(),
+   * which would log a spurious "no message id returned" warning every time.
+   */
+  private async sendStatusUpdate(payload: Record<string, unknown>): Promise<void> {
+    const response = await fetch(this.baseUrl, {
+      method:  'POST',
+      headers: {
+        'Content-Type':  'application/json',
+        'Authorization': `Bearer ${this.accessToken}`,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    let responseBody = '';
+    try {
+      responseBody = JSON.stringify(await response.json());
+    } catch {
+      responseBody = await response.text().catch(() => '');
+    }
+
+    if (!response.ok) {
+      throw new Error(`Meta API error ${response.status}: ${responseBody}`);
+    }
+
+    let parsed: { success?: boolean; error?: MetaSendError } | null = null;
+    try {
+      parsed = JSON.parse(responseBody);
+    } catch {
+      parsed = null;
+    }
+
+    if (parsed?.error) {
+      const err = parsed.error;
+      throw new Error(`Meta rejected status update (code ${err.code ?? 'n/a'}): ${err.message ?? JSON.stringify(err)}`);
+    }
   }
 
   // ─── Core HTTP sender ──────────────────────────────────────────────────────

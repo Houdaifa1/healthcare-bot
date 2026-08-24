@@ -63,28 +63,7 @@ export class OutboundProcessor extends WorkerHost {
       return;
     }
 
-    // ── 4. PAUSED — park the patient, resume() will re-queue ───────────────
-    if (campaign.status === CampaignStatus.PAUSED) {
-      this.logger.warn(
-        `Campaign ${campaignId} is PAUSED — parking patient ${campaignPatientId}`,
-      );
-
-      if (campaignPatient.status === CampaignPatientStatus.PENDING) {
-        await this.prisma.campaignPatient.update({
-          where: { id: campaignPatientId },
-          data: {
-            status:   CampaignPatientStatus.PARKED,
-            parkedAt: new Date(),
-          },
-        });
-        this.logger.log(
-          `CampaignPatient ${campaignPatientId} status → PARKED`,
-        );
-      }
-      return;
-    }
-
-    // ── 5. Not RUNNING — unexpected status, skip safely ───────────────────
+    // ── 4. Not RUNNING — unexpected status, skip safely ───────────────────
     if (campaign.status !== CampaignStatus.RUNNING) {
       this.logger.warn(
         `Campaign ${campaignId} has unexpected status ${campaign.status} — skipping patient ${campaignPatientId}`,
@@ -92,18 +71,15 @@ export class OutboundProcessor extends WorkerHost {
       return;
     }
 
-    // ── 6. Idempotency guard — already processed ───────────────────────────
-    if (
-      campaignPatient.status !== CampaignPatientStatus.PENDING &&
-      campaignPatient.status !== CampaignPatientStatus.PARKED
-    ) {
+    // ── 5. Idempotency guard — already processed ───────────────────────────
+    if (campaignPatient.status !== CampaignPatientStatus.PENDING) {
       this.logger.warn(
         `CampaignPatient ${campaignPatientId} already has status ${campaignPatient.status} — skipping`,
       );
       return;
     }
 
-    // ── 7. Load clinic ─────────────────────────────────────────────────────
+    // ── 6. Load clinic ─────────────────────────────────────────────────────
     const clinic = await this.prisma.clinic.findUnique({
       where: { id: clinicId },
     });
@@ -113,16 +89,16 @@ export class OutboundProcessor extends WorkerHost {
       return;
     }
 
-    // ── 8. Resolve language ────────────────────────────────────────────────
+    // ── 7. Resolve language ────────────────────────────────────────────────
     // Patient language is unknown until they reply — default to clinic language.
     // The AI conversation engine adapts once the patient replies.
     const language: Language = clinic.defaultLanguage;
 
-    // ── 9. Build template variables ────────────────────────────────────────
+    // ── 8. Build template variables ────────────────────────────────────────
     // {{1}} = patient name, {{2}} = visit date formatted as dd/MM/yyyy
     const visitDate = new Date(campaignPatient.visitDate).toLocaleDateString('fr-FR');
 
-    // ── 10. Send approved Meta template — works for new contacts ───────────
+    // ── 9. Send approved Meta template — works for new contacts ───────────
     // sendText() fails for contacts who have never messaged the clinic before
     // (outside the 24-hour customer-initiated window).
     // sendTemplate() uses the approved template which bypasses this restriction
@@ -151,7 +127,7 @@ export class OutboundProcessor extends WorkerHost {
       `Opening template sent to ${campaignPatient.phone} (${campaignPatient.patientName}) — wamid=${wamId}`,
     );
 
-    // ── 11. Create campaign Redis session ──────────────────────────────────
+    // ── 10. Create campaign Redis session ──────────────────────────────────
     // Normalise phone to match WhatsApp webhook format (no '+' prefix)
     const normalisedPhone = campaignPatient.phone.replace(/^\+/, '').replace(/\s/g, '');
 
@@ -190,7 +166,7 @@ export class OutboundProcessor extends WorkerHost {
       `Campaign session created in Redis for ${campaignPatient.phone}`,
     );
 
-    // ── 12. Update CampaignPatient → CONTACTED + record delivery tracking ──
+    // ── 11. Update CampaignPatient → CONTACTED + record delivery tracking ──
     // Only reach this point if sendTemplate() actually succeeded (Meta accepted
     // the message with a wamid). Record the wamid + initial SENT status so the
     // delivery webhook can update it to DELIVERED/READ/FAILED later, and so the
@@ -211,7 +187,7 @@ export class OutboundProcessor extends WorkerHost {
       },
     });
 
-    // ── 13. Increment Campaign.contactedCount ──────────────────────────────
+    // ── 12. Increment Campaign.contactedCount ──────────────────────────────
     await this.prisma.campaign.update({
       where: { id: campaignId },
       data:  { contactedCount: { increment: 1 } },

@@ -45,8 +45,11 @@ interface FaqFixture {
 }
 
 function loadFixture<T>(filename: string): T {
-  // __dirname is /app/dist/src/prisma at runtime — fixtures are at /app/prisma/fixtures
-  const filepath = join(__dirname, '..', '..', '..', 'prisma', 'fixtures', filename);
+  // __dirname is /app/dist/src/platform/database at runtime — fixtures are at
+  // /app/prisma/fixtures (a raw copy of the repo's prisma/ dir, not compiled
+  // output, so this traversal must match __dirname's depth under dist/, not
+  // anything about where prisma/fixtures itself lives).
+  const filepath = join(__dirname, '..', '..', '..', '..', 'prisma', 'fixtures', filename);
   return JSON.parse(readFileSync(filepath, 'utf-8')) as T;
 }
 

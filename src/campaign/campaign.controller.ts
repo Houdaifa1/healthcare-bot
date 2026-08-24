@@ -14,6 +14,7 @@ import {
 import { CampaignService } from './campaign.service';
 import { CreateCampaignDto } from './dto/create-campaign.dto';
 import { UpdateCampaignDto } from './dto/update-campaign.dto';
+import { PreviewFiltersDto } from './dto/preview-filters.dto';
 import { JwtAuthGuard } from '../admin/auth/jwt-auth.guard';
 
 // ─── Controller ───────────────────────────────────────────────────────────────
@@ -31,6 +32,23 @@ export class CampaignController {
   @Post()
   create(@Request() req: any, @Body() dto: CreateCampaignDto) {
     return this.campaignService.create(req.user.clinicId, dto);
+  }
+
+  // POST /api/admin/v1/campaigns/preview-filters — live match count before
+  // a campaign is even created, so the creation form can show "N patients
+  // match" while the admin is still typing. Static path, must be registered
+  // before the dynamic ":id" routes below.
+  @Post('preview-filters')
+  previewFilters(@Body() dto: PreviewFiltersDto) {
+    return this.campaignService.previewFilters(dto);
+  }
+
+  // GET /api/admin/v1/campaigns/targeting-options — exact specialties/doctors
+  // from ClinOps for the creation form's picker. Static path, must be
+  // registered before the dynamic ":id" routes below.
+  @Get('targeting-options')
+  getTargetingOptions() {
+    return this.campaignService.getTargetingOptions();
   }
 
   // GET /api/admin/v1/campaigns
@@ -65,18 +83,6 @@ export class CampaignController {
   @Post(':id/launch')
   launch(@Request() req: any, @Param('id') id: string) {
     return this.campaignService.launch(req.user.clinicId, id);
-  }
-
-  // POST /api/admin/v1/campaigns/:id/pause
-  @Post(':id/pause')
-  pause(@Request() req: any, @Param('id') id: string) {
-    return this.campaignService.pause(req.user.clinicId, id);
-  }
-
-  // POST /api/admin/v1/campaigns/:id/resume
-  @Post(':id/resume')
-  resume(@Request() req: any, @Param('id') id: string) {
-    return this.campaignService.resume(req.user.clinicId, id);
   }
 
   // POST /api/admin/v1/campaigns/:id/stop

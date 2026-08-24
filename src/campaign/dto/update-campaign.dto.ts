@@ -5,9 +5,12 @@ import {
   IsDateString,
   IsInt,
   IsPositive,
+  IsBoolean,
   MinLength,
   MaxLength,
   Min,
+  IsArray,
+  Matches,
 } from 'class-validator';
 
 // All fields are optional — only provided fields are updated.
@@ -29,14 +32,28 @@ export class UpdateCampaignDto {
   filterDateTo?: string;
 
   @IsOptional()
-  @IsString()
-  @IsNotEmpty()
-  filterDoctor?: string;
+  @IsArray()
+  @IsString({ each: true })
+  filterDoctors?: string[];
 
   @IsOptional()
-  @IsString()
-  @IsNotEmpty()
-  filterMotif?: string;
+  @IsArray()
+  @IsString({ each: true })
+  filterMotifs?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @Matches(/^[A-Za-z0-9]{1,18}$/, { each: true })
+  filterCinPassports?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @Matches(/^\+\d{8,15}$/, { each: true })
+  filterPhoneNumbers?: string[];
+
+  @IsOptional()
+  @IsBoolean()
+  onlyVerifiedNumbers?: boolean;
 
   @IsOptional()
   @IsString()

@@ -33,6 +33,9 @@ export interface CreateHandoffInput {
   campaignPatientId?: string | null;
   reason?:           string | null;
   language?:         Language | null;
+  // Prior conversation transcript, if one exists (CAMPAIGN handoffs carry the
+  // AI conversation so far; INBOUND has no equivalent transcript to carry).
+  messages?:         { role: string; content: string; timestamp: number }[];
   // Optional extra context shown in the admin alert when available (CAMPAIGN
   // handoffs have this from ClinOps history; INBOUND ones typically don't).
   ageYears?:         number | null;
@@ -68,6 +71,7 @@ export class HandoffService {
         campaignPatientId: input.campaignPatientId ?? null,
         reason:            input.reason ?? null,
         language:          input.language ?? null,
+        messages:          (input.messages ?? []) as any,
       },
     });
 

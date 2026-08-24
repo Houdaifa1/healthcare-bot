@@ -9,13 +9,14 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { PrismaService } from '../prisma/prisma.service';
 import { ClinOpsService } from '../clinops/clinops.service';
-import { ClinOpsPatient } from '../clinops/clinops.types';
+import { ClinOpsPatient, ClinOpsDoctor } from '../clinops/clinops.types';
 import { CreateCampaignDto } from './dto/create-campaign.dto';
 import { UpdateCampaignDto } from './dto/update-campaign.dto';
 import { SessionsService } from '../sessions/sessions.service';
 import { WhatsAppService } from '../whatsapp/whatsapp.service';
+import { HandoffService } from '../handoff/handoff.service';
 import { QUEUES, JOBS } from '../queue/queue.constants';
-import { Campaign, CampaignStatus, CampaignPatientStatus, ConversationOutcome } from '@prisma/client';
+import { Campaign, CampaignStatus, CampaignPatientStatus, ConversationOutcome, BookingSource } from '@prisma/client';
 
 export interface CampaignOutboundJob {
   campaignPatientId: string;
@@ -32,6 +33,7 @@ export class CampaignService {
     private readonly clinops: ClinOpsService,
     private readonly sessionsService: SessionsService,
     private readonly whatsappService: WhatsAppService,
+    private readonly handoffService: HandoffService,
     @InjectQueue(QUEUES.CAMPAIGN_OUTBOUND)
     private readonly outboundQueue: Queue,
   ) { }
@@ -43,7 +45,15 @@ export class CampaignService {
   async create(clinicId: string, dto: CreateCampaignDto): Promise<Campaign> {
     this.validateFilters(dto);
 
-    const campaign = await this.prisma.campaign.create({
+    // Always created as DRAFT, never auto-launched — a campaign send is a
+    // real, irreversible WhatsApp message to real patients, so staff must
+    // explicitly review the matched patient count (GET .../preview) and then
+    // call launch as a separate, deliberate action. scheduledStartAt only
+    // decides what launch() does once called: launch a scheduled campaign
+    // immediately moves it to SCHEDULED and the cron picks it up later;
+    // without one, launch() sends right away — but only once someone
+    // actually clicks Launch.
+    return this.prisma.campaign.create({
       data: {
         clinicId,
         name: dto.name,
@@ -51,8 +61,11 @@ export class CampaignService {
         scheduledStartAt: dto.scheduledStartAt ? new Date(dto.scheduledStartAt) : undefined,
         filterDateFrom: dto.filterDateFrom ? new Date(dto.filterDateFrom) : undefined,
         filterDateTo: dto.filterDateTo ? new Date(dto.filterDateTo) : undefined,
-        filterDoctor: dto.filterDoctor,
-        filterMotif: dto.filterMotif,
+        filterDoctors: dto.filterDoctors ?? [],
+        filterMotifs: dto.filterMotifs ?? [],
+        filterCinPassports: dto.filterCinPassports ?? [],
+        filterPhoneNumbers: dto.filterPhoneNumbers ?? [],
+        onlyVerifiedNumbers: dto.onlyVerifiedNumbers ?? true,
         notificationPhone: dto.notificationPhone,
         delayHours: dto.delayHours,
         reminderCount: dto.reminderCount,
@@ -60,14 +73,6 @@ export class CampaignService {
         aiMaxTurns: dto.aiMaxTurns,
       },
     });
-
-    // "Send now" — no scheduledStartAt, auto-launch immediately
-    if (!dto.scheduledStartAt) {
-      this.logger.log(`Campaign "${campaign.name}" created with "Send now" — auto-launching`);
-      return this.executeLaunch(campaign);
-    }
-
-    return campaign;
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -135,8 +140,9 @@ export class CampaignService {
 
     if (
       dto.name !== undefined || dto.filterDateFrom !== undefined ||
-      dto.filterDateTo !== undefined || dto.filterDoctor !== undefined ||
-      dto.filterMotif !== undefined
+      dto.filterDateTo !== undefined || dto.filterDoctors !== undefined ||
+      dto.filterMotifs !== undefined || dto.filterCinPassports !== undefined ||
+      dto.filterPhoneNumbers !== undefined
     ) {
       this.validateFilters({ ...campaign, ...dto } as any);
     }
@@ -148,8 +154,11 @@ export class CampaignService {
         ...(dto.scheduledStartAt !== undefined && { scheduledStartAt: dto.scheduledStartAt ? new Date(dto.scheduledStartAt) : null }),
         ...(dto.filterDateFrom !== undefined && { filterDateFrom: dto.filterDateFrom ? new Date(dto.filterDateFrom) : null }),
         ...(dto.filterDateTo !== undefined && { filterDateTo: dto.filterDateTo ? new Date(dto.filterDateTo) : null }),
-        ...(dto.filterDoctor !== undefined && { filterDoctor: dto.filterDoctor ?? null }),
-        ...(dto.filterMotif !== undefined && { filterMotif: dto.filterMotif ?? null }),
+        ...(dto.filterDoctors !== undefined && { filterDoctors: dto.filterDoctors ?? [] }),
+        ...(dto.filterMotifs !== undefined && { filterMotifs: dto.filterMotifs ?? [] }),
+        ...(dto.filterCinPassports !== undefined && { filterCinPassports: dto.filterCinPassports ?? [] }),
+        ...(dto.filterPhoneNumbers !== undefined && { filterPhoneNumbers: dto.filterPhoneNumbers ?? [] }),
+        ...(dto.onlyVerifiedNumbers !== undefined && { onlyVerifiedNumbers: dto.onlyVerifiedNumbers }),
         ...(dto.notificationPhone !== undefined && { notificationPhone: dto.notificationPhone ?? null }),
         ...(dto.delayHours !== undefined && { delayHours: dto.delayHours ?? null }),
         ...(dto.reminderCount !== undefined && { reminderCount: dto.reminderCount ?? null }),
@@ -167,6 +176,56 @@ export class CampaignService {
     const campaign = await this.findOneRaw(clinicId, id);
     const patients = await this.fetchPatientsFromClinOps(campaign);
     return { count: patients.length, patients };
+  }
+
+  // Ad-hoc preview, no campaign created yet — lets the creation form show a
+  // live "N patients match" while the admin is still filling in filters,
+  // instead of forcing a create-then-preview round trip.
+  async previewFilters(
+    filters: Pick<CreateCampaignDto,
+      'filterMotifs' | 'filterCinPassports' | 'filterPhoneNumbers' | 'onlyVerifiedNumbers' |
+      'filterDoctors' | 'filterDateFrom' | 'filterDateTo'>,
+  ): Promise<{ count: number; patients: ClinOpsPatient[] }> {
+    this.validateFilters(filters);
+    const patients = await this.matchPatients({
+      filterMotifs: filters.filterMotifs,
+      filterCinPassports: filters.filterCinPassports,
+      filterPhoneNumbers: filters.filterPhoneNumbers,
+      onlyVerifiedNumbers: filters.onlyVerifiedNumbers,
+      filterDoctors: filters.filterDoctors,
+      filterDateFrom: filters.filterDateFrom,
+      filterDateTo: filters.filterDateTo,
+    });
+    return { count: patients.length, patients };
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // TARGETING OPTIONS — exact specialties/doctors from ClinOps for the create-
+  // campaign picker, so staff select from the real list instead of typing
+  // free text. Composed entirely from documented ClinOps endpoints
+  // (getSpeciality + getDoctorsBySpeciality per specialty); no hardcoded list.
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  async getTargetingOptions(): Promise<{
+    specialties: { specialityId: number; specialityLabel: string }[];
+    doctors: (ClinOpsDoctor & { specialityIds: number[] })[];
+  }> {
+    const specialties = await this.clinops.getSpecialities();
+
+    const doctorsById = new Map<number, ClinOpsDoctor & { specialityIds: number[] }>();
+    for (const specialty of specialties) {
+      const doctors = await this.clinops.getDoctorsBySpeciality(specialty.specialityId);
+      for (const doctor of doctors) {
+        const existing = doctorsById.get(doctor.doctorId);
+        if (existing) {
+          existing.specialityIds.push(specialty.specialityId);
+        } else {
+          doctorsById.set(doctor.doctorId, { ...doctor, specialityIds: [specialty.specialityId] });
+        }
+      }
+    }
+
+    return { specialties, doctors: Array.from(doctorsById.values()) };
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -253,80 +312,6 @@ export class CampaignService {
         );
       }
     }
-  }
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // PAUSE
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  async pause(clinicId: string, id: string): Promise<Campaign> {
-    const campaign = await this.findOneRaw(clinicId, id);
-
-    if (campaign.status !== CampaignStatus.RUNNING) {
-      throw new ConflictException(
-        `Campaign "${campaign.name}" is not RUNNING — cannot pause`,
-      );
-    }
-
-    return this.prisma.campaign.update({
-      where: { id },
-      data: { status: CampaignStatus.PAUSED },
-    });
-  }
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // RESUME
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  async resume(clinicId: string, id: string): Promise<Campaign> {
-    const campaign = await this.findOneRaw(clinicId, id);
-
-    if (campaign.status !== CampaignStatus.PAUSED) {
-      throw new ConflictException(
-        `Campaign "${campaign.name}" is not PAUSED — cannot resume`,
-      );
-    }
-
-    await this.prisma.campaign.update({
-      where: { id },
-      data: { status: CampaignStatus.RUNNING },
-    });
-
-    const parkedPatients = await this.prisma.campaignPatient.findMany({
-      where: {
-        campaignId: id,
-        status: CampaignPatientStatus.PARKED,
-      },
-    });
-
-    if (parkedPatients.length === 0) {
-      this.logger.log(`Campaign ${id} resumed — no parked patients to re-queue`);
-      return this.findOneRaw(clinicId, id);
-    }
-
-    const RESUME_DELAY_MS = 60 * 1000;
-
-    for (const patient of parkedPatients) {
-      const jobData: CampaignOutboundJob = {
-        campaignPatientId: patient.id,
-        campaignId: id,
-        clinicId,
-      };
-
-      await this.outboundQueue.add(JOBS.SEND_CAMPAIGN_OUTBOUND, jobData, {
-        delay: RESUME_DELAY_MS,
-        attempts: 3,
-        backoff: { type: 'exponential', delay: 10_000 },
-        removeOnComplete: 50,
-        removeOnFail: 20,
-      });
-    }
-
-    this.logger.log(
-      `Campaign ${id} resumed — re-queued ${parkedPatients.length} parked patients`,
-    );
-
-    return this.findOneRaw(clinicId, id);
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -421,6 +406,13 @@ export class CampaignService {
     });
 
     await this.prisma.bookingRequest.deleteMany({
+      where: { campaignPatient: { campaignId: id } },
+    });
+
+    // Handoff.campaignPatientId has no cascade delete — without this, deleting
+    // a campaign patient that ever had a Handoff row (patient-initiated or
+    // staff take-over) fails on the FK constraint.
+    await this.prisma.handoff.deleteMany({
       where: { campaignPatient: { campaignId: id } },
     });
 
@@ -628,20 +620,61 @@ export class CampaignService {
   }
 
   private async fetchPatientsFromClinOps(campaign: Campaign): Promise<ClinOpsPatient[]> {
-    const filters: Record<string, any> = {};
+    return this.matchPatients({
+      filterMotifs: campaign.filterMotifs,
+      filterCinPassports: campaign.filterCinPassports,
+      filterPhoneNumbers: campaign.filterPhoneNumbers,
+      onlyVerifiedNumbers: campaign.onlyVerifiedNumbers,
+      filterDoctors: campaign.filterDoctors,
+      filterDateFrom: campaign.filterDateFrom ? campaign.filterDateFrom.toISOString().slice(0, 10) : null,
+      filterDateTo: campaign.filterDateTo ? campaign.filterDateTo.toISOString().slice(0, 10) : null,
+    });
+  }
 
-    if (campaign.filterMotif) filters.motif = campaign.filterMotif;
+  // Shared by fetchPatientsFromClinOps (persisted campaign) and
+  // previewFilters (ad-hoc, pre-creation) below.
+  private async matchPatients(filters: {
+    filterMotifs?: string[] | null;
+    filterCinPassports?: string[] | null;
+    filterPhoneNumbers?: string[] | null;
+    onlyVerifiedNumbers?: boolean | null;
+    filterDoctors?: string[] | null;
+    filterDateFrom?: string | null; // YYYY-MM-DD
+    filterDateTo?: string | null;   // YYYY-MM-DD
+  }): Promise<ClinOpsPatient[]> {
+    // At least one of filterMotifs/filterCinPassports/filterPhoneNumbers is
+    // required (enforced in validateFilters) — these mirror the three real
+    // searchPatientsInfos fields exactly (motif, cin_passeport,
+    // numeroTelephone). The API only accepts a single value per field per
+    // call, so each entry gets its own call, merged and de-duplicated by
+    // patient_id. filterDoctors/filterDateFrom/filterDateTo narrow the result
+    // locally afterward — the API has no doctor parameter, and its date
+    // filter is a single exact day, not a range, so a range can't be pushed
+    // server-side either.
+    const onlyVerified = filters.onlyVerifiedNumbers ?? true;
+    const patientsById = new Map<number, ClinOpsPatient>();
 
-    filters.OnlyVerifiedNumbers = true;
+    for (const motif of filters.filterMotifs ?? []) {
+      const matched = await this.clinops.searchPatients({ motif, OnlyVerifiedNumbers: onlyVerified });
+      for (const patient of matched) patientsById.set(patient.patient_id, patient);
+    }
+    for (const cin_passeport of filters.filterCinPassports ?? []) {
+      const matched = await this.clinops.searchPatients({ cin_passeport, OnlyVerifiedNumbers: onlyVerified });
+      for (const patient of matched) patientsById.set(patient.patient_id, patient);
+    }
+    for (const numeroTelephone of filters.filterPhoneNumbers ?? []) {
+      const matched = await this.clinops.searchPatients({ numeroTelephone, OnlyVerifiedNumbers: onlyVerified });
+      for (const patient of matched) patientsById.set(patient.patient_id, patient);
+    }
 
-    let patients = await this.clinops.searchPatients(filters);
+    let patients = Array.from(patientsById.values());
 
-    if (campaign.filterDateFrom || campaign.filterDateTo) {
-      const fromTs = campaign.filterDateFrom
-        ? new Date(campaign.filterDateFrom).setHours(0, 0, 0, 0)
+    if (filters.filterDateFrom || filters.filterDateTo) {
+      const fromTs = filters.filterDateFrom
+        ? new Date(filters.filterDateFrom).setHours(0, 0, 0, 0)
         : 0;
-      const toTs = campaign.filterDateTo
-        ? new Date(campaign.filterDateTo).setHours(23, 59, 59, 999)
+      const toTs = filters.filterDateTo
+        ? new Date(filters.filterDateTo).setHours(23, 59, 59, 999)
         : Infinity;
 
       patients = patients.filter((p) => {
@@ -650,11 +683,9 @@ export class CampaignService {
       });
     }
 
-    if (campaign.filterDoctor) {
-      const doctorLower = campaign.filterDoctor.toLowerCase();
-      patients = patients.filter(
-        (p) => p.medecin_traitant.toLowerCase().includes(doctorLower),
-      );
+    if (filters.filterDoctors?.length) {
+      const doctorSet = new Set(filters.filterDoctors.map((d) => d.toLowerCase()));
+      patients = patients.filter((p) => doctorSet.has(p.medecin_traitant.toLowerCase()));
     }
 
     return patients;
@@ -690,8 +721,17 @@ export class CampaignService {
     const normalizedPhone = patient.phone.replace(/^\+/, '').replace(/\s/g, '');
     const redisSession = await this.sessionsService.getCampaignSession(normalizedPhone);
 
+    // Redis holds the live transcript while a turn is in flight; Postgres is
+    // only caught up once the turn ends. Prefer whichever is further ahead so
+    // the dashboard shows messages as they happen, and never fewer than the
+    // persisted history (a stale//recreated session must not hide messages).
+    const dbMessages = (patient.messages as any[]) ?? [];
+    const liveMessages = redisSession?.messages ?? [];
+    const messages = liveMessages.length > dbMessages.length ? liveMessages : dbMessages;
+
     return {
       ...patient,
+      messages,
       sessionStatus: redisSession?.status ?? null,
     };
   }
@@ -779,6 +819,27 @@ export class CampaignService {
       data: { completedCount: { increment: 1 } },
     });
 
+    // Staff-initiated take-over (patient never asked for a human) still needs
+    // a Handoff row — the "Sessions en direct" dashboard page reads only from
+    // the Handoff table, not from CampaignPatient/Redis session state. Without
+    // this, clicking "take over" navigates staff to a live-session view with
+    // nothing in it.
+    await this.handoffService.createHandoff({
+      clinicId,
+      source: BookingSource.CAMPAIGN,
+      phone: normalizedPhone,
+      patientName: patient.patientName,
+      campaignPatientId: patient.id,
+      reason: 'Staff take-over',
+      language: patient.language,
+      messages: (patient.messages as any[]) ?? [],
+      ageYears: patient.ageYears,
+      ville: patient.ville,
+      visitDate: patient.visitDate,
+      prestation: patient.prestation,
+      medecinTraitant: patient.medecinTraitant,
+    });
+
     return { success: true, patientId, status: 'admin_handling' };
   }
 
@@ -786,11 +847,17 @@ export class CampaignService {
   // PRIVATE HELPERS
   // ═══════════════════════════════════════════════════════════════════════════
   private validateFilters(
-    dto: Pick<CreateCampaignDto, 'filterDateFrom' | 'filterDateTo' | 'filterDoctor' | 'filterMotif'>,
+    dto: Pick<CreateCampaignDto,
+      'filterDateFrom' | 'filterDateTo' | 'filterDoctors' |
+      'filterMotifs' | 'filterCinPassports' | 'filterPhoneNumbers'>,
   ): void {
-    if (!dto.filterDateFrom && !dto.filterDateTo && !dto.filterDoctor && !dto.filterMotif) {
+    // searchPatientsInfos requires at least one of motif, cin_passeport, or
+    // numeroTelephone — mirrored exactly here. See the comment on
+    // CreateCampaignDto for why these three (and only these three) can match
+    // patients server-side.
+    if (!dto.filterMotifs?.length && !dto.filterCinPassports?.length && !dto.filterPhoneNumbers?.length) {
       throw new BadRequestException(
-        'At least one filter is required (filterDateFrom, filterDateTo, filterDoctor, or filterMotif)',
+        'At least one of filterMotifs, filterCinPassports, or filterPhoneNumbers is required — the ClinOps API has no way to list patients without one of these',
       );
     }
 

@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { Session, SessionState } from '../../sessions/sessions.service';
 import { WhatsAppService } from '../../whatsapp/whatsapp.service';
 import { SessionsService } from '../../sessions/sessions.service';
@@ -15,8 +15,6 @@ const SECTION_TITLE_MAX = 24;
 
 @Injectable()
 export class TimeHandler {
-  private readonly logger = new Logger(TimeHandler.name);
-
   constructor(
     private readonly whatsappService: WhatsAppService,
     private readonly sessionsService: SessionsService,

@@ -1,66 +1,10 @@
 import { Injectable, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Appointment, AppointmentStatus } from '@prisma/client';
-import { CreateAppointmentDto } from './dto/create-appointment.dto';
 
 @Injectable()
 export class AppointmentsService {
   constructor(private prisma: PrismaService) {}
-
-  async createAppointment(
-  clinicId: string,
-  dto: CreateAppointmentDto,
-): Promise<Appointment> {
-  const { doctorId, specialtyId, appointmentDate, appointmentTime } = dto;
-
-  const doctor = await this.prisma.doctor.findFirst({
-    where: { id: doctorId, clinicId },
-    select: { id: true, name: true, specialtyId: true },
-  });
-
-  if (!doctor) {
-    throw new Error('Doctor not found in this clinic');
-  }
-
-  const specialty = await this.prisma.specialty.findFirst({
-    where: { id: specialtyId, clinicId },
-  });
-
-  if (!specialty) {
-    throw new Error('Specialty not found in this clinic');
-  }
-
-  if (doctor.specialtyId !== specialtyId) {
-    throw new Error('Doctor does not belong to this specialty');
-  }
-
-  const date = new Date(appointmentDate);
-
-  const existing = await this.prisma.appointment.findFirst({
-    where: {
-      clinicId,
-      doctorId,
-      appointmentDate: date,
-      appointmentTime,
-      status: {
-        in: ['PENDING', 'CONFIRMED'],
-      },
-    },
-  });
-
-  if (existing) {
-    throw new ConflictException('Appointment slot already booked');
-  }
-
-  return this.prisma.appointment.create({
-    data: {
-      ...dto,
-      clinicId,
-      appointmentDate: date,
-      doctorName: doctor.name, // Preserve doctor name for records
-    },
-  });
-}
 
   async findByClinic(
   clinicId: string,
@@ -78,10 +22,6 @@ export class AppointmentsService {
       ...(filters.status && {
         status: filters.status,
       }),
-    },
-    include: {
-      doctor: true,
-      specialty: true,
     },
     orderBy: {
       appointmentDate: 'asc',

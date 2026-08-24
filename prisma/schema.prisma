@@ -27,8 +27,6 @@ model Clinic {
   createdAt              DateTime     @default(now())
   updatedAt              DateTime     @updatedAt
 
-  specialties            Specialty[]
-  doctors                Doctor[]
   botMessages            BotMessage[]
   faqs                   FAQ[]
   appointments           Appointment[]
@@ -51,53 +49,14 @@ model BotMessage {
 }
 
 // ─── Specialties ─────────────────────────────────────────────────────────────
-model Specialty {
-  id           String        @id @default(cuid())
-  clinicId     String
-  labels       Json
-  slug         String
-  isActive     Boolean       @default(true)
-  displayOrder Int           @default(0)
-  createdAt    DateTime      @default(now())
-  clinic       Clinic        @relation(fields: [clinicId], references: [id])
-  doctors      Doctor[]
-  appointments Appointment[]
-
-  @@unique([clinicId, slug])
-}
-
-// ─── Doctors ─────────────────────────────────────────────────────────────────
-model Doctor {
-  id           String        @id @default(cuid())
-  clinicId     String
-  specialtyId  String?
-  name         String
-  bio          String?
-  isActive     Boolean       @default(true)
-  displayOrder Int           @default(0)
-  createdAt    DateTime      @default(now())
-  clinic       Clinic        @relation(fields: [clinicId], references: [id])
-  specialty    Specialty?    @relation(fields: [specialtyId], references: [id], onDelete: SetNull)
-  timeSlots    TimeSlot[]
-  appointments Appointment[]
-}
-
-// ─── Availability ─────────────────────────────────────────────────────────────
-model TimeSlot {
-  id                  String  @id @default(cuid())
-  doctorId            String
-  dayOfWeek           Int
-  startTime           String
-  endTime             String
-  slotDurationMinutes Int     @default(30)
-  isActive            Boolean @default(true)
-  doctor              Doctor  @relation(fields: [doctorId], references: [id])
-}
-
 // ─── Appointments ─────────────────────────────────────────────────────────────
 model Appointment {
   id              String            @id @default(cuid())
   clinicId        String
+  // No FK to a local Doctor/Specialty table — those don't exist. doctorId/
+  // specialtyId hold the ClinOps identity (or are null pending a live-mode
+  // mapping — see booking-requests.service.ts); doctorName/specialtyName are
+  // the durable, always-populated display record.
   doctorId        String?
   specialtyId     String?
   patientName     String
@@ -112,8 +71,6 @@ model Appointment {
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt
   clinic          Clinic            @relation(fields: [clinicId], references: [id])
-  doctor          Doctor?           @relation(fields: [doctorId], references: [id])
-  specialty       Specialty?        @relation(fields: [specialtyId], references: [id])
 
   bookingRequest  BookingRequest?
 }

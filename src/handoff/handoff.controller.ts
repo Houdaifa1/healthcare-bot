@@ -4,8 +4,6 @@ import {
 import { HandoffService } from './handoff.service';
 import { HandoffEventsService } from './handoff.events';
 import { JwtAuthGuard } from '../admin/auth/jwt-auth.guard';
-import { CurrentUser } from '../common/decorators/current-user.decorator';
-import type { AuthUser } from '../common/types/auth-user.type';
 import { IsString, IsNotEmpty, MinLength } from 'class-validator';
 import type { Request, Response } from 'express';
 
@@ -57,7 +55,7 @@ export class HandoffController {
 
   @UseGuards(JwtAuthGuard)
   @Get()
-  async getHandoffSessions(@CurrentUser() user: AuthUser) {
+  async getHandoffSessions() {
     return this.handoffService.getHandoffSessions();
   }
 

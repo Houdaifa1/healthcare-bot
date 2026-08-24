@@ -10,9 +10,6 @@ import { WhatsAppModule } from '../whatsapp/whatsapp.module';
 import { ClinicModule } from './clinic/clinic.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import { BotMessagesModule } from './bot-messages/bot-messages.module';
-import { SpecialtiesModule } from './specialties/specialties.module';
-import { DoctorsModule } from './doctors/doctors.module';
-import { TimeSlotsModule } from './timeslots/timeslots.module';
 import { FaqsModule } from './faqs/faqs.module';
 
 @Module({
@@ -30,9 +27,6 @@ import { FaqsModule } from './faqs/faqs.module';
     }),
     ClinicModule,
     BotMessagesModule,
-    SpecialtiesModule,
-    DoctorsModule,
-    TimeSlotsModule,
     FaqsModule,
   ],
   controllers: [AdminController],

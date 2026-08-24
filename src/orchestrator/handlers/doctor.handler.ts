@@ -8,7 +8,6 @@ import { MessageKey } from '@prisma/client';
 import { DoctorService } from '../../bot-content/doctor.service';
 import { ClinOpsDoctor } from '../../clinops/clinops.types';
 import { SpecialtyHandler } from './specialty.handler';
-import { WelcomeMenuService } from '../../bot-content/welcome-menu.service';
 import { BookingNavigationHelper } from './booking-navigation.helper';
 import { resolveByIdOrIndex } from './resolve-by-id-or-index.util';
 import { formatDateButtonLabel } from './date-format.util';
@@ -22,7 +21,6 @@ export class DoctorHandler {
     private readonly botMessageService: BotMessageService,
     private readonly doctorService: DoctorService,
     private readonly specialtyHandler: SpecialtyHandler,
-    private readonly welcomeMenuService: WelcomeMenuService,
     private readonly nav: BookingNavigationHelper,
   ) { }
 

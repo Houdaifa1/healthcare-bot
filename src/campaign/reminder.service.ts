@@ -150,7 +150,7 @@ export class ReminderService {
     reminderCount: number,
   ): Promise<void> {
     if (patient.remindersSent < reminderCount) {
-      await this.sendReminder(patient, clinicId, campaignId);
+      await this.sendReminder(patient, clinicId);
     } else {
       await this.markNoResponse(patient, campaignId);
     }
@@ -170,7 +170,6 @@ export class ReminderService {
       language:      Language | null;
     },
     clinicId:   string,
-    campaignId: string,
   ): Promise<void> {
     const language  = patient.language ?? Language.FR;
     const visitDate = new Date(patient.visitDate).toLocaleDateString('fr-FR');

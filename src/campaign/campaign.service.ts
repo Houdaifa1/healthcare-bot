@@ -532,78 +532,6 @@ export class CampaignService {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // AGENT SEND MESSAGE (handoff / live session)
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  async sendPatientMessage(clinicId: string, campaignId: string, patientId: string, message: string) {
-    const patient = await this.prisma.campaignPatient.findFirst({
-      where: { id: patientId, campaignId, clinicId },
-    });
-
-    if (!patient) {
-      throw new NotFoundException(`Patient ${patientId} not found in campaign ${campaignId}`);
-    }
-
-    const normalizedPhone = patient.phone.replace(/^\+/, '').replace(/\s/g, '');
-    const session = await this.sessionsService.getCampaignSession(normalizedPhone);
-    if (!session) {
-      throw new NotFoundException(`No active session found for patient ${patientId}. The conversation may have already ended.`);
-    }
-
-    await this.whatsappService.sendText(patient.phone, message);
-
-    const staffMsg = {
-      role: 'assistant' as const,
-      content: message,
-      timestamp: Date.now(),
-    };
-
-    session.messages.push(staffMsg);
-    session.phone = normalizedPhone;
-    await this.sessionsService.saveCampaignSession(session);
-
-    await this.prisma.campaignPatient.update({
-      where: { id: patientId },
-      data: { messages: session.messages as any },
-    }).catch(() => { });
-
-    return { success: true };
-  }
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // RESOLVE HANDOFF / LIVE SESSION
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  async resolveConversation(clinicId: string, campaignId: string, patientId: string) {
-    const patient = await this.prisma.campaignPatient.findFirst({
-      where: { id: patientId, campaignId, clinicId },
-    });
-
-    if (!patient) {
-      throw new NotFoundException(`Patient ${patientId} not found in campaign ${campaignId}`);
-    }
-
-    await this.prisma.campaignPatient.update({
-      where: { id: patientId },
-      data: {
-        status: CampaignPatientStatus.COMPLETED,
-        outcome: ConversationOutcome.HANDED_OFF,
-        completedAt: new Date(),
-      },
-    });
-
-    await this.prisma.campaign.update({
-      where: { id: campaignId },
-      data: { completedCount: { increment: 1 } },
-    });
-
-    const normalizedPhone = patient.phone.replace(/^\+/, '').replace(/\s/g, '');
-    await this.sessionsService.deleteCampaignSession(normalizedPhone);
-
-    return { success: true };
-  }
-
-  // ═══════════════════════════════════════════════════════════════════════════
   // PRIVATE HELPERS
   // ═══════════════════════════════════════════════════════════════════════════
 
@@ -734,39 +662,6 @@ export class CampaignService {
       messages,
       sessionStatus: redisSession?.status ?? null,
     };
-  }
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // CLOSE / FORCE-END A PATIENT CONVERSATION
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  async closePatientConversation(clinicId: string, campaignId: string, patientId: string) {
-    const patient = await this.prisma.campaignPatient.findFirst({
-      where: { id: patientId, campaignId, clinicId },
-      include: { campaign: true },
-    });
-
-    if (!patient) {
-      throw new NotFoundException(`Patient ${patientId} not found in campaign ${campaignId}`);
-    }
-
-    await this.prisma.campaignPatient.update({
-      where: { id: patientId },
-      data: {
-        status: CampaignPatientStatus.COMPLETED,
-        outcome: ConversationOutcome.COMPLETED,
-        completedAt: new Date(),
-      },
-    });
-
-    await this.prisma.campaign.update({
-      where: { id: campaignId },
-      data: { completedCount: { increment: 1 } },
-    });
-
-    await this.sessionsService.deleteCampaignSession(patient.phone);
-
-    return { success: true, patientId, outcome: ConversationOutcome.COMPLETED };
   }
 
   // ═══════════════════════════════════════════════════════════════════════════

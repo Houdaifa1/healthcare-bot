@@ -210,54 +210,18 @@ export class BookingRequestsService {
       throw new BadRequestException('appointmentDate cannot be in the past');
     }
 
-    // ── Resolve doctor/specialty by name where possible ──────────────────
-    // Campaign booking requests capture free-text doctor/specialty names (the AI
-    // records what the patient said), so there is no guaranteed internal id. Try
-    // to resolve to a real Doctor record to enable conflict checking and to link
-    // the appointment back to the doctor for reporting.
-    let doctorId: string | null = null;
-    let specialtyId: string | null = null;
+    // No local Doctor/Specialty table exists to resolve preferredDoctor
+    // against — doctors and specialties only exist via ClinOps, and
+    // BookingRequest doesn't carry a ClinOps doctor id (only the free-text
+    // name the patient/AI captured). So doctorId/specialtyId on the created
+    // Appointment stay null; doctorName/specialtyName (below) are the durable
+    // record. A same-doctor-same-slot conflict check would need a real
+    // ClinOps doctor id to compare against, which isn't available here.
+    const doctorId: string | null = null;
+    const specialtyId: string | null = null;
 
-    if (bookingRequest.preferredDoctor) {
-      const doctor = await this.prisma.doctor.findFirst({
-        where: {
-          clinicId,
-          name: { equals: bookingRequest.preferredDoctor, mode: 'insensitive' },
-        },
-      });
-      if (doctor) {
-        doctorId = doctor.id;
-        specialtyId = doctor.specialtyId;
-      } else {
-        this.logger.warn(
-          `Could not resolve doctor "${bookingRequest.preferredDoctor}" to a Doctor record — creating appointment without doctorId`,
-        );
-      }
-    }
-
-    // ── Conflict check ───────────────────────────────────────────────────
-    // Guard against double-booking the same doctor/time. This only fires when a
-    // doctor could be resolved; otherwise staff review the dashboard anyway.
-    if (doctorId) {
-      const conflicting = await this.prisma.appointment.findFirst({
-        where: {
-          clinicId,
-          doctorId,
-          appointmentDate,
-          appointmentTime: appointmentTimeInput,
-          status: { in: [AppointmentStatus.PENDING, AppointmentStatus.CONFIRMED] },
-        },
-      });
-
-      if (conflicting) {
-        throw new ConflictException(
-          `The selected slot (${appointmentDateInput} ${appointmentTimeInput}) is already booked for this doctor`,
-        );
-      }
-    }
-
-    // Create Appointment with resolved ids where possible, preserving the
-    // ClinOps text fields (doctorName/specialtyName) for the record.
+    // Create Appointment, preserving the ClinOps text fields (doctorName/
+    // specialtyName) for the record.
     const appointment = await this.prisma.appointment.create({
       data: {
         clinicId,

@@ -1,10 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { SessionsService, CampaignSession, CampaignMessage } from '../sessions/sessions.service';
+import { SessionsService, CampaignSession } from '../sessions/sessions.service';
 import { WhatsAppService } from '../whatsapp/whatsapp.service';
 import { HandoffService } from '../handoff/handoff.service';
 import { OllamaProvider } from './providers/ollama.provider';
-import { AIMessage, AIInputMessage, AIToolDefinition, AITextBlock, AIToolUseBlock } from './providers/ai-response.types';
+import { AIMessage, AIToolDefinition, AITextBlock, AIToolUseBlock } from './providers/ai-response.types';
 import {
   AppointmentStatus,
   CampaignPatientStatus,
@@ -413,7 +413,7 @@ export class ConversationService {
 
       const rawTextReply = textBlocks.map(b => b.text).join(' ').trim();
 
-      const textReply = this.sanitizeTextReply(rawTextReply, phone, toolUseBlocks.length > 0, session.language);
+      const textReply = this.sanitizeTextReply(rawTextReply, phone, session.language);
 
       const sendTextOnce = async () => {
         if (textSent || !textReply) return;
@@ -961,7 +961,7 @@ Current turn: ${session.turnCount + 1}`;
   /**
    * PRODUCTION GUARDRAIL: Sanitizes the AI response before it ever reaches WhatsApp.
    */
-  private sanitizeTextReply(raw: string, phone: string, hadToolUseBlocks: boolean, language: Language | null): string {
+  private sanitizeTextReply(raw: string, phone: string, language: Language | null): string {
     if (!raw) return raw;
 
     // 1. Check for tool leak patterns — broadened set, see TOOL_LEAK_PATTERNS above.

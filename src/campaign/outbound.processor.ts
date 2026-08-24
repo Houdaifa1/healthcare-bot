@@ -155,7 +155,17 @@ export class OutboundProcessor extends WorkerHost {
     // Normalise phone to match WhatsApp webhook format (no '+' prefix)
     const normalisedPhone = campaignPatient.phone.replace(/^\+/, '').replace(/\s/g, '');
 
-    const openingText = `Bonjour ${campaignPatient.patientName}, nous faisons suite à votre visite du ${visitDate}. Comment vous sentez-vous depuis ?`;
+    // The actual WhatsApp message is the Meta-approved template above — its
+    // wording lives in Meta Business Manager and can't come from our DB. This
+    // is only the local echo of that message: what the dashboard shows in the
+    // conversation history and what the AI treats as its own prior turn, so
+    // it should still reflect the DB-editable, clinic-language CAMPAIGN_OPENING_MESSAGE
+    // rather than being hardcoded French regardless of the clinic's language.
+    const openingTemplate = await this.fetchBotMessage(clinicId, MessageKey.CAMPAIGN_OPENING_MESSAGE, language)
+      ?? 'Bonjour {{name}}, nous faisons suite à votre visite du {{visitDate}}. Comment vous sentez-vous depuis ?';
+    const openingText = openingTemplate
+      .replace(/\{\{name\}\}/g, campaignPatient.patientName)
+      .replace(/\{\{visitDate\}\}/g, visitDate);
 
     const session: CampaignSession = {
       phone:             normalisedPhone,

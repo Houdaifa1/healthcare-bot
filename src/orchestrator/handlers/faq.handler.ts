@@ -8,6 +8,10 @@ import { MessageKey } from '@prisma/client';
 import { AiService, Intent } from '../../ai/ai.service';
 import { WelcomeMenuService } from '../../bot-content/welcome-menu.service';
 
+// Meta's interactive-list limit: a section holds at most 10 rows and silently
+// drops the rest, so longer FAQ lists are chunked across sections.
+const META_MAX_ROWS_PER_SECTION = 10;
+
 @Injectable()
 export class FaqHandler {
   constructor(
@@ -47,24 +51,36 @@ export class FaqHandler {
       this.botMessageService.getSafe(clinicId, MessageKey.HEADER_SELECT_FAQ, {}, lang, 'View questions'),
     ]);
 
-    // Split FAQs into sections of max 10 rows (Meta limit)
+    // Meta caps a row title at 24 chars, which truncates most real questions.
+    // The description field holds another 72 chars and was going unused, so
+    // the numbered title acts as the label and the description carries the
+    // question in full.
     const rows = faqs.map((f, i) => ({
       id: `faq_${i + 1}`,
-      title: f.question.length > 24 ? f.question.substring(0, 21) + '...' : f.question,
-      description: undefined,
+      title: `${i + 1}. ${f.question}`,
+      description: f.question,
     }));
+
+    // Meta also caps a section at 10 rows and silently drops the rest, so the
+    // rows are chunked across sections — same approach TimeHandler uses.
+    const sections: { title: string; rows: typeof rows }[] = [];
+    const totalPages = Math.ceil(rows.length / META_MAX_ROWS_PER_SECTION);
+
+    for (let i = 0; i < rows.length; i += META_MAX_ROWS_PER_SECTION) {
+      const chunk = rows.slice(i, i + META_MAX_ROWS_PER_SECTION);
+      const pageNum = Math.floor(i / META_MAX_ROWS_PER_SECTION) + 1;
+      sections.push({
+        title: totalPages > 1 ? `P${pageNum}/${totalPages}` : header.slice(0, 24),
+        rows: chunk,
+      });
+    }
 
     await this.whatsappService.sendInteractiveList(
       phone,
       header,
       body,
       buttonLabel,
-      [
-        {
-          title: header.slice(0, 24),
-          rows,
-        },
-      ],
+      sections,
     );
   }
 

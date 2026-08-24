@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { BotMessage, Language, MessageKey } from '@prisma/client';
 import { UpdateBotMessageDto } from './dto/update-bot-message.dto';

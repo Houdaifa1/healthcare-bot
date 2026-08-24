@@ -5,17 +5,13 @@ import {
   HttpCode,
   HttpStatus,
   Body,
-  UseGuards,
 } from '@nestjs/common';
-import { AdminService } from './admin.service';
 import { AuthService } from './auth/auth.service';
-import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { LoginDto } from './dto';
 
 @Controller('api/admin/v1')
 export class AdminController {
   constructor(
-    private adminService: AdminService,
     private authService: AuthService,
   ) {}
 
@@ -32,13 +28,5 @@ export class AdminController {
   @Get('health')
   health() {
     return { status: 'ok', timestamp: new Date().toISOString() };
-  }
-
-  // ─── Dashboard ────────────────────────────────────────
-  // GET /api/admin/v1/stats
-  @Get('stats')
-  @UseGuards(JwtAuthGuard)
-  getStats() {
-    return this.adminService.getStats();
   }
 }

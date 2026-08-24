@@ -1,17 +1,22 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
-import configuration from './config/configuration';
-import { PrismaModule } from './prisma/prisma.module';
-import { WhatsAppModule } from './whatsapp/whatsapp.module';
-import { QueueModule } from './queue/queue.module';
-import { SessionsModule } from './sessions/sessions.module';
-import { OrchestratorModule } from './orchestrator/orchestrator.module';
-import { AdminModule } from './admin/admin.module';
-import { ClinOpsModule } from './clinops/clinops.module';
-import { CampaignModule } from './campaign/campaign.module';
-import { ComplaintsModule } from './complaints/complaints.module';
-import { BookingRequestsModule } from './booking-requests/booking-requests.module';
+import configuration from '@platform/config/configuration';
+import { PrismaModule } from '@platform/database/prisma.module';
+import { SessionsModule } from '@platform/cache/sessions.module';
+import { QueueModule } from '@platform/queue/queue.module';
+import { AuthModule } from '@platform/auth/auth.module';
+import { WhatsAppModule } from '@integrations/whatsapp/whatsapp.module';
+import { ClinOpsModule } from '@integrations/clinops/clinops.module';
+import { ClinicModule } from '@operations/clinic/clinic.module';
+import { BotMessagesModule } from '@operations/clinic/bot-messages/bot-messages.module';
+import { FaqsModule } from '@operations/clinic/faqs/faqs.module';
+import { CampaignModule } from '@operations/campaigns/campaign.module';
+import { ComplaintsModule } from '@operations/complaints/complaints.module';
+import { BookingRequestsModule } from '@operations/bookings/booking-requests.module';
+import { OrchestratorModule } from '@conversation/inbound/orchestrator.module';
+import { InboundModule } from '@conversation/inbound/inbound.module';
+import { OutboundModule } from '@conversation/outbound/outbound.module';
 
 @Module({
   imports: [
@@ -21,16 +26,29 @@ import { BookingRequestsModule } from './booking-requests/booking-requests.modul
       envFilePath: '.env',
     }),
     ScheduleModule.forRoot(),
+
+    // ── platform ──
     PrismaModule,
     SessionsModule,
-    OrchestratorModule,
     QueueModule,
+    AuthModule,
+
+    // ── integrations ──
     WhatsAppModule,
-    AdminModule,
     ClinOpsModule,
+
+    // ── operations ──
+    ClinicModule,
+    BotMessagesModule,
+    FaqsModule,
     CampaignModule,
     ComplaintsModule,
     BookingRequestsModule,
+
+    // ── conversation ──
+    OrchestratorModule,
+    InboundModule,
+    OutboundModule,
   ],
 })
 export class AppModule {}

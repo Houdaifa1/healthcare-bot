@@ -38,6 +38,23 @@ jobs:
           cp -f "$CREDS_SOURCE" cloudflared/creds.json
           echo "✅ Copied cloudflared/creds.json"
 
+      # Gates the deploy on the four-layer import rule (see eslint.boundaries.mjs).
+      # Runs `lint:boundaries`, never `lint` — the latter carries ~1100 pre-existing
+      # prettier/type-safety errors and runs --fix, so it can neither pass nor be
+      # trusted to leave the tree alone. This config reports layering violations only.
+      - name: Enforce layer boundaries
+        run: |
+          if ! command -v node >/dev/null 2>&1; then
+            echo "❌ node not found on the runner PATH."
+            echo "   This runner resolves node through ~/actions-runner/.path, which pins"
+            echo "   one specific nvm version directory. If node was upgraded or removed"
+            echo "   via nvm, refresh that file (or install node system-wide) and retry."
+            exit 1
+          fi
+          echo "node $(node -v) / npm $(npm -v)"
+          npm ci --no-audit --no-fund
+          npm run lint:boundaries
+
       - name: Build backend image (classic builder, bypass compose)
         run: DOCKER_BUILDKIT=0 docker build -t healthcare-bot-backend:latest .
 
@@ -58,7 +75,7 @@ jobs:
         run: docker compose run --rm backend sh -c "npx prisma migrate deploy"
 
       - name: Seed database
-        run: docker compose run --rm backend sh -c "node dist/src/prisma/seed.js"
+        run: docker compose run --rm backend sh -c "node dist/src/platform/database/seed.js"
 
       - name: Deploy backend + tunnel
         run: docker compose up -d backend cloudflared

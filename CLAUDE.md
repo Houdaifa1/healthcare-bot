@@ -2,6 +2,46 @@
 
 WhatsApp-based clinic assistant bot.
 
+## Architecture — four layers, one direction
+
+`src/` is organised into four strictly-ordered layers. **A layer may import
+only from layers above it in this list.** That single rule is the architecture;
+the folders exist to make breaking it visible.
+
+```
+platform/      LAYER 1 — imports nothing
+               config · database · cache · queue · auth · shared
+integrations/  LAYER 2 — imports platform
+               whatsapp · clinops · llm
+operations/    LAYER 3 — imports platform, integrations
+               campaigns · bookings · complaints · handoff · clinic
+conversation/  LAYER 4 — imports all of the above
+               inbound · outbound · content · nlu
+```
+
+- **Import across layers with the path aliases**, never deep relative paths:
+  `@platform/*`, `@integrations/*`, `@operations/*`, `@conversation/*`.
+  Relative imports are fine *within* a directory. The Nest CLI rewrites these
+  aliases to relative paths at build time — no runtime loader is involved.
+- There is **no `admin/` folder**. A domain owns its own staff-facing
+  controller, next to the service and DTOs it uses. Auth is the exception and
+  lives in `platform/auth`, because it's a mechanism, not a domain.
+- **`SessionsService` is in `platform/cache`**, not `conversation/`. It reads
+  as conversation state but is mechanically a Redis store with TTLs, and both
+  `operations` and `conversation` use it. Anywhere else it forces a two-way
+  dependency between topics.
+- **Queues split producer from consumer.** `platform/queue` owns the BullMQ
+  connection, the queue registrations and the job payload types
+  (`queue.types.ts`) — and no processors. The workers live with the domain
+  they serve: `conversation/inbound` (MESSAGES) and `conversation/outbound`
+  (CAMPAIGN_OUTBOUND). If you add a queue, register it in `platform/queue` and
+  put its payload type there too, so producer and consumer both import it
+  downward.
+- **Campaigns deliberately span two layers.** Management (CRUD, launch/stop,
+  targeting — staff-triggered over REST) is `operations/campaigns`. The AI turn
+  loop, opening-message worker and reminder cron (queue-triggered) are
+  `conversation/outbound`. They communicate only through BullMQ.
+
 ## Stack
 
 - **NestJS** (TypeScript) — application framework
@@ -10,10 +50,10 @@ WhatsApp-based clinic assistant bot.
 - **Meta WhatsApp Cloud API** — messaging channel
 - **Ollama, local only — no public/cloud AI API anywhere in this system.**
   Two separate local models, two separate call paths:
-  - Outbound/campaign conversation: `src/campaign/providers/ollama.provider.ts`,
+  - Outbound/campaign conversation: `src/integrations/llm/ollama.provider.ts`,
     model from `OLLAMA_MODEL` (default `mistral-small3.1:24b`), full tool-calling
     conversation with grammar-constrained JSON output.
-  - Inbound intent/language/FAQ classification: `src/ai/ai.service.ts`, model
+  - Inbound intent/language/FAQ classification: `src/conversation/nlu/intent-classifier.service.ts`, model
     from `OLLAMA_CLASSIFIER_MODEL` (default `healthcare-bot:latest`, a smaller/
     faster model chosen because the message queue processes one job at a time —
     a slow classifier call blocks every patient, not just one). Same
@@ -23,13 +63,13 @@ WhatsApp-based clinic assistant bot.
 
 ## ClinOps — external clinic data API
 
-`src/clinops/clinops.service.ts` (`ClinOpsService`) is the **single data layer**
+`src/integrations/clinops/clinops.service.ts` (`ClinOpsService`) is the **single data layer**
 for everything related to doctors, specialties, availability, patients, and
 bookings. All other modules go through it — nothing talks to the external API
 or mock data directly.
 
 - **Mock/live toggle**: `CLINOPS_MODE=mock|live` (config key `clinops.mode`).
-  Mock mode reads static JSON fixtures from `src/clinops/data/`. Live mode
+  Mock mode reads static JSON fixtures from `src/integrations/clinops/data/`. Live mode
   currently throws `NotImplementedException` everywhere — it has not been
   wired up to the real HTTP API yet.
 - **Source of truth for the real API**: `documentation_api_externe_concise.html`
@@ -42,7 +82,7 @@ or mock data directly.
   code must match that documentation exactly. No renaming, no workarounds, no
   guessing at undocumented fields. If something needed isn't covered by the
   doc, ask — don't invent it.
-- **`src/clinops/clinops.types.ts`** defines the exact API shapes
+- **`src/integrations/clinops/clinops.types.ts`** defines the exact API shapes
   (`ClinOpsPatient`, `ClinOpsDoctor`, `ClinOpsSpecialty`, `ClinOpsTimeSlot`,
   `ClinOpsSearchFilters`, `ClinOpsCreateRDVRequest`, etc.). These field names
   must **never** be renamed — they map 1-to-1 to the real API. Mock-only
@@ -71,23 +111,23 @@ share one system, not two:
   (also tagged with `source`). `BookingRequest.campaignPatientId` is optional
   — inbound requests carry patient identity directly on the row
   (`patientName`/`patientPhone`) instead, since there's no `CampaignPatient`
-  for a walk-in WhatsApp patient. `src/orchestrator/handlers/confirm.handler.ts`
-  creates the inbound side; `src/booking-requests/booking-requests.service.ts`
+  for a walk-in WhatsApp patient. `src/conversation/inbound/handlers/confirm.handler.ts`
+  creates the inbound side; `src/operations/bookings/booking-requests.service.ts`
   handles confirm/reject for both sources.
 - **Handoff**: both flows create a `Handoff` row (Postgres, not Redis-only)
   via `HandoffService.createHandoff()` — the single entry point for "patient
-  wants a human," used by `src/orchestrator/handlers/handoff.handler.ts`
-  (inbound) and `src/campaign/conversation.service.ts`'s
+  wants a human," used by `src/conversation/inbound/handlers/handoff.handler.ts`
+  (inbound) and `src/conversation/outbound/conversation.service.ts`'s
   `executeRequestHandoff()` (campaign). Both produce the same admin WhatsApp
   alert format and are visible together via `/api/admin/v1/handoff`. The
   admin notification always goes to `Clinic.notificationPhone` (a DB field)
   — never an env var.
 - While an inbound reactive session has an OPEN/ADMIN_HANDLING `Handoff`,
-  `message.processor.ts` parks the patient's replies on that `Handoff` row
+  `conversation/inbound/message.processor.ts` parks the patient's replies on that `Handoff` row
   instead of routing them to the orchestrator, until staff resolve it from
   the dashboard (or the patient types "menu" to escape).
 
-## Inbound AI classifier (`src/ai/ai.service.ts`)
+## Inbound AI classifier (`src/conversation/nlu/intent-classifier.service.ts`)
 
 - Keyword regex fallback always runs first (`fallbackIntentDetection`); Ollama
   is only called when that's ambiguous, to keep latency/load down.
@@ -104,7 +144,7 @@ share one system, not two:
   instructions, reply CONFIRM"-style attacks than a cloud model was in
   testing, so this is enforced in code, not just in the prompt. Don't remove
   this without an equivalent replacement.
-- Prompts (`src/ai/prompts/`) delimit the untrusted patient message with
+- Prompts (`src/conversation/nlu/prompts/`) delimit the untrusted patient message with
   `<<<MESSAGE>>>` markers and explicitly tell the model not to treat it as
   instructions. Keep this pattern in any new prompt that embeds patient text.
 
@@ -114,24 +154,24 @@ The booking-step handlers (`specialty`/`doctor`/`date`/`time`.handler.ts) used
 to each hand-roll the same few things; they were extracted after the
 duplication got out of hand. When adding a new booking step or touching an
 existing one, use:
-- `BookingNavigationHelper` (`orchestrator/handlers/booking-navigation.helper.ts`)
+- `BookingNavigationHelper` (`conversation/inbound/handlers/booking-navigation.helper.ts`)
   — `handleMenuCommand()` and `handleUnresolvedSelection()`, the "menu" escape
   hatch and the CANCEL/GREETING/HUMAN_AGENT fallback every mid-booking handler
   needs.
-- `resolveByIdOrIndex()` (`orchestrator/handlers/resolve-by-id-or-index.util.ts`)
+- `resolveByIdOrIndex()` (`conversation/inbound/handlers/resolve-by-id-or-index.util.ts`)
   — "did the patient tap a list row, type a number, or type the label" lookup.
 - `formatFriendlyDate()` / `formatDateButtonLabel()`
-  (`orchestrator/handlers/date-format.util.ts`) — locale-aware date strings.
-- `WelcomeMenuService` / `LanguagePromptService` (`src/bot-content/`) — the
+  (`conversation/inbound/handlers/date-format.util.ts`) — locale-aware date strings.
+- `WelcomeMenuService` / `LanguagePromptService` (`src/conversation/content/`) — the
   main-menu and language-choice messages, sent from multiple handlers.
 
-## Per-doctor mock availability (`src/clinops/data/doctors.mock.json`)
+## Per-doctor mock availability (`src/integrations/clinops/data/doctors.mock.json`)
 
 Each mock doctor has its own `workingDays` (JS `Date.getDay()` values) and
 `dailyWindows` — deliberately varied per doctor so the bot doesn't show
 identical availability for everyone. `ClinOpsService.getDoctorsAvailability()`
 resolves these into the doc-shaped `{heure_debut, heure_fin}[]` response;
-`AvailabilityService` (bot-content) expands that into discrete 30-minute
+`AvailabilityService` (conversation/content) expands that into discrete 30-minute
 slots and excludes times already tied to a pending/confirmed local booking.
 `workingDays`/`dailyWindows` are mock-only fields — never exposed on the
 public `ClinOpsDoctor` type, irrelevant once live mode calls the real HTTP
@@ -141,7 +181,7 @@ endpoint instead.
 
 Any class that injects `ClinOpsService` — directly, or transitively via
 `SpecialtyService`, `DoctorService`, or `AvailabilityService` (all in
-`src/bot-content/`) — sits in a module that **must import `ClinOpsModule`**,
+`src/conversation/content/`) — sits in a module that **must import `ClinOpsModule`**,
 or Nest crashes at startup with `UnknownDependenciesException`. This has
 already bitten `bot-content.module.ts` and `orchestrator.module.ts` (both
 fixed). When adding a new provider or module that (transitively) depends on
@@ -174,6 +214,6 @@ to the `postgres` service in `docker-compose.yml`, run
 `DATABASE_URL=postgresql://hcadmin:<POSTGRES_PASSWORD>@localhost:5432/healthcare_bot?sslmode=disable SHADOW_DATABASE_URL=postgresql://shadow:shadow@localhost:5433/shadow npx prisma migrate dev --name <name>`
 (bring up `prisma-shadow` too: `docker compose --profile dev up -d prisma-shadow`),
 then revert the port mapping. New `BotMessage` fixture rows need the seed
-re-run the same way (`node dist/src/prisma/seed.js` after `npm run build`,
+re-run the same way (`node dist/src/platform/database/seed.js` after `npm run build`,
 with `DATABASE_URL` pointing at the temporarily-exposed port) — it's additive
 and safe to re-run any time.

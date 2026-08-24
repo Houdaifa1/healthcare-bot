@@ -3,11 +3,15 @@ import eslint from '@eslint/js';
 import eslintPluginPrettierRecommended from 'eslint-plugin-prettier/recommended';
 import globals from 'globals';
 import tseslint from 'typescript-eslint';
+import boundariesConfig from './eslint.boundaries.mjs';
 
 export default tseslint.config(
   {
-    ignores: ['eslint.config.mjs'],
+    ignores: ['eslint.config.mjs', 'eslint.boundaries.mjs'],
   },
+  // The four-layer import rule. Defined in its own file so the same config can
+  // also run standalone as a CI gate — see `npm run lint:boundaries`.
+  ...boundariesConfig,
   eslint.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
   eslintPluginPrettierRecommended,

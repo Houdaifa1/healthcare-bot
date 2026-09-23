@@ -13,7 +13,7 @@ import {
 // This replaces the old text-scraping "recoverLeakedToolCalls" hack, which
 // silently deleted any tool call it couldn't pattern-match.
 const OLLAMA_URL = process.env.OLLAMA_URL ?? 'http://localhost:11434/api/chat';
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? 'qwen3.5:4b';
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? 'qwen3.5:9b';
 
 // These budgets are provisional until measured with the selected model.
 const OLLAMA_TIMEOUT_MS = Number(process.env.OLLAMA_TIMEOUT_MS ?? 45_000);

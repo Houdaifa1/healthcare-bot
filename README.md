@@ -25,7 +25,7 @@ Inbound booking asks for the patient's name and brief reason, then records a spe
 
 Campaign jobs are persisted before they are queued. The scheduler rediscovers pending jobs after a crash. An opening send is reserved as `SENDING` before contacting Meta; an uncertain send stays there for staff reconciliation. Reminders require `CAMPAIGN_REMINDER_TEMPLATE_NAME`, an approved Meta template with patient name and visit date as its two body parameters. An uncertain reminder sets `reminderAttemptState=RECONCILE`. These states deliberately block automatic retry. Explicit STOP, unsubscribe, and supported French/Arabic equivalents create a persistent clinic-level suppression record and block future campaign contact. Staff must verify any ambiguous opt-out or send result before resetting it.
 
-The same local Ollama model handles classification and campaign conversation. The default tag is `qwen3.5:9b` with an 8192-token context budget. The 16 GB Mac recommendation is for development evaluation only; latency, French/Arabic/Darija quality, and clinical safety require measured tests before patient use. The default model is not downloaded by setup.
+The same local Ollama model handles classification and campaign conversation. The default tag is `qwen3.5:4b` with an 8192-token context budget. This small model is for local development evaluation only; latency, French/Arabic/Darija quality, and clinical safety require measured tests before patient use. The backend repository does not download the model automatically.
 
 ## Verification and deployment
 

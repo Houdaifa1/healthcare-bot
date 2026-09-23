@@ -64,6 +64,7 @@ export class BookingRequestsService {
             visitDate:       true,
             prestation:      true,
             medecinTraitant: true,
+            clinopsPatientId: true,
           },
         },
         appointment: {
@@ -100,6 +101,7 @@ export class BookingRequestsService {
             visitDate:       true,
             prestation:      true,
             medecinTraitant: true,
+            clinopsPatientId: true,
           },
         },
         appointment: true,
@@ -130,6 +132,7 @@ export class BookingRequestsService {
           visitDate:       null,
           prestation:      row.preferredSpecialty,
           medecinTraitant: row.preferredDoctor,
+          clinopsPatientId: row.clinopsPatientId,
         },
       };
     }

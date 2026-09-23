@@ -66,3 +66,22 @@ describe('live booking confirmation', () => {
     expect(clinops.createNewRDV).not.toHaveBeenCalled();
   });
 });
+
+describe('booking queue contract', () => {
+  it('returns the recorded ClinOps patient ID needed by the dashboard', async () => {
+    const row = {
+      id: 'request-2', source: BookingSource.CAMPAIGN,
+      campaignPatient: { patientName: 'Test Patient', phone: '212600000001', clinopsPatientId: 1128 },
+      appointment: null,
+    };
+    const prisma = { bookingRequest: { findMany: jest.fn().mockResolvedValue([row]) } };
+    const service = new BookingRequestsService(prisma as any, {} as any, {} as any);
+    const result = await service.findAll('clinic-1', {});
+    expect(result[0].campaignPatient.clinopsPatientId).toBe(1128);
+    expect(prisma.bookingRequest.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      include: expect.objectContaining({
+        campaignPatient: { select: expect.objectContaining({ clinopsPatientId: true }) },
+      }),
+    }));
+  });
+});

@@ -224,5 +224,49 @@
         "avis_medicaux": []
       }
     ]
+  },
+  "CIN9220": {
+    "patient": "Mohamed Drahm",
+    "solde_impaye": 0.00,
+    "admissions": [
+      {
+        "date_admission": "2026-06-20T10:00:00",
+        "motif_admission": "Consultation cardiologie",
+        "medecin_traitant": "DR Ahmed BENALI",
+        "actes_realises": ["ECG", "Consultation cardiologie"],
+        "produits_pharmaceutiques": ["Aspirine 100mg"],
+        "avis_medicaux": ["Tension artérielle à surveiller"]
+      },
+      {
+        "date_admission": "2025-12-02T09:15:00",
+        "motif_admission": "Bilan de santé annuel",
+        "medecin_traitant": "DR Ahmed BENALI",
+        "actes_realises": ["Bilan sanguin", "Consultation cardiologie"],
+        "produits_pharmaceutiques": [],
+        "avis_medicaux": ["Suivi recommandé dans 6 mois"]
+      }
+    ]
+  },
+  "CIN9221": {
+    "patient": "Salim BENGHA",
+    "solde_impaye": 300.00,
+    "admissions": [
+      {
+        "date_admission": "2026-06-25T15:00:00",
+        "motif_admission": "Consultation orthopédie",
+        "medecin_traitant": "DR Nadia BENCHEKROUN",
+        "actes_realises": ["Radiographie genou", "Consultation orthopédie"],
+        "produits_pharmaceutiques": ["Ibuprofène 400mg"],
+        "avis_medicaux": ["Kinésithérapie recommandée, 6 séances"]
+      },
+      {
+        "date_admission": "2026-03-10T11:30:00",
+        "motif_admission": "Douleur genou droit",
+        "medecin_traitant": "DR Nadia BENCHEKROUN",
+        "actes_realises": ["Consultation orthopédie"],
+        "produits_pharmaceutiques": ["Paracétamol 1000mg"],
+        "avis_medicaux": []
+      }
+    ]
   }
 }

@@ -6,6 +6,8 @@ import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtStrategy } from './jwt.strategy';
 import { PrismaModule } from '@platform/database/prisma.module';
+import { SessionsModule } from '@platform/cache/sessions.module';
+import { ThrottlerModule } from '@nestjs/throttler';
 
 // The auth half of the dissolved AdminModule. The clinic, bot-messages and
 // faqs modules it used to aggregate are now imported directly by AppModule —
@@ -13,6 +15,8 @@ import { PrismaModule } from '@platform/database/prisma.module';
 @Module({
   imports: [
     PrismaModule,
+    SessionsModule,
+    ThrottlerModule.forRoot([{ ttl: 60_000, limit: 5 }]),
     PassportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],

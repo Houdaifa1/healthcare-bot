@@ -1,11 +1,17 @@
 name: Deploy to Production
 
 on:
-  push:
+  workflow_run:
+    workflows: [Backend CI]
+    types: [completed]
     branches: [main]
+
+permissions:
+  contents: read
 
 jobs:
   deploy:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: self-hosted
     env:
       DOCKER_BUILDKIT: "0"
@@ -14,6 +20,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
 
       - name: Link local secrets and credentials
         run: |
@@ -38,38 +46,11 @@ jobs:
           cp -f "$CREDS_SOURCE" cloudflared/creds.json
           echo "✅ Copied cloudflared/creds.json"
 
-      # Gates the deploy on the four-layer import rule (see eslint.boundaries.mjs).
-      # Runs `lint:boundaries`, never `lint` — the latter carries ~1100 pre-existing
-      # prettier/type-safety errors and runs --fix, so it can neither pass nor be
-      # trusted to leave the tree alone. This config reports layering violations only.
-      - name: Enforce layer boundaries
-        run: |
-          if ! command -v node >/dev/null 2>&1; then
-            echo "❌ node not found on the runner PATH."
-            echo "   This runner resolves node through ~/actions-runner/.path, which pins"
-            echo "   one specific nvm version directory. If node was upgraded or removed"
-            echo "   via nvm, refresh that file (or install node system-wide) and retry."
-            exit 1
-          fi
-          echo "node $(node -v) / npm $(npm -v)"
-          npm ci --no-audit --no-fund
-          npm run lint:boundaries
-
       - name: Build backend image (classic builder, bypass compose)
         run: DOCKER_BUILDKIT=0 docker build -t healthcare-bot-backend:latest .
 
       - name: Ensure Postgres and Redis are up
         run: docker compose up -d postgres redis
-
-      - name: Resolve stuck migrations
-        run: |
-          docker compose run --rm backend sh -c "
-            set -e
-            FAILED=\$(npx prisma migrate status 2>&1 | grep 'Following migration' -A 999 | grep '^\s*[0-9]' | awk '{print \$1}' || true)
-            if [ -n \"\$FAILED\" ]; then
-              for m in \$FAILED; do npx prisma migrate resolve --rolled-back \"\$m\" || true; done
-            fi
-          "
 
       - name: Run migrations
         run: docker compose run --rm backend sh -c "npx prisma migrate deploy"
@@ -85,12 +66,11 @@ jobs:
 
       - name: Verify deployment
         run: |
-          sleep 10
-          if docker ps --filter "name=healthcare-bot" --filter "status=running" | grep -q healthcare-bot; then
-            echo "✅ Deployment successful"
-          else
-            echo "❌ Container not running — last 50 log lines:"
-            docker logs healthcare-bot --tail 50
-            exit 1
-          fi
-          docker logs healthcare-bot --tail 20
+          for attempt in $(seq 1 24); do
+            status=$(docker inspect --format '{{.State.Health.Status}}' healthcare-bot 2>/dev/null || true)
+            if [ "$status" = healthy ]; then exit 0; fi
+            if [ "$status" = unhealthy ]; then break; fi
+            sleep 5
+          done
+          docker logs healthcare-bot --tail 50
+          exit 1

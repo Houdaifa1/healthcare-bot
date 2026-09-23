@@ -1,0 +1,1119 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Documentation API Externe - ClinOps (Version Concise)</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background: #f5f7fa;
+            padding: 2rem;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: white;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 2rem;
+            text-align: center;
+        }
+
+        header h1 {
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .base-url {
+            background: rgba(255,255,255,0.2);
+            padding: 0.5rem 1rem;
+            border-radius: 5px;
+            display: inline-block;
+            margin-top: 1rem;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9rem;
+        }
+
+        nav {
+            background: #2d3748;
+            padding: 1rem 2rem;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        nav ul {
+            list-style: none;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1.5rem;
+        }
+
+        nav a {
+            color: white;
+            text-decoration: none;
+            font-weight: 500;
+        }
+
+        nav a:hover {
+            color: #a0aec0;
+        }
+
+        main {
+            padding: 2rem;
+        }
+
+        .endpoint {
+            margin-bottom: 3rem;
+            padding: 1.5rem;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            background: #fafafa;
+        }
+
+        .endpoint h2 {
+            color: #667eea;
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 2px solid #667eea;
+        }
+
+        .endpoint h3 {
+            color: #4a5568;
+            font-size: 1.1rem;
+            margin: 1rem 0 0.5rem 0;
+            font-weight: 600;
+        }
+
+        .description {
+            background: #edf2f7;
+            padding: 1rem;
+            border-radius: 5px;
+            margin-bottom: 1rem;
+            border-left: 4px solid #667eea;
+        }
+
+        .url {
+            background: #2d3748;
+            color: #68d391;
+            padding: 1rem;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.95rem;
+            margin: 1rem 0;
+            word-break: break-all;
+        }
+
+        .method {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 4px;
+            font-weight: bold;
+            font-size: 0.85rem;
+            margin-right: 0.5rem;
+        }
+
+        .method.get {
+            background: #48bb78;
+            color: white;
+        }
+
+        .method.post {
+            background: #4299e1;
+            color: white;
+        }
+
+        code {
+            background: #f7fafc;
+            padding: 0.2rem 0.4rem;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+            color: #e53e3e;
+        }
+
+        pre {
+            background: #2d3748;
+            color: #e2e8f0;
+            padding: 1rem;
+            border-radius: 5px;
+            overflow-x: auto;
+            font-size: 0.9rem;
+            margin: 0.5rem 0;
+        }
+
+        pre code {
+            background: transparent;
+            color: #e2e8f0;
+            padding: 0;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1rem 0;
+            background: white;
+        }
+
+        table th {
+            background: #667eea;
+            color: white;
+            padding: 0.75rem;
+            text-align: left;
+            font-weight: 600;
+        }
+
+        table td {
+            padding: 0.75rem;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        table tr:hover {
+            background: #f7fafc;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 0.25rem 0.5rem;
+            border-radius: 3px;
+            font-size: 0.75rem;
+            font-weight: bold;
+            margin-left: 0.5rem;
+        }
+
+        .badge.required {
+            background: #fc8181;
+            color: white;
+        }
+
+        .badge.optional {
+            background: #90cdf4;
+            color: #2d3748;
+        }
+
+        .badge.conditional {
+            background: #f6ad55;
+            color: white;
+        }
+
+        .error-box {
+            background: #fed7d7;
+            border-left: 4px solid #e53e3e;
+            padding: 1rem;
+            border-radius: 5px;
+            margin: 1rem 0;
+        }
+
+        .success-box {
+            background: #c6f6d5;
+            border-left: 4px solid #48bb78;
+            padding: 1rem;
+            border-radius: 5px;
+            margin: 1rem 0;
+        }
+
+        .scroll-to-top {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            font-size: 1.2rem;
+            cursor: pointer;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+            transition: all 0.3s ease;
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            visibility: hidden;
+        }
+
+        .scroll-to-top.visible {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .scroll-to-top:hover {
+            background: #764ba2;
+            transform: translateY(-3px);
+            box-shadow: 0 6px 16px rgba(102, 126, 234, 0.6);
+        }
+
+        .scroll-to-top:active {
+            transform: translateY(-1px);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📚 Documentation des APIs Externes - ClinOps</h1>
+            <div class="base-url">Base URL: https://stage.clinops.app/new-backend/external_module</div>
+        </header>
+
+        <nav>
+            <ul>
+                <li><a href="#auth">🔐 Authentification</a></li>
+                <li><a href="#speciality">🏥 Spécialités</a></li>
+                <li><a href="#doctors">👨‍⚕️ Médecins</a></li>
+                <li><a href="#search">🔍 Recherche Patients</a></li>
+                <li><a href="#history">📋 Historique Patient</a></li>
+                <li><a href="#create-patient">➕ Créer Patient</a></li>
+                <li><a href="#availability">📅 Disponibilités</a></li>
+                <li><a href="#doctors-by-date">📅 Médecins par Date</a></li>
+                <li><a href="#rdv">📝 Créer RDV</a></li>
+            </ul>
+        </nav>
+
+        <main>
+            <!-- 1. AUTHENTICATION -->
+            <div class="endpoint" id="auth">
+                <h2>1. 🔐 Authentification - Obtenir un Token</h2>
+                
+                <div class="description">
+                    <strong>Description:</strong> Génère un token d'authentification chiffré pour accéder aux autres endpoints.
+                </div>
+
+                <div class="url">
+                    <span class="method post">POST</span>
+                    https://stage.clinops.app/new-backend/external_module/getAccesAutorisation
+                </div>
+
+                <h3>📤 Request Body</h3>
+                <pre><code>{
+  "username": "&lt;username&gt;",
+  "password": "&lt;password&gt;"
+}</code></pre>
+
+                <h3>📥 Response (Succès - 200)</h3>
+                <pre><code>{
+  "success": true,
+  "token": "encrypted_token_string"
+}</code></pre>
+
+                <h3>❌ Erreurs Possibles</h3>
+                <div class="error-box">
+                    <strong>400:</strong> JSON invalide ou champs manquants<br>
+                    <strong>401:</strong> Identifiants invalides<br>
+                    <strong>502:</strong> Erreur de configuration Keycloak<br>
+                    <strong>503:</strong> Service d'authentification indisponible<br>
+                    <strong>504:</strong> Timeout du service d'authentification
+                </div>
+
+                <h3>📋 Paramètres</h3>
+                <table>
+                    <tr>
+                        <th>Paramètre</th>
+                        <th>Type</th>
+                        <th>Requis</th>
+                        <th>Description</th>
+                    </tr>
+                    <tr>
+                        <td><code>username</code></td>
+                        <td>string</td>
+                        <td><span class="badge required">REQUIS</span></td>
+                        <td>Nom d'utilisateur</td>
+                    </tr>
+                    <tr>
+                        <td><code>password</code></td>
+                        <td>string</td>
+                        <td><span class="badge required">REQUIS</span></td>
+                        <td>Mot de passe</td>
+                    </tr>
+                </table>
+
+                <div class="success-box">
+                    <strong>⚠️ Note:</strong> Le token retourné est chiffré. Utilisez-le directement dans le header <code>Authorization: Bearer &lt;token&gt;</code> pour les autres endpoints. Limite: 5 requêtes par minute.
+                </div>
+            </div>
+
+            <!-- 2. GET SPECIALITY -->
+            <div class="endpoint" id="speciality">
+                <h2>2. 🏥 Obtenir les Spécialités</h2>
+                
+                <div class="description">
+                    <strong>Description:</strong> Récupère toutes les spécialités actives qui ont au moins un médecin actif.
+                </div>
+
+                <div class="url">
+                    <span class="method get">GET</span>
+                    https://stage.clinops.app/new-backend/external_module/getSpeciality
+                </div>
+
+                <h3>🔑 Headers Requis</h3>
+                <pre><code>Content-Type: application/json
+Authorization: Bearer &lt;encrypted_token&gt;</code></pre>
+
+                <h3>📥 Response (Succès - 200)</h3>
+                <pre><code>{
+  "success": true,
+  "data": [
+    {
+      "specialityId": 1,
+      "specialityLabel": "Cardiologie"
+    },
+    {
+      "specialityId": 2,
+      "specialityLabel": "Gynécologie"
+    }
+  ]
+}</code></pre>
+
+                <h3>❌ Erreurs Possibles</h3>
+                <div class="error-box">
+                    <strong>401:</strong> Token d'authentification invalide<br>
+                    <strong>500:</strong> Erreur serveur interne
+                </div>
+            </div>
+
+            <!-- 3. GET DOCTORS BY SPECIALITY -->
+            <div class="endpoint" id="doctors">
+                <h2>3. 👨‍⚕️ Obtenir les Médecins par Spécialité</h2>
+                
+                <div class="description">
+                    <strong>Description:</strong> Récupère tous les médecins actifs pour une spécialité donnée.
+                </div>
+
+                <div class="url">
+                    <span class="method get">GET</span>
+                    https://stage.clinops.app/new-backend/external_module/getDoctorsBySpeciality
+                </div>
+
+                <h3>🔑 Headers Requis</h3>
+                <pre><code>Content-Type: application/json
+Authorization: Bearer &lt;encrypted_token&gt;</code></pre>
+
+                <h3>📤 Request Body</h3>
+                <pre><code>{
+  "specialite_id": 1
+}</code></pre>
+
+                <h3>📥 Response (Succès - 200)</h3>
+                <pre><code>{
+  "success": true,
+  "data": [
+    {
+      "doctorId": 10,
+      "doctorLabel": "DR Miloud BAKOUCHE"
+    },
+    {
+      "doctorId": 15,
+      "doctorLabel": "DR Ahmed BENALI"
+    }
+  ]
+}</code></pre>
+
+                <h3>❌ Erreurs Possibles</h3>
+                <div class="error-box">
+                    <strong>400:</strong> Le paramètre specialite_id est requis<br>
+                    <strong>400:</strong> specialite_id doit être un entier<br>
+                    <strong>401:</strong> Token d'authentification invalide<br>
+                    <strong>500:</strong> Erreur serveur interne
+                </div>
+
+                <h3>📋 Paramètres</h3>
+                <table>
+                    <tr>
+                        <th>Paramètre</th>
+                        <th>Type</th>
+                        <th>Requis</th>
+                        <th>Description</th>
+                    </tr>
+                    <tr>
+                        <td><code>specialite_id</code></td>
+                        <td>integer</td>
+                        <td><span class="badge required">REQUIS</span></td>
+                        <td>ID de la spécialité</td>
+                    </tr>
+                </table>
+            </div>
+
+            <!-- 4. SEARCH PATIENTS -->
+            <div class="endpoint" id="search">
+                <h2>4. 🔍 Recherche de Patients</h2>
+                
+                <div class="description">
+                    <strong>Description:</strong> Recherche des patients avec filtres optionnels. Les résultats sont triés avec les correspondances exactes en premier lors du filtrage par CIN/passeport. Optionnellement, peut filtrer uniquement les patients avec numéro de téléphone vérifié.
+                </div>
+
+                <div class="url">
+                    <span class="method get">GET</span>
+                    https://stage.clinops.app/new-backend/external_module/searchPatientsInfos
+                </div>
+
+                <h3>🔑 Headers Requis</h3>
+                <pre><code>Content-Type: application/json
+Authorization: Bearer &lt;encrypted_token&gt;</code></pre>
+
+                <h3>📤 Request Body</h3>
+                <pre><code>{
+  "cin_passeport": "CIN1128",
+  "date_derniere_consultation": "2025-08-27",
+  "motif": "Consultation",
+  "numeroTelephone": "+212666666666",
+  "OnlyVerifiedNumbers": false
+}</code></pre>
+
+                <h3>📥 Response (Succès - 200)</h3>
+                <pre><code>{
+  "success": true,
+  "data": [
+    {
+      "patient_id": 1128,
+      "patient": "Hind BEN",
+      "cin": "CIN1128",
+      "sexe": "M",
+      "age_years": 55,
+      "ville": "Tanger",
+      "pays": "Maroc",
+      "date_derniere_admission": "2025-04-30T12:55:10.019303+00:00",
+      "prestation": "Scanner cérébral",
+      "medecin_traitant": "DR Miloud BAKOUCHE",
+      "solde_impaye": "0.00",
+      "numeroTelephonePrincipale": "+212666666666",
+      "numeroTelephoneSecondaire": null
+    }
+  ]
+}</code></pre>
+
+                <h3>❌ Erreurs Possibles</h3>
+                <div class="error-box">
+                    <strong>400:</strong> Au moins un filtre requis (cin_passeport, motif, ou numeroTelephone)<br>
+                    <strong>400:</strong> Format invalide (CIN, date, ou téléphone)<br>
+                    <strong>401:</strong> Token d'authentification invalide ou manquant<br>
+                    <strong>500:</strong> Erreur serveur interne
+                </div>
+
+                <h3>📋 Paramètres</h3>
+                <table>
+                    <tr>
+                        <th>Paramètre</th>
+                        <th>Type</th>
+                        <th>Requis</th>
+                        <th>Format</th>
+                    </tr>
+                    <tr>
+                        <td><code>cin_passeport</code></td>
+                        <td>string</td>
+                        <td><span class="badge conditional">CONDITIONNEL*</span></td>
+                        <td>Alphanumérique, max 18 caractères</td>
+                    </tr>
+                    <tr>
+                        <td><code>date_derniere_consultation</code></td>
+                        <td>string</td>
+                        <td><span class="badge optional">OPTIONNEL</span></td>
+                        <td>YYYY-MM-DD</td>
+                    </tr>
+                    <tr>
+                        <td><code>motif</code></td>
+                        <td>string</td>
+                        <td><span class="badge conditional">CONDITIONNEL*</span></td>
+                        <td>Raison d'admission</td>
+                    </tr>
+                    <tr>
+                        <td><code>numeroTelephone</code></td>
+                        <td>string</td>
+                        <td><span class="badge conditional">CONDITIONNEL*</span></td>
+                        <td>+212666666666</td>
+                    </tr>
+                    <tr>
+                        <td><code>OnlyVerifiedNumbers</code></td>
+                        <td>boolean</td>
+                        <td><span class="badge optional">OPTIONNEL</span></td>
+                        <td>true/false (défaut: false). Si true, retourne uniquement les patients avec <code>phone_number_verified = TRUE</code></td>
+                    </tr>
+                </table>
+
+                <div class="success-box">
+                    <strong>*</strong> Au moins un des paramètres <code>cin_passeport</code>, <code>motif</code>, ou <code>numeroTelephone</code> est requis.
+                </div>
+            </div>
+
+            <!-- 5. PATIENT HISTORY -->
+            <div class="endpoint" id="history">
+                <h2>5. 📋 Historique des Prestations d'un Patient</h2>
+                
+                <div class="description">
+                    <strong>Description:</strong> Récupère l'historique complet des prestations d'un patient par son numéro CIN/passeport ou numéro de téléphone.
+                </div>
+
+                <div class="url">
+                    <span class="method get">GET</span>
+                    https://stage.clinops.app/new-backend/external_module/getPatientHistory
+                </div>
+
+                <h3>🔑 Headers Requis</h3>
+                <pre><code>Content-Type: application/json
+Authorization: Bearer &lt;encrypted_token&gt;</code></pre>
+
+                <h3>📤 Request Body</h3>
+                <pre><code>{
+  "cin_passeport": "CIN1128"
+}</code></pre>
+                <p><strong>OU</strong></p>
+                <pre><code>{
+  "numeroTelephone": "+212666666666"
+}</code></pre>
+
+                <h3>📥 Response (Succès - 200)</h3>
+                <pre><code>{
+  "success": true,
+  "data": {
+    "patient": "Hind BEN",
+    "solde_impaye": 1500.50,
+    "admissions": [
+      {
+        "date_admission": "2025-04-30T12:55:10",
+        "motif_admission": "Consultation",
+        "medecin_traitant": "DR Miloud BAKOUCHE",
+        "actes_realises": ["Scanner cérébral", "Consultation"],
+        "produits_pharmaceutiques": ["Paracétamol 500mg"],
+        "avis_medicaux": []
+      }
+    ]
+  }
+}</code></pre>
+
+                <h3>❌ Erreurs Possibles</h3>
+                <div class="error-box">
+                    <strong>400:</strong> Au moins un paramètre requis (cin_passeport ou numeroTelephone)<br>
+                    <strong>400:</strong> Format invalide<br>
+                    <strong>400:</strong> Aucun patient trouvé avec cet identifiant<br>
+                    <strong>401:</strong> Token d'authentification invalide<br>
+                    <strong>500:</strong> Erreur serveur interne
+                </div>
+
+                <h3>📋 Paramètres</h3>
+                <table>
+                    <tr>
+                        <th>Paramètre</th>
+                        <th>Type</th>
+                        <th>Requis</th>
+                        <th>Format</th>
+                    </tr>
+                    <tr>
+                        <td><code>cin_passeport</code></td>
+                        <td>string</td>
+                        <td><span class="badge conditional">CONDITIONNEL*</span></td>
+                        <td>Alphanumérique, max 18 caractères</td>
+                    </tr>
+                    <tr>
+                        <td><code>numeroTelephone</code></td>
+                        <td>string</td>
+                        <td><span class="badge conditional">CONDITIONNEL*</span></td>
+                        <td>+212666666666</td>
+                    </tr>
+                </table>
+
+                <div class="success-box">
+                    <strong>*</strong> Au moins un des deux paramètres est requis.
+                </div>
+            </div>
+
+            <!-- 6. CREATE PATIENT -->
+            <div class="endpoint" id="create-patient">
+                <h2>6. ➕ Créer un Nouveau Patient</h2>
+                
+                <div class="description">
+                    <strong>Description:</strong> Crée un nouveau patient dans le système avec toutes les informations nécessaires.
+                </div>
+
+                <div class="url">
+                    <span class="method post">POST</span>
+                    https://stage.clinops.app/new-backend/external_module/createNewPatient
+                </div>
+
+                <h3>🔑 Headers Requis</h3>
+                <pre><code>Content-Type: application/json
+Authorization: Bearer &lt;encrypted_token&gt;</code></pre>
+
+                <h3>📤 Request Body</h3>
+                <pre><code>{
+  "nom": "BEN",
+  "prenom": "Hind",
+  "sexe": "M",
+  "type_identite": "CIN",
+  "numero_identite": "CIN1128",
+  "telephone_prefix": "+212",
+  "telephone": "0612345678",
+  "date_naissance": "1970-03-17",
+  "ville_naissance": "Tanger",
+  "ville": "Tanger",
+  "pays": "Maroc",
+  "adresse_principale": "123 Rue Example"
+}</code></pre>
+
+                <h3>📥 Response (Succès - 200)</h3>
+                <pre><code>{
+  "success": true,
+  "message": "Patient créé avec succès",
+  "patient_id": 1234
+}</code></pre>
+
+                <h3>❌ Erreurs Possibles</h3>
+                <div class="error-box">
+                    <strong>400:</strong> Champs obligatoires manquants<br>
+                    <strong>400:</strong> Format invalide (nom, prénom, date, etc.)<br>
+                    <strong>400:</strong> Patient déjà existant avec ce numéro d'identité<br>
+                    <strong>401:</strong> Token d'authentification invalide<br>
+                    <strong>500:</strong> Erreur serveur interne
+                </div>
+
+                <h3>📋 Paramètres</h3>
+                <table>
+                    <tr>
+                        <th>Paramètre</th>
+                        <th>Type</th>
+                        <th>Requis</th>
+                        <th>Format/Valeurs</th>
+                    </tr>
+                    <tr>
+                        <td><code>nom</code></td>
+                        <td>string</td>
+                        <td><span class="badge required">REQUIS</span></td>
+                        <td>Max 50 caractères, lettres uniquement</td>
+                    </tr>
+                    <tr>
+                        <td><code>prenom</code></td>
+                        <td>string</td>
+                        <td><span class="badge required">REQUIS</span></td>
+                        <td>Max 50 caractères, lettres uniquement</td>
+                    </tr>
+                    <tr>
+                        <td><code>sexe</code></td>
+                        <td>string</td>
+                        <td><span class="badge required">REQUIS</span></td>
+                        <td>M ou F</td>
+                    </tr>
+                    <tr>
+                        <td><code>type_identite</code></td>
+                        <td>string</td>
+                        <td><span class="badge required">REQUIS</span></td>
+                        <td>CIN, PASSEPORT, CARTE SEJOUR, PAS D'IDENTITE</td>
+                    </tr>
+                    <tr>
+                        <td><code>numero_identite</code></td>
+                        <td>string</td>
+                        <td><span class="badge conditional">CONDITIONNEL*</span></td>
+                        <td>Requis sauf si type_identite = "PAS D'IDENTITE"</td>
+                    </tr>
+                    <tr>
+                        <td><code>telephone_prefix</code></td>
+                        <td>string</td>
+                        <td><span class="badge required">REQUIS</span></td>
+                        <td>Ex: +212</td>
+                    </tr>
+                    <tr>
+                        <td><code>telephone</code></td>
+                        <td>string</td>
+                        <td><span class="badge required">REQUIS</span></td>
+                        <td>Chiffres uniquement, max 16</td>
+                    </tr>
+                    <tr>
+                        <td><code>date_naissance</code></td>
+                        <td>string</td>
+                        <td><span class="badge required">REQUIS</span></td>
+                        <td>YYYY-MM-DD</td>
+                    </tr>
+                    <tr>
+                        <td><code>ville_naissance</code></td>
+                        <td>string</td>
+                        <td><span class="badge required">REQUIS</span></td>
+                        <td>Max 100 caractères</td>
+                    </tr>
+                    <tr>
+                        <td><code>ville</code></td>
+                        <td>string</td>
+                        <td><span class="badge required">REQUIS</span></td>
+                        <td>Max 100 caractères</td>
+                    </tr>
+                    <tr>
+                        <td><code>pays</code></td>
+                        <td>string</td>
+                        <td><span class="badge required">REQUIS</span></td>
+                        <td>Max 100 caractères (défaut: "Maroc")</td>
+                    </tr>
+                    <tr>
+                        <td><code>adresse_principale</code></td>
+                        <td>string</td>
+                        <td><span class="badge required">REQUIS</span></td>
+                        <td>Max 300 caractères</td>
+                    </tr>
+                </table>
+            </div>
+
+            <!-- 7. DOCTORS AVAILABILITY -->
+            <div class="endpoint" id="availability">
+                <h2>7. 📅 Disponibilités d'un Médecin</h2>
+                
+                <div class="description">
+                    <strong>Description:</strong> Récupère les créneaux horaires disponibles pour un médecin à une date précise.
+                </div>
+
+                <div class="url">
+                    <span class="method get">GET</span>
+                    https://stage.clinops.app/new-backend/external_module/getDoctorsAvailability
+                </div>
+
+                <h3>🔑 Headers Requis</h3>
+                <pre><code>Content-Type: application/json
+Authorization: Bearer &lt;encrypted_token&gt;</code></pre>
+
+                <h3>📤 Request Body</h3>
+                <pre><code>{
+  "nom_medecin": "DR Miloud BAKOUCHE",
+  "date_prevue": "2025-12-15"
+}</code></pre>
+
+                <h3>📥 Response (Succès - 200)</h3>
+                <pre><code>{
+  "success": true,
+  "data": [
+    {
+      "heure_debut": "08:00:00",
+      "heure_fin": "10:00:00"
+    },
+    {
+      "heure_debut": "14:00:00",
+      "heure_fin": "18:00:00"
+    }
+  ]
+}</code></pre>
+
+                <h3>❌ Erreurs Possibles</h3>
+                <div class="error-box">
+                    <strong>400:</strong> Le nom du médecin est requis<br>
+                    <strong>400:</strong> La date prévue est requise<br>
+                    <strong>400:</strong> Format de date invalide (doit être YYYY-MM-DD)<br>
+                    <strong>400:</strong> Aucun médecin trouvé avec ce nom<br>
+                    <strong>401:</strong> Token d'authentification invalide<br>
+                    <strong>500:</strong> Erreur serveur interne
+                </div>
+
+                <h3>📋 Paramètres</h3>
+                <table>
+                    <tr>
+                        <th>Paramètre</th>
+                        <th>Type</th>
+                        <th>Requis</th>
+                        <th>Format</th>
+                    </tr>
+                    <tr>
+                        <td><code>nom_medecin</code></td>
+                        <td>string</td>
+                        <td><span class="badge required">REQUIS</span></td>
+                        <td>Nom complet (ex: "DR Miloud BAKOUCHE"), max 100 caractères</td>
+                    </tr>
+                    <tr>
+                        <td><code>date_prevue</code></td>
+                        <td>string</td>
+                        <td><span class="badge required">REQUIS</span></td>
+                        <td>YYYY-MM-DD</td>
+                    </tr>
+                </table>
+            </div>
+
+            <!-- 8. GET AVAILABLE DOCTORS BY DATE -->
+            <div class="endpoint" id="doctors-by-date">
+                <h2>8. 📅 Médecins Disponibles par Date et Heure</h2>
+                
+                <div class="description">
+                    <strong>Description:</strong> Récupère tous les médecins disponibles pour une spécialité donnée à une date et heure précises.
+                </div>
+
+                <div class="url">
+                    <span class="method get">GET</span>
+                    https://stage.clinops.app/new-backend/external_module/getAvailableDoctorsByDate
+                </div>
+
+                <h3>🔑 Headers Requis</h3>
+                <pre><code>Content-Type: application/json
+Authorization: Bearer &lt;encrypted_token&gt;</code></pre>
+
+                <h3>📤 Request Body</h3>
+                <pre><code>{
+  "specialite_id": 1,
+  "date": "2025-12-15",
+  "heure": "10:00"
+}</code></pre>
+
+                <h3>📥 Response (Succès - 200)</h3>
+                <pre><code>{
+  "success": true,
+  "data": [
+    {
+      "doctorId": 10,
+      "doctorLabel": "DR Miloud BAKOUCHE"
+    },
+    {
+      "doctorId": 15,
+      "doctorLabel": "DR Ahmed BENALI"
+    }
+  ]
+}</code></pre>
+
+                <h3>❌ Erreurs Possibles</h3>
+                <div class="error-box">
+                    <strong>400:</strong> specialite_id, date et heure sont requis<br>
+                    <strong>400:</strong> specialite_id doit être un entier<br>
+                    <strong>400:</strong> Format de date invalide. Utilisez YYYY-MM-DD<br>
+                    <strong>400:</strong> Format d'heure invalide. Utilisez HH:MM<br>
+                    <strong>401:</strong> Token d'authentification invalide<br>
+                    <strong>500:</strong> Erreur serveur interne
+                </div>
+
+                <h3>📋 Paramètres</h3>
+                <table>
+                    <tr>
+                        <th>Paramètre</th>
+                        <th>Type</th>
+                        <th>Requis</th>
+                        <th>Format</th>
+                    </tr>
+                    <tr>
+                        <td><code>specialite_id</code></td>
+                        <td>integer</td>
+                        <td><span class="badge required">REQUIS</span></td>
+                        <td>ID de la spécialité</td>
+                    </tr>
+                    <tr>
+                        <td><code>date</code></td>
+                        <td>string</td>
+                        <td><span class="badge required">REQUIS</span></td>
+                        <td>YYYY-MM-DD</td>
+                    </tr>
+                    <tr>
+                        <td><code>heure</code></td>
+                        <td>string</td>
+                        <td><span class="badge required">REQUIS</span></td>
+                        <td>HH:MM</td>
+                    </tr>
+                </table>
+
+                <div class="success-box">
+                    <strong>ℹ️ Note:</strong> Cette API retourne uniquement les médecins qui sont disponibles à la date et heure spécifiées (non bloqués par des indisponibilités ou des rendez-vous existants).
+                </div>
+            </div>
+
+            <!-- 9. CREATE RDV -->
+            <div class="endpoint" id="rdv">
+                <h2>9. 📝 Créer un Rendez-vous</h2>
+                
+                <div class="description">
+                    <strong>Description:</strong> Crée un nouveau rendez-vous. Supporte 4 scénarios: patient existant par ID, patient existant par CIN, nouveau patient sans CIN, nouveau patient avec CIN.
+                </div>
+
+                <div class="url">
+                    <span class="method post">POST</span>
+                    https://stage.clinops.app/new-backend/external_module/createNewRDV
+                </div>
+
+                <h3>🔑 Headers Requis</h3>
+                <pre><code>Content-Type: application/json
+Authorization: Bearer &lt;encrypted_token&gt;</code></pre>
+
+                <h3>📤 Request Body - Scénario 1: Patient Existant par ID</h3>
+                <pre><code>{
+  "patientId": 1128,
+  "datePrevue": "2025-12-15T10:00:00",
+  "motif": "Consultation",
+  "medecinTraitant": "DR Miloud BAKOUCHE"
+}</code></pre>
+
+                <h3>📤 Request Body - Scénario 2: Patient Existant par CIN</h3>
+                <pre><code>{
+  "numero_identite": "CIN1128",
+  "datePrevue": "2025-12-15T10:00:00",
+  "motif": "Consultation",
+  "medecinTraitant": "DR Miloud BAKOUCHE"
+}</code></pre>
+
+                <h3>📤 Request Body - Scénario 3: Nouveau Patient sans CIN</h3>
+                <pre><code>{
+  "nom": "EL",
+  "prenom": "Souad",
+  "sexe": "M",
+  "type_identite": "PAS D'IDENTITE",
+  "telephone_prefix": "+212",
+  "telephone": "0612345678",
+  "datePrevue": "2025-12-15T10:00:00",
+  "motif": "Consultation",
+  "medecinTraitant": "DR Miloud BAKOUCHE"
+}</code></pre>
+
+                <h3>📤 Request Body - Scénario 4: Nouveau Patient avec CIN</h3>
+                <pre><code>{
+  "nom": "EL",
+  "prenom": "Souad",
+  "sexe": "M",
+  "type_identite": "CIN",
+  "numero_identite": "CIN1128",
+  "telephone_prefix": "+212",
+  "telephone": "0612345678",
+  "date_naissance": "1970-03-17",
+  "pays": "Maroc",
+  "datePrevue": "2025-12-15T10:00:00",
+  "motif": "Consultation",
+  "medecinTraitant": "DR Miloud BAKOUCHE"
+}</code></pre>
+
+                <h3>📥 Response (Succès - 200)</h3>
+                <pre><code>{
+  "success": true,
+  "message": "Rendez-vous créé avec succès"
+}</code></pre>
+
+                <h3>❌ Erreurs Possibles</h3>
+                <div class="error-box">
+                    <strong>400:</strong> Champs obligatoires manquants<br>
+                    <strong>400:</strong> Format de date invalide (doit être ISO: 2025-12-15T10:00:00)<br>
+                    <strong>400:</strong> Le motif n'existe pas ou n'est pas actif<br>
+                    <strong>400:</strong> Aucun médecin trouvé avec ce nom<br>
+                    <strong>400:</strong> Impossible de trouver une chambre/service<br>
+                    <strong>401:</strong> Token d'authentification invalide<br>
+                    <strong>500:</strong> Erreur serveur interne
+                </div>
+
+                <h3>📋 Paramètres</h3>
+                <table>
+                    <tr>
+                        <th>Paramètre</th>
+                        <th>Type</th>
+                        <th>Requis</th>
+                        <th>Description</th>
+                    </tr>
+                    <tr>
+                        <td><code>patientId</code></td>
+                        <td>integer</td>
+                        <td><span class="badge conditional">CONDITIONNEL</span></td>
+                        <td>ID du patient existant (Scénario 1)</td>
+                    </tr>
+                    <tr>
+                        <td><code>numero_identite</code></td>
+                        <td>string</td>
+                        <td><span class="badge conditional">CONDITIONNEL</span></td>
+                        <td>CIN/passeport (Scénario 2 ou 4)</td>
+                    </tr>
+                    <tr>
+                        <td><code>nom</code></td>
+                        <td>string</td>
+                        <td><span class="badge conditional">CONDITIONNEL</span></td>
+                        <td>Requis si nouveau patient (Scénario 3 ou 4)</td>
+                    </tr>
+                    <tr>
+                        <td><code>prenom</code></td>
+                        <td>string</td>
+                        <td><span class="badge conditional">CONDITIONNEL</span></td>
+                        <td>Requis si nouveau patient (Scénario 3 ou 4)</td>
+                    </tr>
+                    <tr>
+                        <td><code>sexe</code></td>
+                        <td>string</td>
+                        <td><span class="badge conditional">CONDITIONNEL</span></td>
+                        <td>M ou F (Scénario 4)</td>
+                    </tr>
+                    <tr>
+                        <td><code>type_identite</code></td>
+                        <td>string</td>
+                        <td><span class="badge conditional">CONDITIONNEL</span></td>
+                        <td>Requis si nouveau patient (Scénario 4)</td>
+                    </tr>
+                    <tr>
+                        <td><code>telephone_prefix</code></td>
+                        <td>string</td>
+                        <td><span class="badge conditional">CONDITIONNEL</span></td>
+                        <td>Requis si nouveau patient (Scénario 3 ou 4)</td>
+                    </tr>
+                    <tr>
+                        <td><code>telephone</code></td>
+                        <td>string</td>
+                        <td><span class="badge conditional">CONDITIONNEL</span></td>
+                        <td>Requis si nouveau patient (Scénario 3 ou 4)</td>
+                    </tr>
+                    <tr>
+                        <td><code>date_naissance</code></td>
+                        <td>string</td>
+                        <td><span class="badge conditional">CONDITIONNEL</span></td>
+                        <td>YYYY-MM-DD (Scénario 4)</td>
+                    </tr>
+                    <tr>
+                        <td><code>pays</code></td>
+                        <td>string</td>
+                        <td><span class="badge conditional">CONDITIONNEL</span></td>
+                        <td>Scénario 4</td>
+                    </tr>
+                    <tr>
+                        <td><code>datePrevue</code></td>
+                        <td>string</td>
+                        <td><span class="badge required">REQUIS</span></td>
+                        <td>Format ISO: 2025-12-15T10:00:00</td>
+                    </tr>
+                    <tr>
+                        <td><code>motif</code></td>
+                        <td>string</td>
+                        <td><span class="badge required">REQUIS</span></td>
+                        <td>Diagnostic (doit exister en base, insensible à la casse)</td>
+                    </tr>
+                    <tr>
+                        <td><code>medecinTraitant</code></td>
+                        <td>string</td>
+                        <td><span class="badge required">REQUIS</span></td>
+                        <td>Nom complet du médecin (doit exister en base)</td>
+                    </tr>
+                </table>
+
+                <div class="success-box">
+                    <strong>⚠️ Validation:</strong> Le système valide que le <code>motif</code> et le <code>medecinTraitant</code> existent dans la base de données avant de créer le rendez-vous.
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <button class="scroll-to-top" id="scrollToTop" onclick="scrollToTop()" title="Aller en haut">
+        ↑
+    </button>
+
+    <script>
+        // Afficher/masquer le bouton selon la position du scroll
+        window.addEventListener('scroll', function() {
+            const scrollButton = document.getElementById('scrollToTop');
+            if (window.pageYOffset > 300) {
+                scrollButton.classList.add('visible');
+            } else {
+                scrollButton.classList.remove('visible');
+            }
+        });
+
+        // Fonction pour remonter en haut de la page
+        function scrollToTop() {
+            window.scrollTo({
+                top: 0,
+                behavior: 'smooth'
+            });
+        }
+    </script>
+</body>
+</html>

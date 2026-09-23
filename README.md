@@ -1,98 +1,30 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Healthcare follow-up backend
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+NestJS service for WhatsApp patient follow-up, staff review, and ClinOps integration.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+## Local setup
 
-## Description
+Use Node 20, PostgreSQL, and Redis. Copy `.env.example` to `.env`, set `DATABASE_URL`, `REDIS_URL`, and a strong `JWT_SECRET`, then run:
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
-
-## Project setup
-
-```bash
-$ npm install
+```sh
+npm ci
+npx prisma generate
+npx prisma migrate deploy
+npm run build
+npm test -- --runInBand
+npm run start:prod
 ```
 
-## Compile and run the project
+The seed command (`node dist/src/platform/database/seed.js`) requires `SEED_ADMIN_EMAIL` and a unique `SEED_ADMIN_PASSWORD` of at least 16 characters to create an admin account. It does not rotate existing passwords.
 
-```bash
-# development
-$ npm run start
+`CLINOPS_MODE` may be `mock` or `live`. When blank, all three ClinOps settings (`CLINOPS_BASE_URL`, `CLINOPS_USERNAME`, `CLINOPS_PASSWORD`) select live mode; none select mock mode. Partial credentials cause startup to fail. Explicit `mock` keeps local fixtures even when WhatsApp credentials are configured. **Mock mode can still send real WhatsApp messages** if Meta credentials are configured; use only approved test recipients and templates.
 
-# watch mode
-$ npm run start:dev
+Live requests use the methods and paths in [the external ClinOps reference](docs/clinops-api-external.html). The client does not discover endpoints. Contract tests use fake transport responses; they do not prove the deployed ClinOps service accepts the requests. Live booking confirmation requires a verified patient ID, specialty ID, motif, and available doctor. An uncertain upstream booking result is marked `RECONCILE` and must be checked in ClinOps before any retry.
 
-# production mode
-$ npm run start:prod
-```
+The same local Ollama model handles classification and campaign conversation. The default tag is `qwen3.5:9b` with an 8192-token context budget. The 16 GB Mac recommendation is for development evaluation only; latency, French/Arabic/Darija quality, and clinical safety require measured tests before patient use. The default model is not downloaded by setup.
 
-## Run tests
+## Verification and deployment
 
-```bash
-# unit tests
-$ npm run test
+The `Backend CI` GitHub Actions workflow runs on every pushed branch and pull request. It installs locked dependencies, audits them, generates Prisma, enforces import boundaries, builds, runs tests, and builds the Docker image. Production deployment runs only after CI succeeds on `main`. It stops on migration failure and waits for database and Redis health through the container health check.
 
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
-```
-
-## Deployment
-
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
-
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
-
-```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
-```
-
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
-
-## Resources
-
-Check out a few resources that may come in handy when working with NestJS:
-
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+Do not merge solely because CI passes. Before patient use, validate the ClinOps contract with authorized staging credentials; update the separate dashboard to supply verified booking fields and show `RECONCILE` state; obtain clinic-approved consent, opt-out, emergency escalation, retention, and WhatsApp template policies; and test restart/retry behavior with a non-patient staging account. Campaign sends and reminders still need durable delivery reconciliation to prevent missed or duplicate contact after crashes.

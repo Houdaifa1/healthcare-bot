@@ -40,13 +40,26 @@ export class WhatsAppController {
   ): void {
     const verifyToken = this.configService.get<string>('whatsapp.verifyToken');
 
+    // The emptiness check is not redundant: with META_VERIFY_TOKEN unset (the
+    // normal state for an install that does not use WhatsApp) both sides would
+    // be undefined, and `token === verifyToken` would hand the challenge back
+    // to anyone who asked.
+    if (!verifyToken) {
+      this.logger.warn(
+        'Webhook verification attempted but META_VERIFY_TOKEN is not set — refusing. ' +
+        'Set it in .env to enable the WhatsApp tier.',
+      );
+      res.status(403).send('Forbidden');
+      return;
+    }
+
     if (mode === 'subscribe' && token === verifyToken) {
       this.logger.log('✅ Meta webhook verified successfully');
       res.status(200).send(challenge);
       return;
     }
 
-    this.logger.warn(`❌ Webhook verification failed — mode=${mode} token=${token}`);
+    this.logger.warn(`Webhook verification failed — mode=${mode}`);
     res.status(403).send('Forbidden');
   }
 
@@ -70,8 +83,8 @@ export class WhatsAppController {
     try {
       await this.whatsappService.handleIncomingWebhook(body);
     } catch (error: any) {
-      // Never return non-200 to Meta — it will keep retrying the same payload
       this.logger.error('Error handling webhook payload', error?.message);
+      throw error;
     }
 
     return 'EVENT_RECEIVED';

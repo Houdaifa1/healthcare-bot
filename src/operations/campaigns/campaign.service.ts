@@ -138,14 +138,23 @@ export class CampaignService {
       );
     }
 
-    if (
-      dto.name !== undefined || dto.filterDateFrom !== undefined ||
-      dto.filterDateTo !== undefined || dto.filterDoctors !== undefined ||
-      dto.filterMotifs !== undefined || dto.filterCinPassports !== undefined ||
-      dto.filterPhoneNumbers !== undefined
-    ) {
-      this.validateFilters({ ...campaign, ...dto } as any);
-    }
+    // Validate the campaign as it will be AFTER this patch, not the patch alone.
+    //
+    // Each field is merged individually rather than with `{ ...campaign, ...dto }`.
+    // The global ValidationPipe runs with `transform: true`, so `dto` is a real
+    // UpdateCampaignDto instance and every optional property it declares exists
+    // as an own property set to `undefined`. Spreading it therefore overwrote the
+    // campaign's stored filters with `undefined`, and renaming a perfectly valid
+    // DRAFT campaign failed with "At least one of filterMotifs ... is required".
+    const asPatched = {
+      filterMotifs:       dto.filterMotifs       ?? campaign.filterMotifs,
+      filterCinPassports: dto.filterCinPassports ?? campaign.filterCinPassports,
+      filterPhoneNumbers: dto.filterPhoneNumbers ?? campaign.filterPhoneNumbers,
+      filterDoctors:      dto.filterDoctors      ?? campaign.filterDoctors,
+      filterDateFrom:     dto.filterDateFrom     ?? campaign.filterDateFrom?.toISOString(),
+      filterDateTo:       dto.filterDateTo       ?? campaign.filterDateTo?.toISOString(),
+    };
+    this.validateFilters(asPatched);
 
     return this.prisma.campaign.update({
       where: { id },
@@ -461,8 +470,9 @@ export class CampaignService {
 
         let history = null;
         try {
-          const identifier = patient.cin ?? patient.numeroTelephonePrincipale;
-          history = await this.clinops.getPatientHistory(identifier);
+          history = await this.clinops.getPatientHistory(patient.cin?.trim()
+            ? { cin_passeport: patient.cin }
+            : { numeroTelephone: patient.numeroTelephonePrincipale });
         } catch (err: any) {
           this.logger.warn(
             `Could not fetch history for patient ${patient.patient_id}: ${err.message}`,
@@ -579,7 +589,11 @@ export class CampaignService {
     }
     for (const cin_passeport of filters.filterCinPassports ?? []) {
       const matched = await this.clinops.searchPatients({ cin_passeport, OnlyVerifiedNumbers: onlyVerified });
-      for (const patient of matched) patientsById.set(patient.patient_id, patient);
+      for (const patient of matched) {
+        if (patient.cin?.toUpperCase() === cin_passeport.toUpperCase()) {
+          patientsById.set(patient.patient_id, patient);
+        }
+      }
     }
     for (const numeroTelephone of filters.filterPhoneNumbers ?? []) {
       const matched = await this.clinops.searchPatients({ numeroTelephone, OnlyVerifiedNumbers: onlyVerified });

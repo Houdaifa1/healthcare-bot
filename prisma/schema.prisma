@@ -252,6 +252,8 @@ model BookingRequest {
   createdAt          DateTime             @default(now())
   updatedAt          DateTime             @updatedAt
   confirmedAt        DateTime?
+  externalAttemptAt  DateTime?
+  externalAttemptState String?
 
   campaignPatient    CampaignPatient?     @relation(fields: [campaignPatientId], references: [id])
   appointment        Appointment?         @relation(fields: [appointmentId], references: [id])

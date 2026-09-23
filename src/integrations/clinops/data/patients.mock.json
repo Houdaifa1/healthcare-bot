@@ -223,5 +223,35 @@
     "solde_impaye": "0.00",
     "numeroTelephonePrincipale": "+212644645877",
     "numeroTelephoneSecondaire": null
+  },
+  {
+    "patient_id": 9220,
+    "patient": "Mohamed Drahm",
+    "cin": "CIN9220",
+    "sexe": "M",
+    "age_years": 52,
+    "ville": "Casablanca",
+    "pays": "Maroc",
+    "date_derniere_admission": "2026-06-20T10:00:00.000000+00:00",
+    "prestation": "Consultation cardiologie",
+    "medecin_traitant": "DR Ahmed BENALI",
+    "solde_impaye": "0.00",
+    "numeroTelephonePrincipale": "+212675091204",
+    "numeroTelephoneSecondaire": null
+  },
+  {
+    "patient_id": 9221,
+    "patient": "Salim BENGHA",
+    "cin": "CIN9221",
+    "sexe": "M",
+    "age_years": 41,
+    "ville": "Casablanca",
+    "pays": "Maroc",
+    "date_derniere_admission": "2026-06-25T15:00:00.000000+00:00",
+    "prestation": "Consultation orthopédie",
+    "medecin_traitant": "DR Nadia BENCHEKROUN",
+    "solde_impaye": "300.00",
+    "numeroTelephonePrincipale": "+212701180069",
+    "numeroTelephoneSecondaire": null
   }
 ]

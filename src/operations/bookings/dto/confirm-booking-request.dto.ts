@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsDateString, IsOptional, Matches } from 'class-validator';
+import { IsString, IsNotEmpty, IsDateString, IsOptional, Matches, IsInt, IsPositive } from 'class-validator';
 
 export class ConfirmBookingRequestDto {
   // Optional: INBOUND booking requests already carry the exact slot the
@@ -15,6 +15,26 @@ export class ConfirmBookingRequestDto {
     message: 'appointmentTime must be in HH:mm format',
   })
   appointmentTime?: string; // "HH:mm"
+
+  @IsOptional()
+  @IsInt()
+  @IsPositive()
+  patientId?: number;
+
+  @IsOptional()
+  @IsInt()
+  @IsPositive()
+  specialityId?: number;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  motif?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  doctorName?: string;
 
   @IsOptional()
   @IsString()

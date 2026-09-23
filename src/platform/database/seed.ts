@@ -62,6 +62,13 @@ async function main() {
   const existingClinic = await prisma.clinic.findUnique({ where: { id: 'main' } });
 
   if (!existingClinic) {
+    // notificationPhone comes from an env var, not the static fixture, since
+    // it's the installing staff's own number (prompted for by setup.sh),
+    // not a clinic-data default like name/address/timezone. Blank is a
+    // legitimate choice at install time — handoff/complaint alerts just
+    // have nowhere to go until it's set, from here or later via PATCH
+    // /clinics on the dashboard.
+    const notificationPhone = process.env.STAFF_NOTIFICATION_PHONE || null;
     await prisma.clinic.create({
       data: {
         id: 'main',
@@ -71,9 +78,15 @@ async function main() {
         timezone: clinicData.timezone,
         defaultLanguage: clinicData.defaultLanguage as any,
         supportedLangs: clinicData.supportedLangs as any,
+        notificationPhone,
       },
     });
     console.log(`✅ Clinic created: ${clinicData.name}`);
+    if (notificationPhone) {
+      console.log(`✅ Staff notification number set: ${notificationPhone}`);
+    } else {
+      console.log(`⏭️  No staff notification number set — handoff/complaint alerts have nowhere to go yet`);
+    }
   } else {
     console.log(`⏭️  Clinic already exists — skipping`);
   }
@@ -169,6 +182,9 @@ async function main() {
       '⚠️  SEED_ADMIN_EMAIL and/or SEED_ADMIN_PASSWORD not set in env — skipping admin user',
     );
   } else {
+    if (adminPassword.length < 16 || adminPassword === 'changeme123') {
+      throw new Error('SEED_ADMIN_PASSWORD must be a unique password of at least 16 characters');
+    }
     const existingAdmin = await prisma.adminUser.findUnique({
       where: { email: adminEmail },
     });

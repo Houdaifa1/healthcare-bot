@@ -20,12 +20,26 @@ ${message}
 Classify the intent as EXACTLY one of these words:
 BOOK_APPOINTMENT | ASK_FAQ | HUMAN_AGENT | CONFIRM | CANCEL | GREETING | UNKNOWN
 
+PRECEDENCE RULE — apply this before anything else:
+If the current state starts with BOOKING_ (other than BOOKING_CONFIRM), or is
+AWAITING_NAME, the patient is already inside a booking they started earlier.
+Their message is almost always DATA answering the current step — a specialty, a
+doctor's name, a date, a time, their own name — and DATA is always UNKNOWN.
+In those states the ONLY intents you may return are CANCEL (they explicitly want
+to stop or go back), HUMAN_AGENT (they explicitly want a person), or UNKNOWN.
+BOOK_APPOINTMENT, ASK_FAQ, CONFIRM and GREETING are FORBIDDEN in those states,
+even if the message mentions doctors, appointments, months or times — mentioning
+a date while choosing a date is answering the question, not asking a new one.
+
 Rules:
 - BOOK_APPOINTMENT: Patient wants to book, reserve or schedule a medical appointment.
   Examples: "rdv", "rndv", "rendez-vous", "prendre rdv", "je veux un rdv", "book", "appointment",
   "consulter", "médecin", "docteur", "voir un docteur", "prendre rendez-vous", "réserver",
   "j'ai besoin d'un rdv", "موعد" (Arabic for appointment), "1" (when state is IDLE and user
   picks option 1 from a menu).
+  NEVER return BOOK_APPOINTMENT when the state is BOOKING_SPECIALTY, BOOKING_DOCTOR,
+  BOOKING_DATE, BOOKING_TIME or AWAITING_NAME — a booking is already in progress there,
+  so the patient cannot be asking to start one.
 
 - ASK_FAQ: Patient asks about clinic info: hours, location, address, fees, price, how to get
   there, phone number, opening times. Examples: "horaires", "adresse", "prix", "tarif",
@@ -58,14 +72,18 @@ Comprehensive state context:
   "agent", "humain" (HUMAN_AGENT).
 
 - If state is BOOKING_DOCTOR: User is selecting a doctor. Most inputs are DATA (doctor name/number).
+  DATA examples that are all UNKNOWN: "Dr. Bakouche", "le docteur Benali", "1", "le premier".
   Return UNKNOWN unless user explicitly says "menu", "annuler", "cancel" (CANCEL) or
   "agent", "humain" (HUMAN_AGENT).
 
 - If state is BOOKING_DATE: User is selecting a date. Most inputs are DATA (date selection).
+  DATA examples that are all UNKNOWN, not BOOK_APPOINTMENT: "le 15 décembre", "15/12",
+  "demain", "lundi", "next tuesday", "3", "la semaine prochaine".
   Return UNKNOWN unless user explicitly says "menu", "annuler", "cancel" (CANCEL) or
   "agent", "humain" (HUMAN_AGENT).
 
 - If state is BOOKING_TIME: User is selecting a time slot. Most inputs are DATA (time selection).
+  DATA examples that are all UNKNOWN: "10h", "10:00", "le matin", "2", "in the afternoon".
   Return UNKNOWN unless user explicitly says "menu", "annuler", "cancel" (CANCEL) or
   "agent", "humain" (HUMAN_AGENT).
 

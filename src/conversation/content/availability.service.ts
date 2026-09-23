@@ -6,7 +6,7 @@ import { format, addDays } from 'date-fns';
 import { ClinOpsTimeSlot } from '@integrations/clinops/clinops.types';
 
 const SLOT_STEP_MINUTES = 30;
-const MAX_DATE_LOOKAHEAD_DAYS = 60;
+const MAX_DATE_LOOKAHEAD_DAYS = 7;
 
 @Injectable()
 export class AvailabilityService {
@@ -18,21 +18,12 @@ export class AvailabilityService {
   // Only dates this specific doctor actually works (per their ClinOps
   // schedule) are returned — no more identical Mon/Tue/Wed for every doctor.
   async getAvailableDates(doctorLabel: string, count: number = 3): Promise<{ date: string }[]> {
-    const dates: { date: string }[] = [];
-    let current = new Date();
-    let daysChecked = 0;
-
-    while (dates.length < count && daysChecked < MAX_DATE_LOOKAHEAD_DAYS) {
-      const dateStr = format(current, 'yyyy-MM-dd');
-      const windows = await this.clinOpsService.getDoctorsAvailability(doctorLabel, dateStr);
-      if (windows.length > 0) {
-        dates.push({ date: dateStr });
-      }
-      current = addDays(current, 1);
-      daysChecked++;
-    }
-
-    return dates;
+    const dates = Array.from({ length: MAX_DATE_LOOKAHEAD_DAYS }, (_, day) =>
+      format(addDays(new Date(), day), 'yyyy-MM-dd'));
+    const windows = await Promise.all(dates.map(date =>
+      this.clinOpsService.getDoctorsAvailability(doctorLabel, date)));
+    return dates.filter((_, index) => windows[index].length > 0)
+      .slice(0, count).map(date => ({ date }));
   }
 
   // Expands this doctor's daily windows into discrete bookable times, then

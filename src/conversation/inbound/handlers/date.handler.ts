@@ -118,7 +118,8 @@ export class DateHandler {
     if (trimmed.startsWith('date_')) {
       const candidate = trimmed.replace('date_', '');
       if (/^\d{4}-\d{2}-\d{2}$/.test(candidate)) {
-        return candidate;
+        const availableDates = await this.availabilityService.getAvailableDates(doctorName, 3);
+        return availableDates.some(item => item.date === candidate) ? candidate : null;
       }
       return null;
     }

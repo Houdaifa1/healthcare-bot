@@ -108,11 +108,9 @@ export class ReminderService {
         },
       });
 
-      if (eligiblePatients.length === 0) continue;
-
-      this.logger.log(
-        `Campaign ${campaign.id}: ${eligiblePatients.length} patients eligible for reminder`,
-      );
+      if (eligiblePatients.length > 0) {
+        this.logger.log(`Campaign ${campaign.id}: ${eligiblePatients.length} patients eligible for reminder`);
+      }
 
       for (const patient of eligiblePatients) {
         try {
@@ -126,6 +124,25 @@ export class ReminderService {
         } catch (err: any) {
           this.logger.error(`Reminder failed for patient ${patient.id}: ${err.message}`);
         }
+      }
+
+      const remaining = await this.prisma.campaignPatient.count({
+        where: {
+          campaignId: campaign.id,
+          status: { in: [
+            CampaignPatientStatus.PENDING,
+            CampaignPatientStatus.PARKED,
+            CampaignPatientStatus.CONTACTED,
+            CampaignPatientStatus.REPLIED,
+          ] },
+        },
+      });
+      const total = await this.prisma.campaignPatient.count({ where: { campaignId: campaign.id } });
+      if (total > 0 && remaining === 0) {
+        await this.prisma.campaign.updateMany({
+          where: { id: campaign.id, status: CampaignStatus.RUNNING },
+          data: { status: CampaignStatus.COMPLETED, completedAt: new Date() },
+        });
       }
     }
 

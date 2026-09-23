@@ -144,7 +144,7 @@ const AI_TOOLS: AIToolDefinition[] = [
 const MAX_TOOL_LOOPS = 6;
 const COMPLAINT_DEDUP_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-// PRODUCTION FIX: broadened leak detection. The old pattern only caught
+// Broadened leak detection. The old pattern only caught
 // "toolname(" / "toolname{" syntax. Now also catches JSON-key-style leaks
 // (e.g. `"name": "log_complaint"`), code fences, and raw model artifacts —
 // all forms a small local model can produce even under a JSON-schema
@@ -531,7 +531,7 @@ export class ConversationService {
         break;
       }
 
-      // PERFORMANCE FIX: non-terminal tools (log_complaint, request_booking)
+      // Non-terminal tools (log_complaint, request_booking)
       // already come back from generate() with a reply alongside the tool
       // call in the SAME response — the tool prompts explicitly say "this is
       // a silent side effect, always follow it with a warm reply" meaning
@@ -564,7 +564,7 @@ export class ConversationService {
         break;
       }
 
-      // PRODUCTION FIX (leak prevention): the assistant/tool-result exchange
+      // The assistant/tool-result exchange
       // is pushed to `aiMessages` ONLY — the local, in-memory array used to
       // continue this turn's tool loop with the provider. It is NEVER pushed
       // to `session.messages` anymore. Previously this code also did:
@@ -627,7 +627,7 @@ export class ConversationService {
       this.logger.warn(`Failed to log AI usage: ${err.message}`);
     }
 
-    // PRODUCTION FIX: this write happens AFTER the patient has already
+    // This write happens AFTER the patient has already
     // received their reply via WhatsApp (sendTextOnce, above). Previously
     // unguarded — a transient DB error here threw uncaught out of
     // handleReply, and since the campaign routing call site in
@@ -1012,7 +1012,7 @@ Current turn: ${session.turnCount + 1}`;
   ): Promise<void> {
     session.status = 'completed';
 
-    // PRODUCTION FIX: every caller of closeConversation() already sent the
+    // Every caller of closeConversation() already sent the
     // farewell text to the patient before calling this (sendTextOnce, or the
     // turn-limit branch's own sendText). If any write below throws uncaught,
     // BullMQ retries the whole inbound job and re-runs this turn from
@@ -1050,7 +1050,7 @@ Current turn: ${session.turnCount + 1}`;
     // 1. Check for tool leak patterns — broadened set, see TOOL_LEAK_PATTERNS above.
     if (TOOL_LEAK_PATTERNS.some(pattern => pattern.test(raw))) {
       this.logger.error(`TOOL-CALL LEAK detected in text reply for ${phone}. Raw text: ${raw}`);
-      // PRODUCTION FIX: previously returned '' (empty string), meaning the
+      // Previously returned '' (empty string), meaning the
       // patient silently received NOTHING for that turn if the only content
       // was a leaked tool call. Now returns a safe, language-appropriate
       // fallback so the patient always gets a human response.

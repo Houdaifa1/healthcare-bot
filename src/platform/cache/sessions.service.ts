@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
+import { randomUUID } from 'node:crypto';
 import { Language } from '@prisma/client';
 
 // ─── Reactive bot session (existing flow) ────────────────────────────────────
@@ -67,7 +68,8 @@ export const SESSION_VERSION = 1;
 // ─── TTLs ─────────────────────────────────────────────────────────────────────
 const REACTIVE_SESSION_TTL = 30 * 60;           // 30 min
 const CAMPAIGN_SESSION_TTL = 7 * 24 * 60 * 60;  // 7 days
-const DEDUP_TTL            = 5 * 60;             // 5 min
+const DEDUP_TTL            = 7 * 24 * 60 * 60;
+const PROCESSING_TTL       = 10 * 60;
 
 @Injectable()
 export class SessionsService implements OnModuleDestroy {
@@ -112,7 +114,7 @@ export class SessionsService implements OnModuleDestroy {
   // ═══════════════════════════════════════════════════════════════════════════
   // PHONE NORMALIZATION — SINGLE SOURCE OF TRUTH
   // ═══════════════════════════════════════════════════════════════════════════
-  // PRODUCTION FIX: previously every caller (whatsapp.service.ts,
+  // Previously every caller (whatsapp.service.ts,
   // conversation.service.ts, campaign.service.ts, message.processor.ts) had
   // to remember to normalize phone numbers identically before touching a
   // session. They didn't, consistently. A campaign patient's phone could be
@@ -327,9 +329,31 @@ export class SessionsService implements OnModuleDestroy {
   // MESSAGE DEDUPLICATION  key: processed:<messageId>
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async markMessageProcessed(messageId: string): Promise<boolean> {
-    const key   = `processed:${messageId}`;
-    const isNew = await this.redis.set(key, '1', 'EX', DEDUP_TTL, 'NX');
-    return isNew === 'OK';
+  async claimMessage(messageId: string): Promise<{ state: 'claimed' | 'done' | 'busy'; token?: string }> {
+    if (await this.redis.exists(`processed:${messageId}`)) return { state: 'done' };
+    const token = randomUUID();
+    const claimed = await this.redis.set(`processing:${messageId}`, token, 'EX', PROCESSING_TTL, 'NX');
+    if (claimed !== 'OK') return { state: 'busy' };
+    if (await this.redis.exists(`processed:${messageId}`)) {
+      await this.releaseMessage(messageId, token);
+      return { state: 'done' };
+    }
+    return { state: 'claimed', token };
+  }
+
+  async completeMessage(messageId: string, token: string): Promise<void> {
+    const result = await this.redis.eval(
+      "if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end " +
+      "redis.call('SET', KEYS[2], '1', 'EX', ARGV[2]); redis.call('DEL', KEYS[1]); return 1",
+      2, `processing:${messageId}`, `processed:${messageId}`, token, String(DEDUP_TTL),
+    );
+    if (result !== 1) throw new Error(`Message processing claim expired for ${messageId}`);
+  }
+
+  async releaseMessage(messageId: string, token: string): Promise<void> {
+    await this.redis.eval(
+      "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) end return 0",
+      1, `processing:${messageId}`, token,
+    );
   }
 }

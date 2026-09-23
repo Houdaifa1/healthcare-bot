@@ -13,33 +13,17 @@ import {
 // This replaces the old text-scraping "recoverLeakedToolCalls" hack, which
 // silently deleted any tool call it couldn't pattern-match.
 const OLLAMA_URL = process.env.OLLAMA_URL ?? 'http://localhost:11434/api/chat';
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? 'healthcare-bot:latest';
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? 'qwen3.5:9b';
 
-// Sized to absorb a cold model reload (observed 12-20s for this ~30B q4
-// model), not just a warm generation (~2-3s). This is the actual fix for
-// cold-start failures — keep_alive below only decides how OFTEN a reload
-// happens, not whether the patient ever sees a broken/canned reply when one
-// does. If a reload is ever needed mid-conversation, the patient just waits
-// a bit longer for a real answer instead of getting an error.
+// These budgets are provisional until measured with the selected model.
 const OLLAMA_TIMEOUT_MS = Number(process.env.OLLAMA_TIMEOUT_MS ?? 45_000);
 const OLLAMA_TEMPERATURE = Number(process.env.OLLAMA_TEMPERATURE ?? 0.2);
+const OLLAMA_NUM_CTX = Number(process.env.OLLAMA_NUM_CTX ?? 8192);
 
-// Deliberately short: this model is ~20GB on GPU, and a real patient
-// conversation is a handful of messages over a few minutes, not a
-// half-hour-long chat. Holding it resident for 30m+ after the patient goes
-// quiet just burns GPU memory for a reply that (per this campaign's own
-// design — aiMaxTurns, farewell-after-limit) usually isn't coming. 10m
-// comfortably covers back-to-back replies in one sitting; anything longer
-// pays one cold reload on the next message, bounded by OLLAMA_TIMEOUT_MS
-// above rather than failing.
-const OLLAMA_KEEP_ALIVE = process.env.OLLAMA_KEEP_ALIVE ?? '10m';
+// Both Ollama callers share one model and one residency policy.
+const OLLAMA_KEEP_ALIVE = process.env.OLLAMA_KEEP_ALIVE ?? '30m';
 
-// Cold-loading a ~30B q4 model from disk can take well over a minute — far
-// longer than the 20s per-turn conversation timeout above, which is sized for
-// a *warm* model. Left uncovered, the very first turn of every session (or
-// any turn after a 30m+ gap) reliably timed out and fell back to a canned
-// reply instead of a real one. This is generous on purpose: it only bounds
-// the one-time background warm-up at boot, never a real patient turn.
+// Warm-up has a separate time budget from patient replies.
 const OLLAMA_WARMUP_TIMEOUT_MS = 120_000;
 
 // ─── Fixed response envelope every model call must conform to ──────────────
@@ -167,9 +151,10 @@ export class OllamaProvider implements AIProvider, OnModuleInit {
           model: OLLAMA_MODEL,
           messages: chatMessages,
           format: RESPONSE_SCHEMA,
+          think: false,
           stream: false,
           keep_alive: OLLAMA_KEEP_ALIVE,
-          options: { temperature: OLLAMA_TEMPERATURE },
+          options: { temperature: OLLAMA_TEMPERATURE, num_ctx: OLLAMA_NUM_CTX },
         }),
       });
     } catch (err: any) {
@@ -274,4 +259,4 @@ export class OllamaProvider implements AIProvider, OnModuleInit {
     );
     return missing.length > 0 ? { ok: false, missing } : { ok: true };
   }
-} 
+}

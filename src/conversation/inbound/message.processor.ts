@@ -25,23 +25,28 @@ export class MessageProcessor extends WorkerHost {
   }
 
   async process(job: Job<MessageJob>): Promise<void> {
-    const { from, name, text, messageId } = job.data;
-    this.logger.log(`Processing message from ${name} (+${from}): "${text}"`);
-
-    // ── 1. Message deduplication ───────────────────────────────────────────
-    if (messageId) {
-      const isNew = await this.sessionsService.markMessageProcessed(messageId);
-      if (!isNew) {
-        this.logger.warn(`Duplicate messageId ${messageId} — skipping`);
-        return;
-      }
+    const messageId = job.data.messageId;
+    if (!messageId) throw new Error('Inbound WhatsApp message has no id');
+    const claim = await this.sessionsService.claimMessage(messageId);
+    if (claim.state === 'done') return;
+    if (claim.state === 'busy') throw new Error(`Message ${messageId} is already processing`);
+    try {
+      await this.processClaimedMessage(job);
+      await this.sessionsService.completeMessage(messageId, claim.token!);
+    } catch (error) {
+      await this.sessionsService.releaseMessage(messageId, claim.token!);
+      throw error;
     }
+  }
+
+  private async processClaimedMessage(job: Job<MessageJob>): Promise<void> {
+    const { from, name, text, messageId } = job.data;
+    this.logger.log(`Processing message ${messageId} from ${from}`);
 
     // ── 2. Load clinic dynamically ─────────────────────────────────────────
     const clinic = await this.prisma.clinic.findFirst();
     if (!clinic) {
-      this.logger.error('No clinic record found — run `npm run seed` first');
-      return;
+      throw new Error('No clinic record found — run seed before accepting webhooks');
     }
 
     // ── 3. Campaign routing ────────────────────────────────────────────────

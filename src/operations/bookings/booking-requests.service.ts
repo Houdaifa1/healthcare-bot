@@ -15,6 +15,7 @@ import {
 import { ConfirmBookingRequestDto } from './dto/confirm-booking-request.dto';
 import { RejectBookingRequestDto } from './dto/reject-booking-request.dto';
 import { WhatsAppService } from '@integrations/whatsapp/whatsapp.service';
+import { ClinOpsService } from '@integrations/clinops/clinops.service';
 
 @Injectable()
 export class BookingRequestsService {
@@ -23,6 +24,7 @@ export class BookingRequestsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly whatsappService: WhatsAppService,
+    private readonly clinops: ClinOpsService,
   ) {}
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -156,6 +158,9 @@ export class BookingRequestsService {
         'Booking request already has an associated appointment',
       );
     }
+    if (bookingRequest.externalAttemptAt) {
+      throw new ConflictException('A ClinOps booking attempt already exists. Check the clinic system before retrying.');
+    }
 
     // CAMPAIGN requests carry patient identity via CampaignPatient; INBOUND
     // requests carry it directly on the BookingRequest itself (no CampaignPatient
@@ -164,6 +169,7 @@ export class BookingRequestsService {
     let patientPhone: string;
     let fallbackDoctorName: string | undefined;
     let fallbackSpecialtyName: string | undefined;
+    let recordedPatientId: number | null = bookingRequest.clinopsPatientId;
 
     if (bookingRequest.source === BookingSource.INBOUND) {
       if (!bookingRequest.patientName || !bookingRequest.patientPhone) {
@@ -186,6 +192,7 @@ export class BookingRequestsService {
       patientPhone = campaignPatient.phone;
       fallbackDoctorName = campaignPatient.medecinTraitant;
       fallbackSpecialtyName = campaignPatient.prestation;
+      recordedPatientId = campaignPatient.clinopsPatientId;
     }
 
     // ── Resolve the appointment date/time ─────────────────────────────────
@@ -198,16 +205,65 @@ export class BookingRequestsService {
       throw new BadRequestException('appointmentDate and appointmentTime are required');
     }
 
-    const appointmentDate = new Date(appointmentDateInput);
-    if (Number.isNaN(appointmentDate.getTime())) {
+    const date = appointmentDateInput.slice(0, 10);
+    const appointmentDate = new Date(`${date}T00:00:00`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(appointmentDate.getTime()) ||
+        appointmentDate.getFullYear() !== Number(date.slice(0, 4)) ||
+        appointmentDate.getMonth() + 1 !== Number(date.slice(5, 7)) ||
+        appointmentDate.getDate() !== Number(date.slice(8, 10))) {
       throw new BadRequestException('appointmentDate is not a valid date');
     }
+    const datePrevue = `${date}T${appointmentTimeInput}:00`;
+    const clinicNow = new Date().toLocaleString('sv-SE', { timeZone: 'Africa/Casablanca', hour12: false }).replace(' ', 'T');
+    if (datePrevue <= clinicNow) {
+      throw new BadRequestException('appointmentDate and appointmentTime must be in the future');
+    }
 
-    // A date that has already started cannot be booked.
-    const startOfToday = new Date();
-    startOfToday.setHours(0, 0, 0, 0);
-    if (appointmentDate < startOfToday) {
-      throw new BadRequestException('appointmentDate cannot be in the past');
+    const doctorName = dto.doctorName ?? bookingRequest.preferredDoctor ?? fallbackDoctorName;
+    if (!doctorName) throw new BadRequestException('doctorName is required');
+
+    if (this.clinops.isLiveMode()) {
+      if (!dto.patientId || !dto.specialityId || !dto.motif?.trim()) {
+        throw new BadRequestException('Live ClinOps confirmation requires verified patientId, specialityId and motif');
+      }
+      if (recordedPatientId && recordedPatientId !== dto.patientId) {
+        throw new BadRequestException('patientId differs from the patient identified for this request');
+      }
+      const normalizePhone = (value: string) => {
+        const digits = value.replace(/\D/g, '');
+        return /^0\d{9}$/.test(digits) ? `212${digits.slice(1)}` : digits;
+      };
+      const patients = await this.clinops.searchPatients({ numeroTelephone: patientPhone });
+      if (!patients.some(patient => patient.patient_id === dto.patientId &&
+          [patient.numeroTelephonePrincipale, patient.numeroTelephoneSecondaire]
+            .some(number => number && normalizePhone(number) === normalizePhone(patientPhone)))) {
+        throw new BadRequestException('patientId could not be verified against the patient phone in ClinOps');
+      }
+      const available = await this.clinops.getAvailableDoctorsByDate(
+        dto.specialityId, date, appointmentTimeInput, id,
+      );
+      if (!available.some(d => d.doctorLabel.toLocaleLowerCase() === doctorName.toLocaleLowerCase())) {
+        throw new ConflictException('Doctor is not available in ClinOps at this date and time');
+      }
+      const claimed = await this.prisma.bookingRequest.updateMany({
+        where: { id, clinicId, status: BookingRequestStatus.PENDING, externalAttemptAt: null },
+        data: { externalAttemptAt: new Date(), externalAttemptState: 'SUBMITTING' },
+      });
+      if (claimed.count !== 1) throw new ConflictException('Booking request changed while confirming');
+
+      try {
+        await this.clinops.createNewRDV({
+          patientId: dto.patientId,
+          datePrevue,
+          motif: dto.motif.trim(),
+          medecinTraitant: doctorName,
+        });
+      } catch (error) {
+        await this.prisma.bookingRequest.update({
+          where: { id }, data: { externalAttemptState: 'RECONCILE' },
+        });
+        throw error;
+      }
     }
 
     // No local Doctor/Specialty table exists to resolve preferredDoctor
@@ -222,36 +278,49 @@ export class BookingRequestsService {
 
     // Create Appointment, preserving the ClinOps text fields (doctorName/
     // specialtyName) for the record.
-    const appointment = await this.prisma.appointment.create({
-      data: {
-        clinicId,
-        patientName,
-        patientPhone,
-        appointmentDate,
-        appointmentTime:  appointmentTimeInput,
-        status:           AppointmentStatus.CONFIRMED,
-        doctorId,
-        specialtyId,
-        doctorName:       bookingRequest.preferredDoctor    ?? fallbackDoctorName,
-        specialtyName:    bookingRequest.preferredSpecialty ?? fallbackSpecialtyName,
-        notes:            bookingRequest.reason ?? undefined,
-        source:           bookingRequest.source,
-      },
-    });
-
-    this.logger.log(
-      `Appointment ${appointment.id} created for booking request ${id}`,
-    );
-
-    // Link appointment to booking request and update status
-    const updated = await this.prisma.bookingRequest.update({
-      where: { id },
-      data: {
-        status:      BookingRequestStatus.CONFIRMED,
-        appointmentId: appointment.id,
-        confirmedAt: new Date(),
-      },
-    });
+    let updated: BookingRequest;
+    try {
+      updated = await this.prisma.$transaction(async tx => {
+        const appointment = await tx.appointment.create({
+          data: {
+            clinicId,
+            patientName,
+            patientPhone,
+            appointmentDate,
+            appointmentTime: appointmentTimeInput,
+            status: AppointmentStatus.CONFIRMED,
+            doctorId,
+            specialtyId,
+            doctorName,
+            specialtyName: bookingRequest.preferredSpecialty ?? fallbackSpecialtyName,
+            notes: bookingRequest.reason ?? undefined,
+            source: bookingRequest.source,
+          },
+        });
+        const confirmation = {
+          status: BookingRequestStatus.CONFIRMED,
+          appointmentId: appointment.id,
+          confirmedAt: new Date(),
+          externalAttemptState: this.clinops.isLiveMode() ? 'CONFIRMED' : null,
+        };
+        if (this.clinops.isLiveMode()) {
+          return tx.bookingRequest.update({ where: { id }, data: confirmation });
+        }
+        const claimed = await tx.bookingRequest.updateMany({
+          where: { id, clinicId, status: BookingRequestStatus.PENDING, appointmentId: null },
+          data: confirmation,
+        });
+        if (claimed.count !== 1) throw new ConflictException('Booking request changed while confirming');
+        return tx.bookingRequest.findUniqueOrThrow({ where: { id } });
+      });
+    } catch (error) {
+      if (this.clinops.isLiveMode()) {
+        await this.prisma.bookingRequest.update({
+          where: { id }, data: { externalAttemptState: 'RECONCILE' },
+        }).catch(() => undefined);
+      }
+      throw error;
+    }
 
     // Send WhatsApp notification if a message was provided
     if (dto.message?.trim()) {
@@ -273,14 +342,18 @@ export class BookingRequestsService {
 
   async remove(clinicId: string, id: string): Promise<void> {
     const bookingRequest = await this.findOneRaw(clinicId, id);
+    if (bookingRequest.status !== BookingRequestStatus.PENDING || bookingRequest.externalAttemptAt) {
+      throw new ConflictException('A confirmed or attempted booking must be retained for reconciliation');
+    }
 
     this.logger.log(
       `Deleting booking request ${id} for clinic ${clinicId}`,
     );
 
-    await this.prisma.bookingRequest.delete({
-      where: { id },
+    const deleted = await this.prisma.bookingRequest.deleteMany({
+      where: { id, clinicId, status: BookingRequestStatus.PENDING, externalAttemptAt: null },
     });
+    if (deleted.count !== 1) throw new ConflictException('Booking request changed while deleting');
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -299,6 +372,9 @@ export class BookingRequestsService {
         `Booking request is already ${bookingRequest.status}`,
       );
     }
+    if (bookingRequest.externalAttemptAt) {
+      throw new ConflictException('Check the ClinOps booking attempt before rejecting this request');
+    }
 
     const patientPhone = bookingRequest.source === BookingSource.INBOUND
       ? bookingRequest.patientPhone
@@ -310,10 +386,12 @@ export class BookingRequestsService {
       `Rejecting booking request ${id} for clinic ${clinicId}`,
     );
 
-    const updated = await this.prisma.bookingRequest.update({
-      where: { id },
-      data:  { status: BookingRequestStatus.REJECTED },
+    const rejected = await this.prisma.bookingRequest.updateMany({
+      where: { id, clinicId, status: BookingRequestStatus.PENDING, externalAttemptAt: null },
+      data: { status: BookingRequestStatus.REJECTED },
     });
+    if (rejected.count !== 1) throw new ConflictException('Booking request changed while rejecting');
+    const updated = await this.prisma.bookingRequest.findUniqueOrThrow({ where: { id } });
 
     // Send WhatsApp notification if a message was provided and not silent
     if (dto?.message?.trim() && !dto?.silent && patientPhone) {

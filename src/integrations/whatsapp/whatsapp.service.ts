@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
@@ -44,6 +44,15 @@ export class WhatsAppService {
   private readonly apiVersion:    string;
   private readonly baseUrl:       string;
 
+  /**
+   * False when Meta credentials are absent. WhatsApp is an optional tier:
+   * receiving real patient messages needs a public HTTPS webhook, which a
+   * local install does not have, so the API, the dashboard and ClinOps must
+   * all work without it. Sends are refused rather than attempted — see
+   * assertConfigured().
+   */
+  private readonly configured: boolean;
+
   constructor(
     private readonly configService: ConfigService,
     private readonly prisma: PrismaService,
@@ -53,13 +62,46 @@ export class WhatsAppService {
     const phoneNumberId = this.configService.get<string>('whatsapp.phoneNumberId');
     const apiVersion    = this.configService.get<string>('whatsapp.apiVersion') ?? 'v20.0';
 
-    if (!accessToken)   throw new Error('META_ACCESS_TOKEN is not set');
-    if (!phoneNumberId) throw new Error('META_PHONE_NUMBER_ID is not set');
+    // Deliberately not fatal. Throwing here used to take the whole application
+    // down at boot, which meant an install with no WhatsApp account — the
+    // normal case for local and staging use — could not start at all, even
+    // though nothing else in the system needs Meta.
+    this.configured = Boolean(accessToken && phoneNumberId);
 
-    this.accessToken   = accessToken;
-    this.phoneNumberId = phoneNumberId;
+    this.accessToken   = accessToken ?? '';
+    this.phoneNumberId = phoneNumberId ?? '';
     this.apiVersion    = apiVersion;
     this.baseUrl       = `https://graph.facebook.com/${this.apiVersion}/${this.phoneNumberId}/messages`;
+
+    if (this.configured) {
+      this.logger.log(`WhatsApp sending enabled — phone number id ${this.phoneNumberId}`);
+    } else {
+      const missing = [
+        accessToken   ? null : 'META_ACCESS_TOKEN',
+        phoneNumberId ? null : 'META_PHONE_NUMBER_ID',
+      ].filter(Boolean).join(', ');
+      this.logger.warn(
+        `WhatsApp sending is DISABLED — ${missing} not set. Inbound webhooks and outbound ` +
+        `sends will be refused with a clear error; everything else (admin API, dashboard, ` +
+        `ClinOps) works normally. Set the META_* keys in .env to enable it.`,
+      );
+    }
+  }
+
+  /**
+   * Guards every path that would reach Meta. Refusing here — rather than
+   * firing a request with an empty bearer token — keeps a half-configured
+   * install from producing confusing 401s from Facebook, and makes it
+   * impossible to "accidentally" send from an install that was never meant to.
+   */
+  private assertConfigured(): void {
+    if (!this.configured) {
+      throw new ServiceUnavailableException(
+        'WhatsApp is not configured on this installation. Set META_ACCESS_TOKEN and ' +
+        'META_PHONE_NUMBER_ID in .env (and restart) to enable sending. See SETUP.md, ' +
+        '"Optional: real WhatsApp".',
+      );
+    }
   }
 
   // ─── Incoming webhook entry point — called by WhatsAppController ──────────
@@ -91,6 +133,7 @@ export class WhatsAppService {
 
           const from = msg.from; // E.164 without '+', e.g. "212644645877"
           if (!from) continue;
+          if (!msg.id) throw new Error('Meta message is missing its id');
 
           const text = this.extractText(msg);
           if (!text) continue;
@@ -108,13 +151,14 @@ export class WhatsAppService {
           };
 
           await this.messageQueue.add(JOBS.PROCESS_MESSAGE, job, {
+            jobId: msg.id,
             attempts:         5,
             backoff:          { type: 'exponential', delay: 5_000 },
             removeOnComplete: 100,
             removeOnFail:     50,
           });
 
-          this.logger.log(`Job queued for ${from} (${name}): "${text}"`);
+          this.logger.log(`Inbound message ${msg.id} queued`);
         }
 
         // ── Delivery statuses ─────────────────────────────────────────────
@@ -400,6 +444,7 @@ export class WhatsAppService {
    * which would log a spurious "no message id returned" warning every time.
    */
   private async sendStatusUpdate(payload: Record<string, unknown>): Promise<void> {
+    this.assertConfigured();
     const response = await fetch(this.baseUrl, {
       method:  'POST',
       headers: {
@@ -447,6 +492,7 @@ export class WhatsAppService {
    * even though nothing ever reached their device.
    */
   private async sendRaw(payload: Record<string, unknown>): Promise<string> {
+    this.assertConfigured();
     const response = await fetch(this.baseUrl, {
       method:  'POST',
       headers: {

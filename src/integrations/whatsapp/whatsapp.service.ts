@@ -452,6 +452,7 @@ export class WhatsAppService {
         'Authorization': `Bearer ${this.accessToken}`,
       },
       body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(15_000),
     });
 
     let responseBody = '';
@@ -462,7 +463,7 @@ export class WhatsAppService {
     }
 
     if (!response.ok) {
-      throw new Error(`Meta API error ${response.status}: ${responseBody}`);
+      throw new Error(`Meta API error ${response.status}`);
     }
 
     let parsed: { success?: boolean; error?: MetaSendError } | null = null;
@@ -474,7 +475,7 @@ export class WhatsAppService {
 
     if (parsed?.error) {
       const err = parsed.error;
-      throw new Error(`Meta rejected status update (code ${err.code ?? 'n/a'}): ${err.message ?? JSON.stringify(err)}`);
+      throw new Error(`Meta rejected status update (code ${err.code ?? 'n/a'})`);
     }
   }
 
@@ -500,6 +501,7 @@ export class WhatsAppService {
         'Authorization': `Bearer ${this.accessToken}`,
       },
       body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(15_000),
     });
 
     let responseBody = '';
@@ -510,7 +512,7 @@ export class WhatsAppService {
     }
 
     if (!response.ok) {
-      const msg = `Meta API error ${response.status}: ${responseBody}`;
+      const msg = `Meta API error ${response.status}`;
       this.logger.error(msg);
       throw new Error(msg);
     }
@@ -527,7 +529,7 @@ export class WhatsAppService {
     if (parsed?.error) {
       const err = parsed.error;
       const msg =
-        `Meta rejected message (code ${err.code ?? 'n/a'}): ${err.message ?? JSON.stringify(err)}`;
+        `Meta rejected message (code ${err.code ?? 'n/a'})`;
       this.logger.error(msg);
       throw new Error(msg);
     }
@@ -536,19 +538,17 @@ export class WhatsAppService {
       (m) => Array.isArray(m.errors) && m.errors.length > 0,
     )?.errors;
     if (perMessageErrors) {
-      const msg = `Meta rejected message: ${JSON.stringify(perMessageErrors)}`;
+      const msg = `Meta rejected message (code ${perMessageErrors[0]?.code ?? 'n/a'})`;
       this.logger.error(msg);
       throw new Error(msg);
     }
 
     const wamId: string = parsed?.messages?.[0]?.id ?? '';
     if (!wamId) {
-      this.logger.warn(
-        `Meta accepted message but returned no message id: ${responseBody}`,
-      );
+      this.logger.warn('Meta accepted a message but returned no message id');
     }
 
-    this.logger.log(`Meta API response: ${responseBody}`);
+    this.logger.log(`Meta message accepted with id ${wamId || 'unknown'}`);
     return wamId;
   }
 

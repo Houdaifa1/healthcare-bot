@@ -4,6 +4,7 @@ import { SessionsService, CampaignSession } from '@platform/cache/sessions.servi
 import { WhatsAppService } from '@integrations/whatsapp/whatsapp.service';
 import { HandoffService } from '@operations/handoff/handoff.service';
 import { OllamaProvider } from '@integrations/llm/ollama.provider';
+import { normalizePatientPhone } from '@platform/shared/phone.util';
 import { AIMessage, AIToolDefinition, AITextBlock, AIToolUseBlock } from '@integrations/llm/ai-response.types';
 import {
   AppointmentStatus,
@@ -242,7 +243,7 @@ export class ConversationService {
   }
 
   async handleReply(phone: string, patientMessage: string): Promise<void> {
-    this.logger.log(`Campaign reply from ${phone}: "${patientMessage}"`);
+    this.logger.log('Campaign reply received');
 
     const session = await this.sessionsService.getCampaignSession(phone);
     if (!session) {
@@ -1022,12 +1023,25 @@ Current turn: ${session.turnCount + 1}`;
     // of staying closed) — an inconsistency to fix by hand if it ever fires,
     // but far better than duplicating the goodbye the patient already got.
     try {
-      await this.prisma.campaignPatient.update({
-        where: { id: campaignPatientId },
-        data: { status: CampaignPatientStatus.COMPLETED, outcome, completedAt: new Date() },
+      if (outcome === ConversationOutcome.OPTED_OUT) {
+        await this.prisma.contactSuppression.upsert({
+          where: { clinicId_phoneNormalized: { clinicId: session.clinicId,
+            phoneNormalized: normalizePatientPhone(session.phone) } },
+          create: { clinicId: session.clinicId, phoneNormalized: normalizePatientPhone(session.phone) },
+          update: {},
+        });
+      }
+      const closed = await this.prisma.campaignPatient.updateMany({
+        where: { id: campaignPatientId, status: { in: [CampaignPatientStatus.CONTACTED,
+          CampaignPatientStatus.REPLIED, CampaignPatientStatus.PARKED] } },
+        data: { status: outcome === ConversationOutcome.OPTED_OUT
+          ? CampaignPatientStatus.OPTED_OUT : CampaignPatientStatus.COMPLETED,
+          outcome, completedAt: new Date() },
       });
-
-      await this.prisma.campaign.update({ where: { id: campaignId }, data: { completedCount: { increment: 1 } } });
+      if (closed.count === 1) {
+        await this.prisma.campaign.update({ where: { id: campaignId },
+          data: { completedCount: { increment: 1 } } });
+      }
 
       await this.sessionsService.deleteCampaignSession(session.phone);
       await this.sessionsService.delete(session.phone);
@@ -1042,7 +1056,7 @@ Current turn: ${session.turnCount + 1}`;
   }
 
   /**
-   * PRODUCTION GUARDRAIL: Sanitizes the AI response before it ever reaches WhatsApp.
+   * Sanitizes the model response before it reaches WhatsApp.
    */
   private sanitizeTextReply(raw: string, phone: string, language: Language | null): string {
     if (!raw) return raw;

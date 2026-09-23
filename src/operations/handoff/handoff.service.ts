@@ -119,9 +119,9 @@ export class HandoffService {
   // READ — active handoffs across both sources, for the admin dashboard.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async getHandoffSessions(): Promise<HandoffSessionData[]> {
+  async getHandoffSessions(clinicId: string): Promise<HandoffSessionData[]> {
     const rows = await this.prisma.handoff.findMany({
-      where: { status: { in: [HandoffStatus.OPEN, HandoffStatus.ADMIN_HANDLING] } },
+      where: { clinicId, status: { in: [HandoffStatus.OPEN, HandoffStatus.ADMIN_HANDLING] } },
       include: { campaignPatient: { select: { campaignId: true } } },
       orderBy: { createdAt: 'desc' },
     });
@@ -149,12 +149,12 @@ export class HandoffService {
   // SEND MESSAGE — staff replies to a handed-off patient from the dashboard.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async sendMessage(phone: string, message: string): Promise<void> {
+  async sendMessage(clinicId: string, phone: string, message: string): Promise<void> {
     if (!message?.trim()) {
       throw new BadRequestException('Message cannot be empty');
     }
 
-    const handoff = await this.findOpenHandoffByPhone(phone);
+    const handoff = await this.findOpenHandoffByPhone(clinicId, phone);
     if (!handoff) {
       throw new NotFoundException(`No active handoff found for ${phone}`);
     }
@@ -197,8 +197,8 @@ export class HandoffService {
   // so the transcript captures what the patient said while waiting for staff.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async recordPatientMessage(phone: string, text: string): Promise<boolean> {
-    const handoff = await this.findOpenHandoffByPhone(phone);
+  async recordPatientMessage(clinicId: string, phone: string, text: string): Promise<boolean> {
+    const handoff = await this.findOpenHandoffByPhone(clinicId, phone);
     if (!handoff) return false;
 
     const messages = [
@@ -227,8 +227,8 @@ export class HandoffService {
   // RESOLVE — staff marks a handoff done from the dashboard.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async resolveHandoff(phone: string): Promise<void> {
-    const handoff = await this.findOpenHandoffByPhone(phone);
+  async resolveHandoff(clinicId: string, phone: string): Promise<void> {
+    const handoff = await this.findOpenHandoffByPhone(clinicId, phone);
     if (!handoff) {
       this.logger.warn(`resolveHandoff: no active handoff found for ${phone}`);
       return;
@@ -267,13 +267,13 @@ export class HandoffService {
   // keep the reactive orchestrator paused until staff resolve it.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async hasOpenHandoff(phone: string): Promise<boolean> {
-    return (await this.findOpenHandoffByPhone(phone)) !== null;
+  async hasOpenHandoff(clinicId: string, phone: string): Promise<boolean> {
+    return (await this.findOpenHandoffByPhone(clinicId, phone)) !== null;
   }
 
-  private async findOpenHandoffByPhone(phone: string) {
+  private async findOpenHandoffByPhone(clinicId: string, phone: string) {
     return this.prisma.handoff.findFirst({
-      where: { phone, status: { in: [HandoffStatus.OPEN, HandoffStatus.ADMIN_HANDLING] } },
+      where: { clinicId, phone, status: { in: [HandoffStatus.OPEN, HandoffStatus.ADMIN_HANDLING] } },
       orderBy: { createdAt: 'desc' },
     });
   }

@@ -2,12 +2,13 @@ import { Processor, WorkerHost, OnWorkerEvent } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Job } from 'bullmq';
-import { CampaignStatus, CampaignPatientStatus, DeliveryStatus, Language, MessageKey } from '@prisma/client';
+import { CampaignStatus, CampaignPatientStatus, ConversationOutcome, DeliveryStatus, Language, MessageKey } from '@prisma/client';
 import { PrismaService } from '@platform/database/prisma.service';
 import { SessionsService, CampaignSession } from '@platform/cache/sessions.service';
 import { WhatsAppService } from '@integrations/whatsapp/whatsapp.service';
 import { CampaignOutboundJob } from '@operations/campaigns/campaign.service';
 import { QUEUES } from '@platform/queue/queue.constants';
+import { normalizePatientPhone } from '@platform/shared/phone.util';
 
 @Processor(QUEUES.CAMPAIGN_OUTBOUND)
 export class OutboundProcessor extends WorkerHost {
@@ -108,23 +109,49 @@ export class OutboundProcessor extends WorkerHost {
     const openingTemplateName = this.configService.get<string>('campaign.openingTemplateName') ?? 'patient_followup';
     const openingTemplateLanguage = this.configService.get<string>('campaign.openingTemplateLanguage') ?? 'fr';
 
-    const wamId = await this.whatsappService.sendTemplate(
-      campaignPatient.phone,
-      openingTemplateName,
-      openingTemplateLanguage,
-      [
-        {
+    const claimed = await this.prisma.campaignPatient.updateMany({
+      where: { id: campaignPatientId, clinicId, campaignId, status: CampaignPatientStatus.PENDING },
+      data: { status: CampaignPatientStatus.SENDING },
+    });
+    if (claimed.count !== 1) return;
+
+    const suppression = await this.prisma.contactSuppression.findUnique({
+      where: { clinicId_phoneNormalized: { clinicId,
+        phoneNormalized: normalizePatientPhone(campaignPatient.phone) } },
+    });
+    if (suppression) {
+      await this.prisma.campaignPatient.update({
+        where: { id: campaignPatientId },
+        data: { status: CampaignPatientStatus.OPTED_OUT,
+          outcome: ConversationOutcome.OPTED_OUT, completedAt: new Date() },
+      });
+      await this.prisma.campaign.update({
+        where: { id: campaignId }, data: { completedCount: { increment: 1 } },
+      });
+      return;
+    }
+
+    let wamId: string;
+    try {
+      wamId = await this.whatsappService.sendTemplate(
+        campaignPatient.phone,
+        openingTemplateName,
+        openingTemplateLanguage,
+        [{
           type: 'body',
           parameters: [
             { type: 'text', text: campaignPatient.patientName },
             { type: 'text', text: visitDate },
           ],
-        },
-      ],
-    );
+        }],
+      );
+    } catch (error) {
+      this.logger.error(`Meta send outcome is uncertain for campaign patient ${campaignPatientId}; reconcile SENDING before retry`);
+      throw error;
+    }
 
     this.logger.log(
-      `Opening template sent to ${campaignPatient.phone} (${campaignPatient.patientName}) — wamid=${wamId}`,
+      `Opening template accepted for campaign patient ${campaignPatientId} — wamid=${wamId}`,
     );
 
     // ── 10. Create campaign Redis session ──────────────────────────────────

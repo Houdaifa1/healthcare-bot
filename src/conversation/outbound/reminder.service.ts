@@ -1,14 +1,14 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '@platform/database/prisma.service';
 import { SessionsService } from '@platform/cache/sessions.service';
 import { WhatsAppService } from '@integrations/whatsapp/whatsapp.service';
+import { normalizePatientPhone } from '@platform/shared/phone.util';
 import {
   CampaignPatientStatus,
   CampaignStatus,
   ConversationOutcome,
-  Language,
-  MessageKey,
 } from '@prisma/client';
 
 @Injectable()
@@ -20,6 +20,7 @@ export class ReminderService {
     private readonly prisma:          PrismaService,
     private readonly sessionsService: SessionsService,
     private readonly whatsappService: WhatsAppService,
+    private readonly configService: ConfigService,
   ) {}
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -104,7 +105,7 @@ export class ReminderService {
           patientName:   true,
           visitDate:     true,
           remindersSent: true,
-          language:      true,
+          reminderAttemptAt: true,
         },
       });
 
@@ -131,6 +132,7 @@ export class ReminderService {
           campaignId: campaign.id,
           status: { in: [
             CampaignPatientStatus.PENDING,
+            CampaignPatientStatus.SENDING,
             CampaignPatientStatus.PARKED,
             CampaignPatientStatus.CONTACTED,
             CampaignPatientStatus.REPLIED,
@@ -160,14 +162,35 @@ export class ReminderService {
       patientName:   string;
       visitDate:     Date;
       remindersSent: number;
-      language:      Language | null;
+      reminderAttemptAt: Date | null;
     },
     campaignId:    string,
     clinicId:      string,
     reminderCount: number,
   ): Promise<void> {
+    const suppression = await this.prisma.contactSuppression.findUnique({
+      where: { clinicId_phoneNormalized: { clinicId,
+        phoneNormalized: normalizePatientPhone(patient.phone) } },
+    });
+    if (suppression) {
+      const closed = await this.prisma.campaignPatient.updateMany({
+        where: { id: patient.id, status: CampaignPatientStatus.CONTACTED },
+        data: { status: CampaignPatientStatus.OPTED_OUT,
+          outcome: ConversationOutcome.OPTED_OUT, completedAt: new Date() },
+      });
+      if (closed.count === 1) {
+        await this.prisma.campaign.update({
+          where: { id: campaignId }, data: { completedCount: { increment: 1 } },
+        });
+      }
+      return;
+    }
+    if (patient.reminderAttemptAt) {
+      this.logger.warn(`Reminder outcome requires reconciliation for patient ${patient.id}`);
+      return;
+    }
     if (patient.remindersSent < reminderCount) {
-      await this.sendReminder(patient, clinicId);
+      await this.sendReminder(patient);
     } else {
       await this.markNoResponse(patient, campaignId);
     }
@@ -184,36 +207,44 @@ export class ReminderService {
       patientName:   string;
       visitDate:     Date;
       remindersSent: number;
-      language:      Language | null;
+      reminderAttemptAt: Date | null;
     },
-    clinicId:   string,
   ): Promise<void> {
-    const language  = patient.language ?? Language.FR;
     const visitDate = new Date(patient.visitDate).toLocaleDateString('fr-FR');
 
-    // Fetch reminder message with variable substitution
-    const reminderBody = await this.fetchBotMessage(
-      clinicId,
-      MessageKey.CAMPAIGN_REMINDER_MESSAGE,
-      language,
-      {
-        name:      patient.patientName,
-        visitDate,
-      },
-    );
-
-    if (!reminderBody) {
-      this.logger.error(
-        `CAMPAIGN_REMINDER_MESSAGE not found for clinic ${clinicId} language ${language} — skipping patient ${patient.id}`,
-      );
+    const templateName = this.configService.get<string>('campaign.reminderTemplateName');
+    const templateLanguage = this.configService.get<string>('campaign.reminderTemplateLanguage', 'fr');
+    if (!templateName) {
+      this.logger.error(`No approved reminder template configured; reminder for patient ${patient.id} was not sent`);
       return;
     }
 
-    await this.whatsappService.sendText(patient.phone, reminderBody);
+    const claimed = await this.prisma.campaignPatient.updateMany({
+      where: { id: patient.id, status: CampaignPatientStatus.CONTACTED,
+        remindersSent: patient.remindersSent, reminderAttemptAt: null },
+      data: { reminderAttemptAt: new Date(), reminderAttemptState: 'SUBMITTING' },
+    });
+    if (claimed.count !== 1) return;
+
+    try {
+      await this.whatsappService.sendTemplate(patient.phone, templateName, templateLanguage, [{
+        type: 'body',
+        parameters: [
+          { type: 'text', text: patient.patientName },
+          { type: 'text', text: visitDate },
+        ],
+      }]);
+    } catch (error) {
+      await this.prisma.campaignPatient.update({
+        where: { id: patient.id }, data: { reminderAttemptState: 'RECONCILE' },
+      }).catch(() => undefined);
+      throw error;
+    }
 
     await this.prisma.campaignPatient.update({
       where: { id: patient.id },
-      data:  { remindersSent: { increment: 1 } },
+      data:  { remindersSent: { increment: 1 }, reminderAttemptAt: null,
+        reminderAttemptState: null },
     });
 
     // Sync remindersSent to Redis session so AI has accurate state on reply
@@ -224,7 +255,7 @@ export class ReminderService {
     }
 
     this.logger.log(
-      `Reminder ${patient.remindersSent + 1} sent to ${patient.phone} (patient ${patient.id})`,
+      `Reminder ${patient.remindersSent + 1} sent for campaign patient ${patient.id}`,
     );
   }
 
@@ -253,43 +284,8 @@ export class ReminderService {
     await this.sessionsService.deleteCampaignSession(patient.phone);
 
     this.logger.log(
-      `Patient ${patient.id} (${patient.phone}) marked NO_RESPONSE — all reminders exhausted`,
+      `Campaign patient ${patient.id} marked NO_RESPONSE — all reminders exhausted`,
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // PRIVATE HELPERS
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  /**
-   * Fetches a bot message body from DB with FR fallback and variable substitution.
-   */
-  private async fetchBotMessage(
-    clinicId:   string,
-    key:        MessageKey,
-    language:   Language,
-    variables?: Record<string, string>,
-  ): Promise<string | null> {
-    const record = await this.prisma.botMessage.findUnique({
-      where: { clinicId_key_language: { clinicId, key, language } },
-    });
-
-    let body = record?.body ?? null;
-
-    if (!body && language !== Language.FR) {
-      this.logger.warn(`BotMessage ${key} not found for ${language} — falling back to FR`);
-      const fallback = await this.prisma.botMessage.findUnique({
-        where: { clinicId_key_language: { clinicId, key, language: Language.FR } },
-      });
-      body = fallback?.body ?? null;
-    }
-
-    if (body && variables) {
-      for (const [k, v] of Object.entries(variables)) {
-        body = body.replace(new RegExp(`\\{\\{${k}\\}\\}`, 'g'), v);
-      }
-    }
-
-    return body;
-  }
 }

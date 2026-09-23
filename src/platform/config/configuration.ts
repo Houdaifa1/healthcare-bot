@@ -138,5 +138,7 @@ export default () => ({
     // must be configurable, never hardcoded in the send path.
     openingTemplateName: process.env.CAMPAIGN_OPENING_TEMPLATE_NAME || 'patient_followup',
     openingTemplateLanguage: process.env.CAMPAIGN_OPENING_TEMPLATE_LANGUAGE || 'fr',
+    reminderTemplateName: process.env.CAMPAIGN_REMINDER_TEMPLATE_NAME || '',
+    reminderTemplateLanguage: process.env.CAMPAIGN_REMINDER_TEMPLATE_LANGUAGE || 'fr',
   },
 });

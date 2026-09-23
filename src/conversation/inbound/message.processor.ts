@@ -8,6 +8,8 @@ import { PrismaService } from '@platform/database/prisma.service';
 import { ConversationService } from '@conversation/outbound/conversation.service';
 import { HandoffService } from '@operations/handoff/handoff.service';
 import { WhatsAppService } from '@integrations/whatsapp/whatsapp.service';
+import { CampaignPatientStatus, ConversationOutcome } from '@prisma/client';
+import { isExplicitOptOut, normalizePatientPhone } from '@platform/shared/phone.util';
 
 @Processor('messages')
 export class MessageProcessor extends WorkerHost {
@@ -49,6 +51,46 @@ export class MessageProcessor extends WorkerHost {
       throw new Error('No clinic record found — run seed before accepting webhooks');
     }
 
+    if (isExplicitOptOut(text)) {
+      await this.prisma.contactSuppression.upsert({
+        where: { clinicId_phoneNormalized: { clinicId: clinic.id,
+          phoneNormalized: normalizePatientPhone(from) } },
+        create: { clinicId: clinic.id, phoneNormalized: normalizePatientPhone(from), sourceMessageId: messageId },
+        update: {},
+      });
+      const active = await this.sessionsService.getCampaignSession(from);
+      if (active) {
+        const closed = await this.prisma.campaignPatient.updateMany({
+          where: { id: active.campaignPatientId, clinicId: clinic.id,
+            status: { in: [CampaignPatientStatus.CONTACTED, CampaignPatientStatus.REPLIED,
+              CampaignPatientStatus.PARKED] } },
+          data: { status: CampaignPatientStatus.OPTED_OUT,
+            outcome: ConversationOutcome.OPTED_OUT, completedAt: new Date() },
+        });
+        if (closed.count === 1) {
+          const patient = await this.prisma.campaignPatient.findUniqueOrThrow({
+            where: { id: active.campaignPatientId }, select: { campaignId: true },
+          });
+          await this.prisma.campaign.update({
+            where: { id: patient.campaignId },
+            data: { completedCount: { increment: 1 } },
+          });
+        }
+        await this.sessionsService.deleteCampaignSession(from);
+      }
+      this.logger.log(`Automated follow-up suppressed for message ${messageId}`);
+      return;
+    }
+
+    const suppressed = await this.prisma.contactSuppression.findUnique({
+      where: { clinicId_phoneNormalized: { clinicId: clinic.id,
+        phoneNormalized: normalizePatientPhone(from) } },
+    });
+    if (suppressed) {
+      this.logger.log(`Message ${messageId} received from a suppressed contact; no automated reply`);
+      return;
+    }
+
     // ── 3. Campaign routing ────────────────────────────────────────────────
     const hasCampaign = await this.sessionsService.hasActiveCampaignSession(from);
     if (hasCampaign) {
@@ -68,7 +110,7 @@ export class MessageProcessor extends WorkerHost {
       // Record on the Handoff row first — that table is what the dashboard's
       // live-session view actually reads. recordPatientMessage() also mirrors
       // the transcript onto CampaignPatient for the campaign-side views.
-      const recorded = await this.handoffService.recordPatientMessage(from, text);
+      const recorded = await this.handoffService.recordPatientMessage(clinic.id, from, text);
       if (!recorded) {
         this.logger.warn(`No open Handoff row for ${from} despite handoff session status`);
       }
@@ -112,12 +154,12 @@ export class MessageProcessor extends WorkerHost {
     // session only resets to IDLE once staff resolve the handoff from the
     // dashboard (or the patient types "menu", handled inside HandoffHandler).
     if (session.state === SessionState.AWAITING_HANDOFF) {
-      const stillOpen = await this.handoffService.hasOpenHandoff(from);
+      const stillOpen = await this.handoffService.hasOpenHandoff(clinic.id, from);
       // Let "menu" fall through to HandoffHandler's own AWAITING_HANDOFF
       // branch so the patient can still explicitly escape back to the menu;
       // everything else is parked on the Handoff record for staff to see.
       if (stillOpen && text.trim().toLowerCase() !== 'menu') {
-        await this.handoffService.recordPatientMessage(from, text);
+        await this.handoffService.recordPatientMessage(clinic.id, from, text);
         this.logger.log(`Phone ${from} is in an open inbound handoff — storing patient reply for staff`);
         return;
       }

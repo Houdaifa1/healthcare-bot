@@ -37,8 +37,8 @@ export class CampaignController {
   // match" while the admin is still typing. Static path, must be registered
   // before the dynamic ":id" routes below.
   @Post('preview-filters')
-  previewFilters(@Body() dto: PreviewFiltersDto) {
-    return this.campaignService.previewFilters(dto);
+  previewFilters(@Request() req: any, @Body() dto: PreviewFiltersDto) {
+    return this.campaignService.previewFilters(req.user.clinicId, dto);
   }
 
   // GET /api/admin/v1/campaigns/targeting-options — exact specialties/doctors

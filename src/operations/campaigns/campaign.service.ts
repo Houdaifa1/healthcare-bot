@@ -17,6 +17,7 @@ import { WhatsAppService } from '@integrations/whatsapp/whatsapp.service';
 import { HandoffService } from '@operations/handoff/handoff.service';
 import { QUEUES, JOBS } from '@platform/queue/queue.constants';
 import { Campaign, CampaignStatus, CampaignPatientStatus, ConversationOutcome, BookingSource } from '@prisma/client';
+import { normalizePatientPhone } from '@platform/shared/phone.util';
 
 export interface CampaignOutboundJob {
   campaignPatientId: string;
@@ -191,12 +192,13 @@ export class CampaignService {
   // live "N patients match" while the admin is still filling in filters,
   // instead of forcing a create-then-preview round trip.
   async previewFilters(
+    clinicId: string,
     filters: Pick<CreateCampaignDto,
       'filterMotifs' | 'filterCinPassports' | 'filterPhoneNumbers' | 'onlyVerifiedNumbers' |
       'filterDoctors' | 'filterDateFrom' | 'filterDateTo'>,
   ): Promise<{ count: number; patients: ClinOpsPatient[] }> {
     this.validateFilters(filters);
-    const patients = await this.matchPatients({
+    const patients = await this.matchPatients(clinicId, {
       filterMotifs: filters.filterMotifs,
       filterCinPassports: filters.filterCinPassports,
       filterPhoneNumbers: filters.filterPhoneNumbers,
@@ -307,9 +309,9 @@ export class CampaignService {
       },
     });
 
-    if (dueCampaigns.length === 0) return;
-
-    this.logger.log(`Found ${dueCampaigns.length} scheduled campaign(s) ready to launch`);
+    if (dueCampaigns.length > 0) {
+      this.logger.log(`Found ${dueCampaigns.length} scheduled campaign(s) ready to launch`);
+    }
 
     for (const campaign of dueCampaigns) {
       try {
@@ -319,6 +321,17 @@ export class CampaignService {
         this.logger.error(
           `Failed to auto-launch campaign "${campaign.name}" (${campaign.id}): ${err.message}`,
         );
+      }
+    }
+
+    const running = await this.prisma.campaign.findMany({
+      where: { status: CampaignStatus.RUNNING },
+    });
+    for (const campaign of running) {
+      try {
+        await this.dispatchPendingCampaignPatients(campaign);
+      } catch (err: any) {
+        this.logger.error(`Could not dispatch pending jobs for campaign ${campaign.id}: ${err.message}`);
       }
     }
   }
@@ -349,10 +362,23 @@ export class CampaignService {
   async remove(clinicId: string, id: string): Promise<void> {
     const campaign = await this.findOneRaw(clinicId, id);
 
-    if (campaign.status === CampaignStatus.RUNNING) {
+    if (campaign.status !== CampaignStatus.DRAFT && campaign.status !== CampaignStatus.SCHEDULED) {
       throw new ConflictException(
-        `Campaign "${campaign.name}" is RUNNING — stop it before deleting`,
+        `Campaign "${campaign.name}" has been launched and must be retained for audit`,
       );
+    }
+    const uncertainSends = await this.prisma.campaignPatient.count({
+      where: { campaignId: id, clinicId,
+        OR: [{ status: CampaignPatientStatus.SENDING }, { reminderAttemptAt: { not: null } }] },
+    });
+    if (uncertainSends > 0) {
+      throw new ConflictException('Campaign contains message attempts requiring reconciliation');
+    }
+    const uncertainBookings = await this.prisma.bookingRequest.count({
+      where: { clinicId, campaignPatient: { campaignId: id }, externalAttemptAt: { not: null } },
+    });
+    if (uncertainBookings > 0) {
+      throw new ConflictException('Campaign contains ClinOps booking attempts requiring retention');
     }
 
     const unresolvedComplaints = await this.prisma.complaint.count({
@@ -457,29 +483,32 @@ export class CampaignService {
       ? campaign.delayHours
       : clinic.campaignDelayHours;
 
-    const delayMs = delayHours * 60 * 60 * 1000;
+    const prepared: { patient: ClinOpsPatient; history: unknown }[] = [];
+    for (const patient of clinopsPatients) {
+      if (!patient.numeroTelephonePrincipale) continue;
+      let history: unknown = null;
+      try {
+        history = await this.clinops.getPatientHistory(patient.cin?.trim()
+          ? { cin_passeport: patient.cin }
+          : { numeroTelephone: patient.numeroTelephonePrincipale });
+      } catch (err: any) {
+        this.logger.warn(`Could not fetch history for patient ${patient.patient_id}: ${err.message}`);
+      }
+      prepared.push({ patient, history });
+    }
+    if (prepared.length === 0) {
+      throw new BadRequestException('No matched patients have a usable phone number');
+    }
 
     await this.prisma.$transaction(async (tx) => {
-      for (const patient of clinopsPatients) {
-        if (!patient.numeroTelephonePrincipale) {
-          this.logger.warn(
-            `Skipping patient ${patient.patient_id} (${patient.patient}) — no phone number`,
-          );
-          continue;
-        }
+      const claimed = await tx.campaign.updateMany({
+        where: { id: campaign.id, status: { in: [CampaignStatus.DRAFT, CampaignStatus.SCHEDULED] } },
+        data: { status: CampaignStatus.RUNNING, launchedAt: new Date(), targetedCount: prepared.length },
+      });
+      if (claimed.count !== 1) throw new ConflictException('Campaign was already launched');
 
-        let history = null;
-        try {
-          history = await this.clinops.getPatientHistory(patient.cin?.trim()
-            ? { cin_passeport: patient.cin }
-            : { numeroTelephone: patient.numeroTelephonePrincipale });
-        } catch (err: any) {
-          this.logger.warn(
-            `Could not fetch history for patient ${patient.patient_id}: ${err.message}`,
-          );
-        }
-
-        const record = await tx.campaignPatient.create({
+      for (const { patient, history } of prepared) {
+        await tx.campaignPatient.create({
           data: {
             campaignId: campaign.id,
             clinicId: campaign.clinicId,
@@ -500,36 +529,47 @@ export class CampaignService {
           },
         });
 
-        const jobData: CampaignOutboundJob = {
-          campaignPatientId: record.id,
-          campaignId: campaign.id,
-          clinicId: campaign.clinicId,
-        };
-
-        await this.outboundQueue.add(JOBS.SEND_CAMPAIGN_OUTBOUND, jobData, {
-          delay: delayMs,
-          attempts: 3,
-          backoff: { type: 'exponential', delay: 10_000 },
-          removeOnComplete: 50,
-          removeOnFail: 20,
-        });
-
-        this.logger.log(
-          `Queued outbound for patient ${patient.patient_id} (${patient.patient}) with delay ${delayHours}h`,
-        );
       }
-
-      await tx.campaign.update({
-        where: { id: campaign.id },
-        data: {
-          status: CampaignStatus.RUNNING,
-          launchedAt: new Date(),
-          targetedCount: clinopsPatients.length,
-        },
-      });
     });
 
-    return this.findOneRaw(campaign.clinicId, campaign.id);
+    const launched = await this.findOneRaw(campaign.clinicId, campaign.id);
+    try {
+      await this.dispatchPendingCampaignPatients(launched);
+    } catch (err: any) {
+      this.logger.error(`Campaign ${campaign.id} committed; queue dispatch will retry on the next scheduler tick: ${err.message}`);
+    }
+    return launched;
+  }
+
+  private async dispatchPendingCampaignPatients(campaign: Campaign): Promise<void> {
+    const clinic = await this.prisma.clinic.findUnique({ where: { id: campaign.clinicId } });
+    if (!clinic) throw new NotFoundException('Clinic not found');
+    const delayHours = campaign.delayHours ?? clinic.campaignDelayHours;
+    const sendAt = (campaign.launchedAt?.getTime() ?? Date.now()) + delayHours * 60 * 60 * 1000;
+    const pending = await this.prisma.campaignPatient.findMany({
+      where: { campaignId: campaign.id, status: CampaignPatientStatus.PENDING },
+      select: { id: true },
+    });
+    for (const patient of pending) {
+      const jobId = `campaign-${patient.id}`;
+      const existing = await this.outboundQueue.getJob(jobId);
+      if (existing && await existing.isFailed()) {
+        await existing.remove();
+      }
+      const jobData: CampaignOutboundJob = {
+        campaignPatientId: patient.id,
+        campaignId: campaign.id,
+        clinicId: campaign.clinicId,
+      };
+      await this.outboundQueue.add(JOBS.SEND_CAMPAIGN_OUTBOUND, jobData, {
+        jobId,
+        delay: Math.max(0, sendAt - Date.now()),
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 10_000 },
+        removeOnComplete: 50,
+        removeOnFail: 20,
+      });
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -549,7 +589,7 @@ export class CampaignService {
   }
 
   private async fetchPatientsFromClinOps(campaign: Campaign): Promise<ClinOpsPatient[]> {
-    return this.matchPatients({
+    return this.matchPatients(campaign.clinicId, {
       filterMotifs: campaign.filterMotifs,
       filterCinPassports: campaign.filterCinPassports,
       filterPhoneNumbers: campaign.filterPhoneNumbers,
@@ -562,7 +602,7 @@ export class CampaignService {
 
   // Shared by fetchPatientsFromClinOps (persisted campaign) and
   // previewFilters (ad-hoc, pre-creation) below.
-  private async matchPatients(filters: {
+  private async matchPatients(clinicId: string, filters: {
     filterMotifs?: string[] | null;
     filterCinPassports?: string[] | null;
     filterPhoneNumbers?: string[] | null;
@@ -597,7 +637,13 @@ export class CampaignService {
     }
     for (const numeroTelephone of filters.filterPhoneNumbers ?? []) {
       const matched = await this.clinops.searchPatients({ numeroTelephone, OnlyVerifiedNumbers: onlyVerified });
-      for (const patient of matched) patientsById.set(patient.patient_id, patient);
+      const target = normalizePatientPhone(numeroTelephone);
+      for (const patient of matched) {
+        if ([patient.numeroTelephonePrincipale, patient.numeroTelephoneSecondaire]
+          .some(phone => phone && normalizePatientPhone(phone) === target)) {
+          patientsById.set(patient.patient_id, patient);
+        }
+      }
     }
 
     let patients = Array.from(patientsById.values());
@@ -621,7 +667,15 @@ export class CampaignService {
       patients = patients.filter((p) => doctorSet.has(p.medecin_traitant.toLowerCase()));
     }
 
-    return patients;
+    const phones = [...new Set(patients.map(p => normalizePatientPhone(p.numeroTelephonePrincipale || ''))
+      .filter(Boolean))];
+    if (phones.length === 0) return patients;
+    const suppressed = await this.prisma.contactSuppression.findMany({
+      where: { clinicId, phoneNormalized: { in: phones } },
+      select: { phoneNormalized: true },
+    });
+    const blocked = new Set(suppressed.map(row => row.phoneNormalized));
+    return patients.filter(patient => !blocked.has(normalizePatientPhone(patient.numeroTelephonePrincipale || '')));
   }
 
   // ═══════════════════════════════════════════════════════════════════════════

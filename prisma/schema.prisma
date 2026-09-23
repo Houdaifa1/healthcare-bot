@@ -35,6 +35,16 @@ model Clinic {
   handoffs               Handoff[]
 }
 
+model ContactSuppression {
+  id              String   @id @default(cuid())
+  clinicId        String
+  phoneNormalized String
+  sourceMessageId String?
+  createdAt       DateTime @default(now())
+
+  @@unique([clinicId, phoneNormalized])
+}
+
 // ─── Bot Message Templates ───────────────────────────────────────────────────
 model BotMessage {
   id        String     @id @default(cuid())
@@ -176,6 +186,8 @@ model CampaignPatient {
   language         Language?
   turnCount        Int                   @default(0)
   remindersSent    Int                   @default(0)
+  reminderAttemptAt DateTime?
+  reminderAttemptState String?
   messages         Json                  @default("[]")
   outcome          ConversationOutcome?
 
@@ -314,6 +326,7 @@ enum CampaignStatus {
 
 enum CampaignPatientStatus {
   PENDING       // not yet contacted
+  SENDING       // Meta attempt started; inspect delivery before retry
   PARKED        // job fired while campaign was PAUSED — waiting for resume
   CONTACTED     // opening message sent, no reply yet
   REPLIED       // patient replied at least once

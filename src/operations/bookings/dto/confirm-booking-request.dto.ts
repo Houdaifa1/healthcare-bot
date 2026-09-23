@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsDateString, IsOptional, Matches, IsInt, IsPositive } from 'class-validator';
+import { IsString, IsNotEmpty, IsDateString, IsOptional, Matches, IsInt, IsPositive, IsBoolean } from 'class-validator';
 
 export class ConfirmBookingRequestDto {
   // Optional: INBOUND booking requests already carry the exact slot the
@@ -39,4 +39,8 @@ export class ConfirmBookingRequestDto {
   @IsOptional()
   @IsString()
   message?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  priorAppointmentReviewed?: boolean;
 }

@@ -1,6 +1,7 @@
 export { IdleHandler } from './idle.handler';
 export { LanguageSelectHandler } from './language-select.handler';
 export { NameHandler } from './name.handler';
+export { ReasonHandler } from './reason.handler';
 export { SpecialtyHandler } from './specialty.handler';
 export { DoctorHandler } from './doctor.handler';
 export { DateHandler } from './date.handler';

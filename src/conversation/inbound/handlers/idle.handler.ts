@@ -6,7 +6,7 @@ import { MessageKey } from '@prisma/client';
 import { SessionsService } from '@platform/cache/sessions.service';
 import { IntentClassifierService, Intent } from '@conversation/nlu/intent-classifier.service';
 import { LanguageDetectionService } from '@conversation/nlu/language-detection.service';
-import { SpecialtyHandler } from './specialty.handler';
+import { ReasonHandler } from './reason.handler';
 import { FaqHandler } from './faq.handler';
 import { HandoffHandler } from './handoff.handler';
 import { WelcomeMenuService } from '@conversation/content/welcome-menu.service';
@@ -40,7 +40,7 @@ export class IdleHandler {
     private readonly sessionsService: SessionsService,
     private readonly aiService: IntentClassifierService,
     private readonly languageDetectionService: LanguageDetectionService,
-    private readonly specialtyHandler: SpecialtyHandler,
+    private readonly reasonHandler: ReasonHandler,
     private readonly faqHandler: FaqHandler,
     private readonly handoffHandler: HandoffHandler,
     private readonly welcomeMenuService: WelcomeMenuService,
@@ -53,14 +53,14 @@ export class IdleHandler {
     if (isButtonId(text)) {
       if (lower === 'book_appointment') {
         if (session.data.patientName) {
-          session.state = SessionState.BOOKING_SPECIALTY;
+          session.state = SessionState.BOOKING_REASON;
           await this.sessionsService.save(session);
-          await this.specialtyHandler.showSpecialtyList(phone, session);
+          await this.reasonHandler.showReasonPrompt(phone, session);
         } else {
           session.state = SessionState.AWAITING_NAME;
           await this.sessionsService.save(session);
           const message = await this.botMessageService.getSafe(
-            session.data.clinicId, MessageKey.ASK_NAME, {}, session.data.language, 'What is your name?'
+            session.data.clinicId, MessageKey.ASK_NAME, {}, session.data.language, 'What is your full name?'
           );
           await this.whatsappService.sendText(phone, message);
         }
@@ -114,14 +114,14 @@ export class IdleHandler {
 
     if (intent === Intent.BOOK_APPOINTMENT) {
       if (session.data.patientName) {
-        session.state = SessionState.BOOKING_SPECIALTY;
+        session.state = SessionState.BOOKING_REASON;
         await this.sessionsService.save(session);
-        await this.specialtyHandler.showSpecialtyList(phone, session);
+        await this.reasonHandler.showReasonPrompt(phone, session);
       } else {
         session.state = SessionState.AWAITING_NAME;
         await this.sessionsService.save(session);
         const message = await this.botMessageService.getSafe(
-          session.data.clinicId, MessageKey.ASK_NAME, {}, session.data.language, 'What is your name?'
+          session.data.clinicId, MessageKey.ASK_NAME, {}, session.data.language, 'What is your full name?'
         );
         await this.whatsappService.sendText(phone, message);
       }

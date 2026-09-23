@@ -164,6 +164,9 @@ export class BookingRequestsService {
     if (bookingRequest.externalAttemptAt) {
       throw new ConflictException('A ClinOps booking attempt already exists. Check the clinic system before retrying.');
     }
+    if (bookingRequest.previousBookingRequestId && dto.priorAppointmentReviewed !== true) {
+      throw new BadRequestException('Review the existing confirmed appointment in ClinOps before confirming a rebooking');
+    }
 
     // CAMPAIGN requests carry patient identity via CampaignPatient; INBOUND
     // requests carry it directly on the BookingRequest itself (no CampaignPatient

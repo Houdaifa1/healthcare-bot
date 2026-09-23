@@ -242,16 +242,19 @@ model BookingRequest {
   campaignPatientId  String?              // CAMPAIGN only
   clinicId           String
   appointmentId      String?              @unique
+  previousBookingRequestId String?
 
   // INBOUND only — no CampaignPatient row exists to hang identity off
   patientName        String?
   patientPhone       String?
   language           Language?
   clinopsPatientId   Int?
+  clinopsSpecialityId Int?
 
   preferredSpecialty String?
   preferredDoctor    String?
   preferredDateRange String?
+  preferredTimeRange String?
   // INBOUND only — the exact slot the patient already picked
   requestedDate      String?
   requestedTime      String?
@@ -406,6 +409,7 @@ enum MessageKey {
   WELCOME
   LANGUAGE_PROMPT
   ASK_NAME
+  ASK_REASON
   SELECT_SPECIALTY
   SELECT_DOCTOR
   SELECT_DATE

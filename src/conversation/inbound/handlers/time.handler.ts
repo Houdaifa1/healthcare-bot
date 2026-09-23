@@ -26,9 +26,9 @@ export class TimeHandler {
   async handle(phone: string, text: string, session: Session): Promise<void> {
     if (await this.nav.handleMenuCommand(phone, text, session)) return;
 
-    const { doctorName, specialtyLabel, selectedDate, clinicId, language } = session.data;
+    const { doctorName, specialtyLabel, selectedDate, reason, clinicId, language } = session.data;
 
-    if (!doctorName || !selectedDate) {
+    if (!doctorName || !selectedDate || !reason) {
       const msg = await this.botMessageService.getSafe(
         clinicId, MessageKey.ERROR_MISSING_INFO, {}, language, 'Missing information. Please start over.',
       );
@@ -62,7 +62,7 @@ export class TimeHandler {
         specialty: specialtyLabel ?? '',
       },
       language,
-      `Please confirm your appointment with ${doctorName} on ${friendlyDate} at ${time}.`,
+      `Please confirm your appointment request with ${doctorName} on ${friendlyDate} at ${time}.`,
     );
 
     const [btnConfirm, btnCancel] = await Promise.all([
@@ -70,7 +70,8 @@ export class TimeHandler {
       this.botMessageService.getSafe(clinicId, MessageKey.BUTTON_CANCEL, {}, language, 'Cancel'),
     ]);
 
-    await this.whatsappService.sendButtons(phone, message, [
+    const reasonLabel = language === 'EN' ? 'Reason' : 'Motif';
+    await this.whatsappService.sendButtons(phone, `${reasonLabel}: ${reason}\n\n${message}`, [
       { id: 'confirm_yes', title: btnConfirm },
       { id: 'confirm_no', title: btnCancel },
     ]);

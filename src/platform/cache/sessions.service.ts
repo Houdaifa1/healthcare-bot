@@ -9,6 +9,7 @@ export enum SessionState {
   IDLE              = 'IDLE',
   LANGUAGE_SELECT   = 'LANGUAGE_SELECT',
   AWAITING_NAME     = 'AWAITING_NAME',
+  BOOKING_REASON    = 'BOOKING_REASON',
   BOOKING_SPECIALTY = 'BOOKING_SPECIALTY',
   BOOKING_DOCTOR    = 'BOOKING_DOCTOR',
   BOOKING_DATE      = 'BOOKING_DATE',
@@ -24,6 +25,7 @@ export interface SessionData {
   language: Language;
   languageConfirmed: boolean;
   patientName?: string;
+  reason?: string;
   specialtyId?: number | string;
   specialtyLabel?: string;
   doctorId?: number | string;
@@ -63,7 +65,7 @@ export interface CampaignSession {
 
 // ─── Version ──────────────────────────────────────────────────────────────────
 // Bump ONLY on breaking SessionData/SessionState shape changes.
-export const SESSION_VERSION = 1;
+export const SESSION_VERSION = 2;
 
 // ─── TTLs ─────────────────────────────────────────────────────────────────────
 const REACTIVE_SESSION_TTL = 30 * 60;           // 30 min

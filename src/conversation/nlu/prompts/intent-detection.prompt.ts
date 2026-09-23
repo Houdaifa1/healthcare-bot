@@ -37,8 +37,8 @@ Rules:
   "consulter", "médecin", "docteur", "voir un docteur", "prendre rendez-vous", "réserver",
   "j'ai besoin d'un rdv", "موعد" (Arabic for appointment), "1" (when state is IDLE and user
   picks option 1 from a menu).
-  NEVER return BOOK_APPOINTMENT when the state is BOOKING_SPECIALTY, BOOKING_DOCTOR,
-  BOOKING_DATE, BOOKING_TIME or AWAITING_NAME — a booking is already in progress there,
+  NEVER return BOOK_APPOINTMENT when the state is BOOKING_REASON, BOOKING_SPECIALTY,
+  BOOKING_DOCTOR, BOOKING_DATE, BOOKING_TIME or AWAITING_NAME — a booking is already in progress there,
   so the patient cannot be asking to start one.
 
 - ASK_FAQ: Patient asks about clinic info: hours, location, address, fees, price, how to get
@@ -98,6 +98,9 @@ Comprehensive state context:
 
 - If state is AWAITING_NAME: User is entering their name. Most inputs are DATA (the user's name).
   Return UNKNOWN unless user explicitly says "menu", "annuler", "cancel" (CANCEL).
+
+- If state is BOOKING_REASON: User is briefly describing why they need an appointment.
+  Treat the reason as DATA. Return UNKNOWN unless they explicitly cancel or ask for a person.
 
 - GENERAL RULE: If state is not IDLE or BOOKING_CONFIRM, user is mid-booking — most inputs
   are DATA not intents. Return UNKNOWN unless user explicitly wants to cancel, go back, or talk

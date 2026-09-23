@@ -65,6 +65,15 @@ describe('live booking confirmation', () => {
     await expect(service.confirm('clinic-1', 'request-1', dto)).rejects.toThrow('could not be verified');
     expect(clinops.createNewRDV).not.toHaveBeenCalled();
   });
+
+  it('blocks rebooking until staff acknowledge review of the existing appointment', async () => {
+    prisma.bookingRequest.findFirst.mockResolvedValue({ ...booking,
+      previousBookingRequestId: 'old-request' });
+    await expect(service.confirm('clinic-1', 'request-1', dto)).rejects.toThrow('existing confirmed appointment');
+    expect(clinops.createNewRDV).not.toHaveBeenCalled();
+    await service.confirm('clinic-1', 'request-1', { ...dto, priorAppointmentReviewed: true });
+    expect(clinops.createNewRDV).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('booking queue contract', () => {

@@ -7,7 +7,6 @@ import { OllamaProvider } from '@integrations/llm/ollama.provider';
 import { normalizePatientPhone } from '@platform/shared/phone.util';
 import { AIMessage, AIToolDefinition, AITextBlock, AIToolUseBlock } from '@integrations/llm/ai-response.types';
 import {
-  AppointmentStatus,
   CampaignPatientStatus,
   CampaignStatus,
   ComplaintSeverity,
@@ -17,6 +16,7 @@ import {
   MessageKey,
   BookingRequestStatus,
   BookingSource,
+  AppointmentStatus,
 } from '@prisma/client';
 
 // ─── Tool input shapes ────────────────────────────────────────────────────────
@@ -31,7 +31,45 @@ interface RequestBookingInput {
   preferredSpecialty?: string;
   preferredDoctor?: string;
   preferredDateRange?: string;
+  preferredTimeRange?: string;
   reason?: string;
+}
+
+export function bookingInput(raw: unknown): { value?: RequestBookingInput; missing?: 'reason' | 'doctor' | 'date' | 'time' } {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return { missing: 'reason' };
+  const field = (key: keyof RequestBookingInput): string | undefined => {
+    const value = (raw as Record<string, unknown>)[key];
+    return typeof value === 'string' && value.trim() && value.trim().length <= 250
+      ? value.trim() : undefined;
+  };
+  const value = {
+    reason: field('reason'),
+    preferredSpecialty: field('preferredSpecialty'),
+    preferredDoctor: field('preferredDoctor'),
+    preferredDateRange: field('preferredDateRange'),
+    preferredTimeRange: field('preferredTimeRange'),
+  };
+  if (!value.reason) return { missing: 'reason' };
+  if (!value.preferredDoctor && !value.preferredSpecialty) return { missing: 'doctor' };
+  if (!value.preferredDateRange) return { missing: 'date' };
+  if (!value.preferredTimeRange) return { missing: 'time' };
+  return { value };
+}
+
+function missingBookingQuestion(missing: 'reason' | 'doctor' | 'date' | 'time', language: Language): string {
+  const english = {
+    reason: 'What is the reason for the new appointment?',
+    doctor: 'Which doctor or specialty would you prefer?',
+    date: 'What date or date range would you prefer?',
+    time: 'What time would you prefer? You can say any time if you are flexible.',
+  };
+  const french = {
+    reason: 'Quel est le motif de votre nouveau rendez-vous ?',
+    doctor: 'Quel médecin ou quelle spécialité préférez-vous ?',
+    date: 'Quelle date ou période préférez-vous ?',
+    time: 'Quelle heure préférez-vous ? Vous pouvez dire que vous êtes flexible.',
+  };
+  return language === Language.EN ? english[missing] : french[missing];
 }
 
 interface RequestHandoffInput {
@@ -85,9 +123,9 @@ const AI_TOOLS: AIToolDefinition[] = [
       'IMPORTANT: Before calling this tool you MUST have collected ALL of the following through conversation: ' +
       '(1) the reason for the appointment, ' +
       '(2) a preferred doctor or specialty (ask if not mentioned), ' +
-      '(3) a preferred date or date range. ' +
+      '(3) a preferred date or date range, and (4) a preferred time or "any time". ' +
       'Ask for each missing piece one at a time — one question per message. ' +
-      'Do NOT call this tool until reason and preferredDateRange are known. ' +
+      'Do NOT call this tool until all four preferences are known. ' +
       'This is a silent side effect — always follow it with a warm confirmation to the patient.',
     input_schema: {
       type: 'object',
@@ -95,9 +133,10 @@ const AI_TOOLS: AIToolDefinition[] = [
         preferredSpecialty: { type: 'string', description: 'Specialty or department the patient wants, e.g. "cardiologie", "généraliste".' },
         preferredDoctor: { type: 'string', description: 'Doctor name if the patient mentioned one.' },
         preferredDateRange: { type: 'string', description: 'Date or date range as the patient expressed it, e.g. "semaine prochaine", "next Monday", "le 5 juillet".' },
+        preferredTimeRange: { type: 'string', description: 'Time preference as the patient expressed it, or "any time" if they said they are flexible.' },
         reason: { type: 'string', description: 'Reason for the new appointment as the patient expressed it.' },
       },
-      required: ['reason', 'preferredDateRange'],
+      required: ['reason', 'preferredDateRange', 'preferredTimeRange'],
     },
   },
   {
@@ -444,6 +483,8 @@ export class ConversationService {
       let highSeverityComplaintLogged = false;
       let urgentComplaintLoggedThisTurn = false;
       let handoffCalledThisTurn = false;
+      let missingBookingField: 'reason' | 'doctor' | 'date' | 'time' | undefined;
+      let bookingSaveFailedThisTurn = false;
 
       // ── Tool ordering fix ────────────────────────────────────────────────
       // Side-effect tools (log_complaint, request_booking) MUST run before any
@@ -460,7 +501,7 @@ export class ConversationService {
       ];
 
       for (const toolBlock of orderedToolBlocks) {
-        this.logger.log(`Tool: ${toolBlock.name} — ${JSON.stringify(toolBlock.input)}`);
+        this.logger.log(`Tool: ${toolBlock.name}`);
 
         let resultContent = 'Success';
         try {
@@ -478,11 +519,16 @@ export class ConversationService {
             if (normalizeComplaintType(input.type) === ComplaintType.URGENT) urgentComplaintLoggedThisTurn = true;
 
           } else if (toolBlock.name === 'request_booking') {
-            await this.executeRequestBooking(
-              toolBlock.input as unknown as RequestBookingInput, campaignPatient.id, clinic.id, patientMessage,
-            );
-            resultContent = 'Booking request recorded.';
-            bookingRecordedThisTurn = true;
+            const parsed = bookingInput(toolBlock.input);
+            if (parsed.value) {
+              await this.executeRequestBooking(parsed.value, campaignPatient.id, clinic.id, patientMessage);
+              resultContent = 'Booking request recorded.';
+              bookingRecordedThisTurn = true;
+              missingBookingField = undefined;
+            } else {
+              missingBookingField = parsed.missing;
+              resultContent = `Booking request not recorded: missing ${parsed.missing}.`;
+            }
 
           } else if (toolBlock.name === 'request_handoff') {
             handoffCalledThisTurn = true;
@@ -494,6 +540,11 @@ export class ConversationService {
             conversationEnded = true;
 
           } else if (toolBlock.name === 'end_conversation') {
+            if ((missingBookingField || bookingSaveFailedThisTurn) && !bookingRecordedThisTurn) {
+              resultContent = 'Conversation remains open while booking details are collected.';
+              toolResults.push({ type: 'tool_result', tool_use_id: toolBlock.id, content: resultContent });
+              continue;
+            }
             await sendTextOnce(MessageKey.CAMPAIGN_FAREWELL_MESSAGE);
             await this.closeConversation(
               session, campaignPatient.id, campaignPatient.campaignId,
@@ -504,6 +555,7 @@ export class ConversationService {
           }
         } catch (err: any) {
           this.logger.error(`Tool ${toolBlock.name} failed: ${err.message}`);
+          if (toolBlock.name === 'request_booking') bookingSaveFailedThisTurn = true;
           resultContent = `Error: ${err.message}`;
         }
 
@@ -526,6 +578,19 @@ export class ConversationService {
       }
 
       if (conversationEnded) break;
+
+      if (missingBookingField && !bookingRecordedThisTurn) {
+        textReply = missingBookingQuestion(missingBookingField, session.language ?? Language.FR);
+        await sendTextOnce();
+        break;
+      }
+      if (bookingSaveFailedThisTurn && !bookingRecordedThisTurn) {
+        textReply = session.language === Language.EN
+          ? 'I could not record your booking request. Please try again or contact the clinic.'
+          : "Je n'ai pas pu enregistrer votre demande de rendez-vous. Veuillez réessayer ou contacter la clinique.";
+        await sendTextOnce();
+        break;
+      }
 
       if (toolUseBlocks.length === 0) {
         await sendTextOnce();
@@ -727,7 +792,7 @@ RULES:
 
 TOOLS — key rules (the tool schemas are also listed below):
 - log_complaint: call for ANY dissatisfaction, symptom, pain, health concern, or urgency. type=COMPLAINT for service/staff complaints, MEDICAL_CONCERN for health symptoms, URGENT for emergencies. Do NOT call for a plain request for information (visit details, results, hours) — just answer. It is silent: always also send a warm empathetic text reply. Call once per issue.
-- request_booking: only after collecting reason + preferred date + doctor/specialty (one question at a time). Confirm warmly after.
+- request_booking: only after collecting reason + preferred date + preferred time (or flexible) + doctor/specialty (one question at a time). Confirm warmly after.
 - request_handoff: when the patient asks for a human, is very distressed, or severity is HIGH. Call log_complaint FIRST if they also complained. This ends the conversation.
 - end_conversation: only when the patient clearly says goodbye or has nothing more. NEVER close after a single short message ("hi", "ok", "yeah") or a single "I'm fine" — those are engagement, not goodbyes. Ask one gentle follow-up first.
 
@@ -894,6 +959,9 @@ Current turn: ${session.turnCount + 1}`;
     });
 
     if (pending) {
+      if (pending.externalAttemptAt) {
+        throw new Error('Prior ClinOps booking attempt needs staff reconciliation');
+      }
       this.logger.log(`Updating existing pending booking request ${pending.id} for patient ${campaignPatientId} with new details.`);
       await this.prisma.bookingRequest.update({
         where: { id: pending.id },
@@ -901,6 +969,7 @@ Current turn: ${session.turnCount + 1}`;
           preferredSpecialty: input.preferredSpecialty ?? pending.preferredSpecialty,
           preferredDoctor: input.preferredDoctor ?? pending.preferredDoctor,
           preferredDateRange: input.preferredDateRange ?? pending.preferredDateRange,
+          preferredTimeRange: input.preferredTimeRange ?? pending.preferredTimeRange,
           reason: input.reason ?? pending.reason,
           rawPatientRequest: rawPatientMessage,
         },
@@ -908,44 +977,27 @@ Current turn: ${session.turnCount + 1}`;
       return;
     }
 
-    // A CONFIRMED request (with an associated appointment) already exists. The
-    // patient is asking to change/reschedule. The previous implementation only
-    // looked for PENDING requests, so a date change after confirmation silently
-    // created a SECOND booking request while leaving the old appointment active —
-    // the "old booking never superseded" bug. We must cancel the old appointment
-    // (freeing the slot) and reject the old request before recording the new one.
+    // A rebooking request must not cancel a confirmed appointment locally:
+    // ClinOps has no documented cancellation endpoint, so the old appointment
+    // remains active there until staff reconcile it manually.
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
     const confirmed = await this.prisma.bookingRequest.findFirst({
-      where: { campaignPatientId, status: BookingRequestStatus.CONFIRMED },
-      include: { appointment: true },
+      where: { campaignPatientId, status: BookingRequestStatus.CONFIRMED,
+        appointmentId: { not: null },
+        appointment: { is: { status: AppointmentStatus.CONFIRMED,
+          appointmentDate: { gte: today } } } },
+      orderBy: { confirmedAt: 'desc' },
     });
-
-    if (confirmed) {
-      this.logger.log(
-        `Patient ${campaignPatientId} wants to change a confirmed booking (request ${confirmed.id}) — superseding`,
-      );
-
-      if (confirmed.appointmentId && confirmed.appointment) {
-        await this.prisma.appointment.update({
-          where: { id: confirmed.appointmentId },
-          data: {
-            status: AppointmentStatus.CANCELLED,
-            notes: `Superseded by new booking request on ${new Date().toISOString()}. Original reason: ${confirmed.appointment.notes ?? 'n/a'}`,
-          },
-        });
-      }
-
-      await this.prisma.bookingRequest.update({
-        where: { id: confirmed.id },
-        data: { status: BookingRequestStatus.REJECTED },
-      });
-    }
 
     await this.prisma.bookingRequest.create({
       data: {
         campaignPatientId, clinicId,
+        previousBookingRequestId: confirmed?.id ?? null,
         preferredSpecialty: input.preferredSpecialty ?? null,
         preferredDoctor: input.preferredDoctor ?? null,
         preferredDateRange: input.preferredDateRange ?? null,
+        preferredTimeRange: input.preferredTimeRange ?? null,
         reason: input.reason ?? null,
         rawPatientRequest: rawPatientMessage,
       },
